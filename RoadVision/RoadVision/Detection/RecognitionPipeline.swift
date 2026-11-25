@@ -271,7 +271,8 @@ final class RecognitionPipeline {
 
     private func apply(_ output: RecognitionWorker.Output) {
         guard output.generation == generation, wantsRunning else { return }
-        tracks = output.tracks
+        // Avoid invalidating the overlay when nothing changed (e.g. an empty road).
+        if tracks != output.tracks { tracks = output.tracks }
         if visibleCounts != output.visibleCounts { visibleCounts = output.visibleCounts }
         if uniqueCounts != output.uniqueCounts { uniqueCounts = output.uniqueCounts }
         if abs(fps - output.fps) >= 0.5 { fps = output.fps }

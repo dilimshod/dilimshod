@@ -8,6 +8,7 @@ struct SettingsView: View {
         NavigationStack {
             Form {
                 SettingsRecognitionSection()
+                SettingsFollowingDistanceSection()
                 SettingsExperimentsSection()
                 SettingsNavigationSection()
                 NavigationSettingsSection()
@@ -119,6 +120,73 @@ private struct SettingsRecognitionSection: View {
         case .ready(let name): return ("готова (\(name))", .green)
         case .missing: return ("не добавлена в приложение", .orange)
         case .failed(let message): return ("ошибка: \(message)", .red)
+        }
+    }
+}
+
+// MARK: - Following distance
+
+private struct SettingsFollowingDistanceSection: View {
+    @Environment(AppState.self) private var app
+
+    var body: some View {
+        @Bindable var settings = app.settings
+        Section {
+            Toggle("Дистанция до впереди идущего", isOn: $settings.followingDistanceEnabled)
+            Group {
+                Stepper(value: $settings.followingTimeGapDry, in: 1...4, step: 0.5) {
+                    HStack {
+                        Text("Интервал на сухой дороге")
+                        Spacer()
+                        Text("\(RVFormat.decimal(settings.followingTimeGapDry, digits: 1)) с")
+                            .monospacedDigit()
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                Stepper(value: $settings.stoppedGapMeters, in: 1...10, step: 0.5) {
+                    HStack {
+                        Text("Зазор в пробке / у светофора")
+                        Spacer()
+                        Text("\(RVFormat.decimal(settings.stoppedGapMeters, digits: 1)) м")
+                            .monospacedDigit()
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                Stepper(value: $settings.reactionTimeSeconds, in: 0.5...2.5, step: 0.1) {
+                    HStack {
+                        Text("Время реакции")
+                        Spacer()
+                        Text("\(RVFormat.decimal(settings.reactionTimeSeconds, digits: 1)) с")
+                            .monospacedDigit()
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                Picker("Покрытие дороги", selection: $settings.roadSurfaceMode) {
+                    Text("Авто (по погоде)").tag("auto")
+                    ForEach(RoadSurfaceCondition.allCases, id: \.self) { surface in
+                        Text(surface.displayName).tag(surface.rawValue)
+                    }
+                }
+                Toggle("Предупреждения: вибрация, звук, голос", isOn: $settings.distanceWarningsEnabled)
+                Toggle("Показывать свою полосу", isOn: $settings.showEgoCorridor)
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack {
+                        Text("Линия горизонта")
+                        Spacer()
+                        Text(settingsPercent(settings.corridorHorizon))
+                            .monospacedDigit()
+                            .foregroundStyle(.secondary)
+                    }
+                    Slider(value: $settings.corridorHorizon, in: 0.25...0.65, step: 0.01)
+                        .accessibilityLabel("Линия горизонта для коридора полосы")
+                        .accessibilityValue(settingsPercent(settings.corridorHorizon))
+                }
+            }
+            .disabled(!settings.followingDistanceEnabled)
+        } header: {
+            Text("Дистанция")
+        } footer: {
+            Text("Безопасный интервал: мокро ×2, снег ×3, гололёд ×5 от сухого. Расстояние до машины впереди — ≈ оценка по одной камере и не заменяет внимание водителя. Линию горизонта подстройте под крепление телефона: на ней сходится коридор вашей полосы.")
         }
     }
 }

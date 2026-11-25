@@ -264,8 +264,8 @@ struct NavigationMapView: UIViewRepresentable {
                 if let existing = reusable.removeValue(forKey: entry.key) {
                     overlay = existing
                 } else {
-                    var coordinates = entry.option.route.polyline.map(\.coordinate)
-                    overlay = RoutePolyline(coordinates: &coordinates, count: coordinates.count)
+                    let coordinates = entry.option.route.polyline.map(\.coordinate)
+                    overlay = RoutePolyline(coordinates: coordinates, count: coordinates.count)
                     overlay.routeID = entry.option.id
                     overlay.role = entry.role
                 }

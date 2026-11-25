@@ -26,7 +26,7 @@ struct NavigatorView: View {
 
             VStack(spacing: 10) {
                 topSection(nav)
-                    .background(heightReader(NavigatorTopInsetKey.self))
+                    .background(heightReader($topInset))
                 cornerRow(nav)
             }
             .padding(.horizontal, 12)
@@ -43,14 +43,8 @@ struct NavigatorView: View {
             }
             .padding(.horizontal, 12)
             .padding(.bottom, 2)
-            .background(heightReader(NavigatorBottomInsetKey.self))
+            .background(heightReader($bottomInset))
             .frame(maxHeight: .infinity, alignment: .bottom)
-        }
-        .onPreferenceChange(NavigatorTopInsetKey.self) { value in
-            topInset = value
-        }
-        .onPreferenceChange(NavigatorBottomInsetKey.self) { value in
-            bottomInset = value
         }
         .animation(.easeInOut(duration: 0.25), value: nav.state)
         .animation(.easeInOut(duration: 0.2), value: nav.errorMessage)
@@ -494,10 +488,14 @@ struct NavigatorView: View {
         }
     }
 
-    /// Reports the height of the view it is attached to under preference key `K`.
-    private func heightReader<K: PreferenceKey>(_ key: K.Type) -> some View where K.Value == CGFloat {
+    /// Writes the height of the view it is attached to (as a background) into `height`.
+    private func heightReader(_ height: Binding<CGFloat>) -> some View {
         GeometryReader { proxy in
-            Color.clear.preference(key: key, value: proxy.size.height)
+            Color.clear
+                .onAppear { height.wrappedValue = proxy.size.height }
+                .onChange(of: proxy.size.height) { _, newHeight in
+                    height.wrappedValue = newHeight
+                }
         }
     }
 }
@@ -506,20 +504,4 @@ struct NavigatorView: View {
 struct IncidentReportTarget: Identifiable {
     let id = UUID()
     let coordinate: GeoPoint?
-}
-
-/// Height of the navigator's top overlay (keeps MapKit's compass below it).
-private struct NavigatorTopInsetKey: PreferenceKey {
-    static let defaultValue: CGFloat = 0
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
-        value = max(value, nextValue())
-    }
-}
-
-/// Height of the navigator's bottom overlay (keeps MapKit's legal label and the route overview above it).
-private struct NavigatorBottomInsetKey: PreferenceKey {
-    static let defaultValue: CGFloat = 0
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
-        value = max(value, nextValue())
-    }
 }
