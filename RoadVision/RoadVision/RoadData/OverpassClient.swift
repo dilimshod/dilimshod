@@ -320,21 +320,46 @@ actor OverpassClient {
         return remark
     }
 
-    /// Plain-text summary of an (HTML) error body: prefers the "Error: …" line Overpass prints.
+    /// Plain-text summary of an (HTML) error body: the `<p>` paragraphs mentioning "error" (where Overpass prints
+    /// "Error: …"), else the page title / heading, else the first text of the page.
     private static func textSummary(of data: Data) -> String {
-        let raw = String(decoding: data.prefix(16_384), as: UTF8.self)
-        var text = raw.replacingOccurrences(of: "<[^>]+>", with: " ", options: .regularExpression)
-        for (entity, replacement) in [("&quot;", "\""), ("&lt;", "<"), ("&gt;", ">"), ("&#39;", "'"), ("&amp;", "&")] {
+        let html = String(decoding: data.prefix(16_384), as: UTF8.self)
+        let paragraphs = blocks(named: "p", in: html)
+            .map(plainText)
+            .filter { $0.range(of: "error", options: .caseInsensitive) != nil }
+        if !paragraphs.isEmpty {
+            return paragraphs.joined(separator: " ")
+        }
+        for tag in ["title", "h1", "h2"] {
+            if let text = blocks(named: tag, in: html).map(plainText).first(where: { !$0.isEmpty }) {
+                return text
+            }
+        }
+        let text = plainText(html)
+        return text.isEmpty ? "пустая страница" : text
+    }
+
+    /// Inner HTML of every `<tag …>…</tag>` element (case-insensitive, non-nested).
+    private static func blocks(named tag: String, in html: String) -> [String] {
+        let pattern = "<\(tag)(\\s[^>]*)?>(.*?)</\(tag)\\s*>"
+        guard let regex = try? NSRegularExpression(pattern: pattern,
+                                                   options: [.caseInsensitive, .dotMatchesLineSeparators]) else {
+            return []
+        }
+        let range = NSRange(html.startIndex..<html.endIndex, in: html)
+        return regex.matches(in: html, range: range).compactMap { match in
+            Range(match.range(at: 2), in: html).map { String(html[$0]) }
+        }
+    }
+
+    /// Tags removed, common entities decoded, whitespace collapsed.
+    private static func plainText(_ html: String) -> String {
+        var text = html.replacingOccurrences(of: "<[^>]+>", with: "", options: .regularExpression)
+        for (entity, replacement) in [("&quot;", "\""), ("&lt;", "<"), ("&gt;", ">"), ("&#39;", "'"),
+                                      ("&nbsp;", " "), ("&amp;", "&")] {
             text = text.replacingOccurrences(of: entity, with: replacement)
         }
-        let lines = text.components(separatedBy: .newlines)
-            .map { $0.trimmingCharacters(in: .whitespaces) }
-            .filter { !$0.isEmpty }
-        if let errorLine = lines.first(where: { $0.range(of: "error", options: .caseInsensitive) != nil }) {
-            return errorLine.components(separatedBy: .whitespaces).filter { !$0.isEmpty }.joined(separator: " ")
-        }
-        return lines.joined(separator: " ").components(separatedBy: .whitespaces)
-            .filter { !$0.isEmpty }.joined(separator: " ")
+        return text.components(separatedBy: .whitespacesAndNewlines).filter { !$0.isEmpty }.joined(separator: " ")
     }
 
     private static func shortened(_ text: String, limit: Int = 160) -> String {

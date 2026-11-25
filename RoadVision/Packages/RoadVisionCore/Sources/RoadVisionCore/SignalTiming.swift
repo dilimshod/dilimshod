@@ -214,9 +214,10 @@ public final class SignalStatistics: Codable {
 /// than `signalRadius + 15 m` away from it. Inside the area the vehicle is "halted" from the moment its speed
 /// drops below `stopSpeedKmh` until it exceeds `resumeSpeedKmh` (so creeping forward in the queue still counts
 /// as waiting); halted time is accumulated, and if it reaches `minStopSeconds` the pass counts as a stop with
-/// that waiting time. Exactly one
-/// observation is emitted per pass. Passes are discarded when the GPS jumps more than 200 m between fixes,
-/// when fixes are missing for over 5 minutes, or when the vehicle stood longer than 5 minutes (parking, not a signal).
+/// that waiting time. Exactly one observation is emitted per pass. Passes are discarded when the GPS jumps more
+/// than 200 m between fixes, when fixes are missing for over 5 minutes, or when the vehicle stood longer than
+/// 5 minutes (parking, not a signal). After a pass ends, the same signal can only be entered again once the
+/// vehicle has left its area, so a discarded pass is not restarted half-way.
 public final class StopDetector {
     public let stopSpeedKmh: Double
     public let resumeSpeedKmh: Double
@@ -246,6 +247,8 @@ public final class StopDetector {
 
     private var pass: Pass?
     private var lastFix: Fix?
+    /// Signal of the last ended pass; not re-entered until the vehicle is outside its area.
+    private var suppressed: SignalLocation?
 
     public init(stopSpeedKmh: Double = 3, resumeSpeedKmh: Double = 10, minStopSeconds: Double = 2,
                 signalRadius: Double = 45) {
@@ -283,6 +286,11 @@ public final class StopDetector {
             if speed == nil, dt > 0 { speed = (moved / dt).kmh }
         }
 
+        if let blocked = suppressed,
+           Geo.distance(position, blocked.coordinate) > signalRadius + Self.exitMargin {
+            suppressed = nil
+        }
+
         if var current = pass {
             if jumped || gapTooLong {
                 current.valid = false
@@ -302,6 +310,7 @@ public final class StopDetector {
                                                 stopped: stopped,
                                                 waitSeconds: stopped ? current.lowSpeedSeconds : 0)
                 }
+                suppressed = current.signal
                 pass = nil
             } else {
                 pass = current
@@ -310,10 +319,10 @@ public final class StopDetector {
 
         // Enter a (new) signal area. After an invalidated pass, wait for a clean fix first.
         if pass == nil && !jumped && !gapTooLong {
-            let justLeft = emitted?.signalID
+            let blockedID = suppressed?.id
             var nearest: SignalLocation?
             var nearestDistance = signalRadius
-            for signal in nearbySignals where signal.id != justLeft && signal.coordinate.isValid {
+            for signal in nearbySignals where signal.id != blockedID && signal.coordinate.isValid {
                 let d = Geo.distance(position, signal.coordinate)
                 if d <= nearestDistance {
                     nearestDistance = d
@@ -339,9 +348,10 @@ public final class StopDetector {
         return halted
     }
 
-    /// Forgets the current pass and the last fix.
+    /// Forgets the current pass, the last fix and the re-entry suppression.
     public func reset() {
         pass = nil
         lastFix = nil
+        suppressed = nil
     }
 }

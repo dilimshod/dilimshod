@@ -24,11 +24,12 @@ public enum RoadSurfaceCondition: String, Codable, Hashable, Sendable, CaseItera
         }
     }
 
-    /// Typical tyre–road friction coefficient for braking (engineering approximation).
+    /// Typical tyre–road friction coefficient for braking (engineering approximation: dry ≈ 0.7 per the UK Highway Code
+    /// stopping-distance table, wet 0.35 per AASHTO's 3.4 m/s² design deceleration, snow ≈ 0.2 and ice ≈ 0.1 per PIARC curves).
     public var frictionCoefficient: Double {
         switch self {
         case .dry: return 0.7
-        case .wet: return 0.4
+        case .wet: return 0.35
         case .snow: return 0.2
         case .ice: return 0.1
         }
@@ -53,8 +54,9 @@ public enum RoadSurfaceCondition: String, Codable, Hashable, Sendable, CaseItera
 
 // MARK: - Policy
 
-/// Following-distance settings. Defaults are widely used RECOMMENDATIONS (not legal norms):
-/// the two-second rule in the dry, longer gaps on wet/snowy/icy roads, ≈ 2 m when stopped in a queue.
+/// Following-distance settings. Defaults are RECOMMENDATIONS, not legal norms — the Uzbek traffic rules (п.73) require a
+/// safe distance without giving a number: 2 s in the dry and at least double (4 s) on wet roads (UK Highway Code rule 126),
+/// up to ten times on ice (rule 126: "up to ten times greater"), 6 s on snow (app choice), ≥ 2 m when standing (app choice).
 public struct FollowingDistancePolicy: Codable, Hashable, Sendable {
     public var timeGapDry: Double
     public var timeGapWet: Double
@@ -69,7 +71,7 @@ public struct FollowingDistancePolicy: Codable, Hashable, Sendable {
     /// Forward-collision warning threshold (time to collision), seconds.
     public var collisionWarningSeconds: Double
 
-    public init(timeGapDry: Double = 2, timeGapWet: Double = 4, timeGapSnow: Double = 6, timeGapIce: Double = 8,
+    public init(timeGapDry: Double = 2, timeGapWet: Double = 4, timeGapSnow: Double = 6, timeGapIce: Double = 10,
                 stoppedGapMeters: Double = 2, reactionTimeSeconds: Double = 1,
                 stoppedSpeedKmh: Double = 5, collisionWarningSeconds: Double = 2.5) {
         self.timeGapDry = timeGapDry

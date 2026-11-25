@@ -71,14 +71,19 @@ final class WeatherService {
         listenerID = nil
     }
 
-    /// Loads the weather for the current position now. Concurrent calls share one request. Does nothing while the
-    /// position is unknown.
+    /// Loads the weather for the current position now. Concurrent calls share one request. While the position is
+    /// unknown nothing is requested (and, if no weather was loaded yet, `lastError` says why).
     func refresh() async {
         if let inFlight {
             await inFlight.value
             return
         }
-        guard let point = location.coordinate, point.isValid else { return }
+        guard let point = location.coordinate, point.isValid else {
+            if current == nil {
+                lastError = "Погода: местоположение пока неизвестно"
+            }
+            return
+        }
         let task = Task<Void, Never> { [weak self] in
             guard let self else { return }
             await self.fetch(at: point)

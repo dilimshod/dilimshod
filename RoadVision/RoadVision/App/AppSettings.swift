@@ -21,7 +21,7 @@ final class AppSettings {
 
     // MARK: Following distance (lead vehicle)
     var followingDistanceEnabled: Bool { didSet { defaults.set(followingDistanceEnabled, forKey: Keys.followingDistanceEnabled) } }
-    /// Recommended time gap on a dry road, seconds (wet/snow/ice are derived ×2/×3/×4).
+    /// Recommended time gap on a dry road, seconds (wet/snow/ice are derived ×2/×3/×5).
     var followingTimeGapDry: Double { didSet { defaults.set(followingTimeGapDry, forKey: Keys.followingTimeGapDry) } }
     /// Recommended gap when standing in a queue / at a light, metres.
     var stoppedGapMeters: Double { didSet { defaults.set(stoppedGapMeters, forKey: Keys.stoppedGapMeters) } }
@@ -141,10 +141,10 @@ final class AppSettings {
         "https://overpass.private.coffee/api/interpreter",
     ]
 
-    /// Following-distance policy from the settings (wet ×2, snow ×3, ice ×4 of the dry time gap).
+    /// Following-distance policy from the settings (wet ×2, snow ×3, ice ×5 of the dry time gap — UK Highway Code 126: ×2 wet, up to ×10 ice).
     var followingDistancePolicy: FollowingDistancePolicy {
         FollowingDistancePolicy(timeGapDry: followingTimeGapDry, timeGapWet: followingTimeGapDry * 2,
-                                timeGapSnow: followingTimeGapDry * 3, timeGapIce: followingTimeGapDry * 4,
+                                timeGapSnow: followingTimeGapDry * 3, timeGapIce: followingTimeGapDry * 5,
                                 stoppedGapMeters: stoppedGapMeters, reactionTimeSeconds: reactionTimeSeconds)
     }
 

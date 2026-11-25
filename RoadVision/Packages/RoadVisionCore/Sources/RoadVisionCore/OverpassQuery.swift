@@ -81,13 +81,13 @@ public enum OverpassQuery {
     /// speed cameras, stop / give-way signs, traffic calming, railway level crossings, highway=construction ways
     /// (within `radius`) and schools / kindergartens (within 150 m), all with `out tags center qt`.
     ///
-    /// The polyline is simplified (Douglas–Peucker) to at most `maxPolylinePoints` vertices; split long routes into
-    /// chunks with `Geo.chunk` first to keep the detail. An empty polyline yields a valid query with no results.
+    /// A polyline longer than `maxPolylinePoints` vertices is simplified (Douglas–Peucker) to fit; split long routes
+    /// into chunks with `Geo.chunk` first to keep the detail. An empty polyline yields a valid query with no results.
     public static func featuresAlong(_ polyline: [GeoPoint], radius: Double = 35, timeout: Int = 25) -> String {
         let header = "[out:json][timeout:\(max(1, timeout))];"
         let valid = polyline.filter(\.isValid)
         guard !valid.isEmpty else { return header + "\nout;" }
-        var points = Geo.simplify(valid, maxPoints: maxPolylinePoints)
+        var points = valid.count > maxPolylinePoints ? Geo.simplify(valid, maxPoints: maxPolylinePoints) : valid
         if points.count > maxPolylinePoints { points = Array(points.prefix(maxPolylinePoints)) }
         let poly = coordinates(points)
         let r = meters(radius)
