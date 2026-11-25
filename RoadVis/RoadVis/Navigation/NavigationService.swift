@@ -45,11 +45,11 @@ struct RoutingEngineReport: Identifiable, Hashable {
     var summary: String {
         switch status {
         case .success(let count):
-            return "\(source.badge): \(count) \(RVFormat.plural(count, "маршрут", "маршрута", "маршрутов"))"
+            return "\(source.badge): " + RVFormat.appQuantity(count, unit: "route")
         case .failed(let reason):
-            return "\(source.badge): ошибка — \(reason)"
+            return L("engine.failed", source.badge, reason)
         case .notAttempted(let reason):
-            return "\(source.badge): не запрашивался (\(reason))"
+            return L("engine.notAttempted", source.badge, reason)
         }
     }
 
@@ -69,13 +69,13 @@ enum NavigationError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .noLocation:
-            return "Нет данных о местоположении. Проверьте доступ к геолокации."
+            return L("navErr.noLocation")
         case .invalidDestination:
-            return "У выбранного места нет координат."
+            return L("navErr.invalidDestination")
         case .noRoutes:
-            return "Маршрут не найден."
+            return L("navErr.noRoutes")
         case .allEnginesFailed(let details):
-            return "Маршрут не построен. \(details)"
+            return L("navErr.allFailed", details)
         }
     }
 }
@@ -394,7 +394,7 @@ final class NavigationService {
             RouteOption(id: index, route: choice.route, mkRoute: appleRoutes[choice.route], traffic: nil,
                         signalCount: nil, alsoFoundBy: choice.duplicates)
         }
-        return PlannedRoutes(options: options, reports: reports, notes: RouteComparison.notes(for: choices),
+        return PlannedRoutes(options: options, reports: reports, notes: RouteComparison.notes(for: choices, language: .app),
                              notice: Self.notice(for: reports))
     }
 
@@ -408,13 +408,13 @@ final class NavigationService {
         let delivered = reports.filter(\.isSuccess).map(\.source.badge)
         var text = failed.map(\.summary).joined(separator: "; ")
         if !delivered.isEmpty {
-            text += ". Показаны маршруты: " + delivered.joined(separator: ", ")
+            text += ". " + L("engine.shown", delivered.joined(separator: ", "))
         }
         return text + "."
     }
 
     private func runApple(_ item: MKMapItem, enabled: Bool) async -> EngineOutcome {
-        guard enabled else { return .skipped("выключен в настройках") }
+        guard enabled else { return .skipped(L("engine.disabled")) }
         do {
             let routes = try await appleRoutes(to: item)
             guard !routes.isEmpty else { return .failed(NavigationError.noRoutes) }
@@ -427,7 +427,7 @@ final class NavigationService {
     }
 
     private func runValhalla(origin: GeoPoint?, target: GeoPoint, heading: Double?, enabled: Bool) async -> EngineOutcome {
-        guard enabled else { return .skipped("выключен в настройках") }
+        guard enabled else { return .skipped(L("engine.disabled")) }
         guard let origin, origin.isValid else { return .failed(NavigationError.noLocation) }
         do {
             let routes = try await valhalla.routes(from: origin, to: target, heading: heading,
@@ -439,7 +439,7 @@ final class NavigationService {
     }
 
     private func runOSRM(origin: GeoPoint?, target: GeoPoint, enabled: Bool) async -> EngineOutcome {
-        guard enabled else { return .skipped("выключен в настройках") }
+        guard enabled else { return .skipped(L("engine.disabled")) }
         guard let origin, origin.isValid else { return .failed(NavigationError.noLocation) }
         do {
             let routes = try await osrm.routes(from: origin, to: target)
@@ -448,7 +448,7 @@ final class NavigationService {
                 !(settings.avoidTolls && route.hasTolls) && !(settings.avoidHighways && route.hasHighways)
             }
             guard !filtered.isEmpty else {
-                return .skipped("все варианты OSRM нарушают «избегать платных / магистралей»")
+                return .skipped(L("engine.osrmAvoid"))
             }
             return .routes(filtered, apple: [:])
         } catch {
@@ -479,7 +479,7 @@ final class NavigationService {
                 RouteStepInfo(instruction: $0.instructions, distance: $0.distance, notice: $0.notice)
             }
             let name = route.name.trimmingCharacters(in: .whitespacesAndNewlines)
-            let navRoute = NavRoute(source: .apple, name: name.isEmpty ? "Маршрут Apple Maps" : name,
+            let navRoute = NavRoute(source: .apple, name: name.isEmpty ? L("route.appleName") : name,
                                     polyline: polyline, distance: route.distance,
                                     expectedTravelTime: route.expectedTravelTime, steps: steps,
                                     hasTolls: route.hasTolls, hasHighways: route.hasHighways,
@@ -581,7 +581,7 @@ final class NavigationService {
 
         if settings.routeAttributesEnabled {
             if (contextCumulative.last ?? 0) > Self.attributesMaxRouteLength {
-                routeAttributesError = "Маршрут длиннее 200 км — полосы и ограничения по маршруту не загружаются."
+                routeAttributesError = L("route.attrs.tooLong")
             } else {
                 isLoadingRouteAttributes = cached.isEmpty
                 attributesTask = Task { [weak self] in
@@ -628,7 +628,7 @@ final class NavigationService {
                 if error is CancellationError || Task.isCancelled { return }
                 if id == selectedRouteOption?.id {
                     isLoadingRouteAttributes = false
-                    routeAttributesError = "Полосы, ограничения и светофоры по маршруту (Valhalla) недоступны. "
+                    routeAttributesError = L("route.attrs.unavailable") + " "
                         + Self.describe(error)
                 }
             }
@@ -663,7 +663,7 @@ final class NavigationService {
             return
         }
         let events = RouteTimeline.build(route: option.route, edges: routeEdges, features: roadInfo.routeFeatures,
-                                         incidents: incidentsOnRoute)
+                                         incidents: incidentsOnRoute, text: .app)
         if events != timeline { timeline = events }
         let segments = RouteTimeline.speedLimitSegments(edges: routeEdges, totalDistance: contextCumulative.last)
         if segments != speedLimitSegments { speedLimitSegments = segments }
@@ -742,8 +742,7 @@ final class NavigationService {
         attachLocationListener()
         if incidentLoopTask == nil { startIncidentLoop() }
         if settings.voiceGuidanceEnabled {
-            let text = "Маршрут построен. Ехать \(Self.spokenDistance(option.distance)), "
-                + "примерно \(Self.spokenDuration(option.expectedTravelTime))."
+            let text = L("voice.routeReady", Self.spokenDistance(option.distance), Self.spokenDuration(option.expectedTravelTime))
             speech.speak(text, priority: .high)
         }
         if let fix = location.location {
@@ -777,7 +776,7 @@ final class NavigationService {
         }
         let generation = planGeneration
         if settings.voiceGuidanceEnabled {
-            speech.speak("Перестраиваю маршрут", priority: .high)
+            speech.speak(L("voice.rerouting"), priority: .high)
         }
         do {
             let planned = try await computeRoutes(to: destination)
@@ -793,7 +792,7 @@ final class NavigationService {
         } catch {
             guard generation == planGeneration, token == recalculationGeneration, state == .navigating,
                   !(error is CancellationError) else { return }
-            errorMessage = "Не удалось перестроить маршрут. " + Self.describe(error)
+            errorMessage = L("route.rerouteFailed") + " " + Self.describe(error)
         }
     }
 
@@ -809,6 +808,7 @@ final class NavigationService {
         isApplyingRoutes = false
         tracker = RouteProgressTracker(polyline: option.route.polyline, steps: option.route.steps,
                                        expectedTravelTime: option.route.expectedTravelTime)
+        tracker?.language = .app
         voiceScheduler = VoicePromptScheduler()
         progress = nil
     }
@@ -901,7 +901,7 @@ final class NavigationService {
         isWaitingAtSignal = false
         upcomingFeatures = []
         if settings.voiceGuidanceEnabled {
-            speech.speak("Вы прибыли", priority: .high)
+            speech.speak(L("voice.arrived"), priority: .high)
         }
     }
 
@@ -997,6 +997,7 @@ final class NavigationService {
               let distance = current.distanceToNextManeuver,
               let instruction = current.nextInstruction else { return }
         let stepIndex = current.nextStepIndex ?? (tracker?.steps.count ?? 0)
+        voiceScheduler.language = .app
         if let prompt = voiceScheduler.prompt(stepIndex: stepIndex, distance: distance,
                                               instruction: instruction, speedKmh: speedKmh) {
             // The closest threshold gets the distance back plus a caution (and slow-down) phrase.
@@ -1027,7 +1028,7 @@ final class NavigationService {
             let ahead = item.distanceAlongRoute - current.distanceAlong
             guard ahead >= 0, ahead <= Self.incidentAlertDistance else { continue }
             announcedIncidentIDs.insert(item.id)
-            speech.speak("Впереди \(Self.spokenName(item.incident.kind)), \(Self.spokenDistance(ahead))",
+            speech.speak(L("voice.incidentAhead", Self.spokenName(item.incident.kind), Self.spokenDistance(ahead)),
                          priority: .normal)
             break
         }
@@ -1039,28 +1040,20 @@ final class NavigationService {
     static func hazardPrompt(for kind: RouteFeatureKind, speedKmh: Double?) -> String? {
         let speed = speedKmh ?? 0
         switch kind {
-        case .speedCamera: return "Впереди камера контроля скорости"
-        case .school: return "Впереди школа — будьте внимательны, дети"
-        case .kindergarten: return "Впереди детский сад — будьте внимательны, дети"
-        case .railwayCrossing: return "Впереди железнодорожный переезд"
-        case .pedestrianCrossing: return speed > 40 ? "Пешеходный переход" : nil
-        case .construction: return "Впереди дорожные работы"
-        case .trafficCalming: return speed > 30 ? "Впереди искусственная неровность" : nil
+        case .speedCamera: return L("voice.hazard.speedCamera")
+        case .school: return L("voice.hazard.school")
+        case .kindergarten: return L("voice.hazard.kindergarten")
+        case .railwayCrossing: return L("voice.hazard.railway")
+        case .pedestrianCrossing: return speed > 40 ? L("voice.hazard.crossing") : nil
+        case .construction: return L("voice.hazard.construction")
+        case .trafficCalming: return speed > 30 ? L("voice.hazard.bump") : nil
         case .trafficSignals, .stopSign, .giveWay, .fuel, .parking: return nil
         }
     }
 
     /// Incident kind in a form that reads naturally after "Впереди …".
     static func spokenName(_ kind: RoadIncidentKind) -> String {
-        switch kind {
-        case .accident: return "ДТП"
-        case .roadWork: return "дорожные работы"
-        case .jam: return "пробка"
-        case .police: return "пост полиции"
-        case .pothole: return "яма"
-        case .hazard: return "опасность"
-        case .closure: return "перекрытие дороги"
-        }
+        L("voice.incident.\(kind.rawValue)")
     }
 
     /// "600 метров", "1,5 километра", "12 километров".
@@ -1068,40 +1061,40 @@ final class NavigationService {
         let m = max(0, meters.isFinite ? meters : 0)
         if m < 975 {
             let n = max(50, Int((m / 50).rounded()) * 50)
-            return "\(n) \(RVFormat.plural(n, "метр", "метра", "метров"))"
+            return RVFormat.appQuantity(n, unit: "meter")
         }
         if m < 9_950 {
             let km = (m / 100).rounded() / 10
             if km == km.rounded() {
                 let n = Int(km)
-                return "\(n) \(RVFormat.plural(n, "километр", "километра", "километров"))"
+                return RVFormat.appQuantity(n, unit: "km")
             }
-            return "\(RVFormat.decimal(km, digits: 1)) километра"
+            return RVFormat.appFractionQuantity(km, unit: "km")
         }
         let n = Int((m / 1000).rounded())
-        return "\(n) \(RVFormat.plural(n, "километр", "километра", "километров"))"
+        return RVFormat.appQuantity(n, unit: "km")
     }
 
     /// "1 минуту", "25 минут", "1 час 5 минут" (accusative, after "примерно").
     static func spokenDuration(_ seconds: Double) -> String {
         let total = max(1, Int(((seconds.isFinite ? seconds : 0) / 60).rounded()))
-        func minutes(_ n: Int) -> String { "\(n) \(RVFormat.plural(n, "минуту", "минуты", "минут"))" }
+        func minutes(_ n: Int) -> String { RVFormat.appQuantity(n, unit: "minuteAcc") }
         if total < 60 { return minutes(total) }
         let hours = total / 60, rest = total % 60
-        let hoursText = "\(hours) \(RVFormat.plural(hours, "час", "часа", "часов"))"
+        let hoursText = RVFormat.appQuantity(hours, unit: "hour")
         return rest == 0 ? hoursText : "\(hoursText) \(minutes(rest))"
     }
 
-    /// Russian description of a routing error.
+    /// Localized description of a routing error.
     static func describe(_ error: Error) -> String {
         if let navigationError = error as? NavigationError {
-            return navigationError.errorDescription ?? "Ошибка навигации."
+            return navigationError.errorDescription ?? L("navErr.generic")
         }
         if let valhallaError = error as? ValhallaClientError {
-            return valhallaError.errorDescription ?? "Ошибка Valhalla."
+            return valhallaError.errorDescription ?? L("navErr.valhalla")
         }
         if let osrmError = error as? OSRMClientError {
-            return osrmError.errorDescription ?? "Ошибка OSRM."
+            return osrmError.errorDescription ?? L("navErr.osrm")
         }
         if let mkError = error as? MKError {
             // State the actual error (code + system text) instead of guessing the cause.
@@ -1109,23 +1102,23 @@ final class NavigationService {
             let text = mkError.localizedDescription
             switch mkError.code {
             case .directionsNotFound:
-                return "Apple Maps не построил маршрут (MKError \(code), «\(text)»)."
+                return L("mkErr.notFound", code, text)
             case .placemarkNotFound:
-                return "Apple Maps не нашёл точку старта или назначения (MKError \(code), «\(text)»)."
+                return L("mkErr.placemark", code, text)
             case .loadingThrottled:
-                return "Apple Maps временно ограничил число запросов маршрутов (MKError \(code)). Подождите минуту."
+                return L("mkErr.throttled", code)
             case .serverFailure:
-                return "Сервер маршрутов Apple недоступен или нет интернета (MKError \(code), «\(text)»)."
+                return L("mkErr.server", code, text)
             default:
-                return "Apple Maps: ошибка MKError \(code) — \(text)"
+                return L("mkErr.other", code, text)
             }
         }
         if let urlError = error as? URLError {
             switch urlError.code {
             case .notConnectedToInternet, .dataNotAllowed, .internationalRoamingOff:
-                return "Нет подключения к интернету."
+                return L("net.noInternetFull")
             case .timedOut:
-                return "Сервер не ответил вовремя."
+                return L("net.timeoutFull")
             default:
                 return urlError.localizedDescription
             }

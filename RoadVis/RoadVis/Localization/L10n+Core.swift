@@ -34,3 +34,19 @@ extension RVFormat {
     /// "км/ч" / "km/soat" / "km/h".
     static var appKmh: String { unitKmh(.app) }
 }
+
+extension RVFormat {
+    /// "5 metr" / "5 метров" / "5 metres": integer + unit word in the right form (`unit.<unit>.one/few/many`).
+    static func appQuantity(_ n: Int, unit: String) -> String {
+        let one = L("unit.\(unit).one"), few = L("unit.\(unit).few"), many = L("unit.\(unit).many")
+        if RVLang.app == .ru { return "\(n) " + plural(n, one, few, many) }
+        return "\(n) " + (n == 1 ? one : many)
+    }
+
+    /// "1,5 kilometr" / "1,5 километра" / "1.5 kilometres": a fractional number takes the "few" form in Russian
+    /// (genitive singular) and the plural in English.
+    static func appFractionQuantity(_ value: Double, digits: Int = 1, unit: String) -> String {
+        let word = RVLang.app == .ru ? L("unit.\(unit).few") : L("unit.\(unit).many")
+        return appDecimal(value, digits: digits) + " " + word
+    }
+}

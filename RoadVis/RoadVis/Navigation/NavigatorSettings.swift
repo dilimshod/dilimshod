@@ -35,9 +35,9 @@ enum NavigatorMapStyle: String, CaseIterable, Identifiable {
 
     var displayName: String {
         switch self {
-        case .standard: return "Схема"
-        case .satellite: return "Спутник"
-        case .hybrid: return "Гибрид"
+        case .standard: return L("mapStyle.standard")
+        case .satellite: return L("mapStyle.satellite")
+        case .hybrid: return L("mapStyle.hybrid")
         }
     }
 
@@ -66,10 +66,10 @@ enum RoutingEngineOption: String, CaseIterable, Identifiable {
     /// Russian label for Settings.
     var displayName: String {
         switch self {
-        case .auto: return "Авто: все источники, сравнение"
-        case .apple: return "Только Apple Maps"
-        case .valhalla: return "Только Valhalla (OpenStreetMap)"
-        case .osrm: return "Только OSRM (OpenStreetMap)"
+        case .auto: return L("engine.option.auto")
+        case .apple: return L("engine.option.apple")
+        case .valhalla: return L("engine.option.valhalla")
+        case .osrm: return L("engine.option.osrm")
         }
     }
 

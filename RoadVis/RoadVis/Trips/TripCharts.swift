@@ -108,32 +108,32 @@ struct TripSpeedChart: View {
     var body: some View {
         Chart {
             ForEach(data.speed) { sample in
-                AreaMark(x: .value("Время", sample.date), y: .value("Скорость", sample.speedKmh))
+                AreaMark(x: .value(L("chart.time"), sample.date), y: .value(L("chart.speed"), sample.speedKmh))
                     .foregroundStyle(LinearGradient(colors: [RVTheme.accent.opacity(0.35), RVTheme.accent.opacity(0.02)],
                                                     startPoint: .top, endPoint: .bottom))
                     .interpolationMethod(.monotone)
-                LineMark(x: .value("Время", sample.date), y: .value("Скорость", sample.speedKmh),
-                         series: .value("Ряд", "speed"))
+                LineMark(x: .value(L("chart.time"), sample.date), y: .value(L("chart.speed"), sample.speedKmh),
+                         series: .value(L("chart.series"), "speed"))
                     .foregroundStyle(RVTheme.accent)
                     .lineStyle(StrokeStyle(lineWidth: 2))
                     .interpolationMethod(.monotone)
             }
             ForEach(data.limits) { sample in
-                LineMark(x: .value("Время", sample.date), y: .value("Лимит", sample.value),
-                         series: .value("Ряд", "limit-\(sample.segment)"))
+                LineMark(x: .value(L("chart.time"), sample.date), y: .value(L("chart.limit"), sample.value),
+                         series: .value(L("chart.series"), "limit-\(sample.segment)"))
                     .foregroundStyle(RVTheme.danger)
                     .lineStyle(StrokeStyle(lineWidth: 2, dash: [5, 3]))
                     .interpolationMethod(.stepEnd)
             }
             ForEach(data.markers) { marker in
-                PointMark(x: .value("Время", marker.date), y: .value("Скорость", marker.speedKmh))
+                PointMark(x: .value(L("chart.time"), marker.date), y: .value(L("chart.speed"), marker.speedKmh))
                     .foregroundStyle(TripStyle.color(marker.kind))
                     .symbolSize(70)
                     .symbol(.circle)
             }
         }
         .chartYScale(domain: 0...(data.maxSpeed * 1.1))
-        .chartYAxisLabel("км/ч")
+        .chartYAxisLabel(RVFormat.appKmh)
         .chartXAxis {
             AxisMarks(values: .automatic(desiredCount: 5)) { _ in
                 AxisGridLine()
@@ -150,7 +150,7 @@ struct TripEventsByKindChart: View {
 
     var body: some View {
         Chart(data.kindCounts) { item in
-            BarMark(x: .value("Количество", item.count), y: .value("Вид", item.kind.localizedTitle))
+            BarMark(x: .value(L("chart.count"), item.count), y: .value(L("chart.kind"), item.kind.localizedTitle))
                 .foregroundStyle(TripStyle.color(item.kind).gradient)
                 .cornerRadius(5)
                 .annotation(position: .trailing) {
@@ -172,20 +172,20 @@ struct TripLeadDistanceChart: View {
     var body: some View {
         Chart {
             ForEach(data.recommended) { sample in
-                LineMark(x: .value("Время", sample.date), y: .value("Норма", sample.value),
-                         series: .value("Ряд", "norm-\(sample.segment)"))
+                LineMark(x: .value(L("chart.time"), sample.date), y: .value(L("chart.norm"), sample.value),
+                         series: .value(L("chart.series"), "norm-\(sample.segment)"))
                     .foregroundStyle(RVTheme.caution)
                     .lineStyle(StrokeStyle(lineWidth: 1.5, dash: [4, 3]))
             }
             ForEach(data.leads) { sample in
-                LineMark(x: .value("Время", sample.date), y: .value("Дистанция", sample.value),
-                         series: .value("Ряд", "lead-\(sample.segment)"))
+                LineMark(x: .value(L("chart.time"), sample.date), y: .value(L("chart.distance"), sample.value),
+                         series: .value(L("chart.series"), "lead-\(sample.segment)"))
                     .foregroundStyle(RVTheme.safe)
                     .lineStyle(StrokeStyle(lineWidth: 2))
                     .interpolationMethod(.monotone)
             }
         }
-        .chartYAxisLabel("м (≈)")
+        .chartYAxisLabel(RVFormat.appMeters + " (≈)")
         .chartXAxis {
             AxisMarks(values: .automatic(desiredCount: 5)) { _ in
                 AxisGridLine()
@@ -203,7 +203,7 @@ struct TripSpeedBandChart: View {
     var body: some View {
         HStack(alignment: .center, spacing: 16) {
             Chart(data.bands) { item in
-                SectorMark(angle: .value("Время", item.seconds), innerRadius: .ratio(0.58), angularInset: 1.5)
+                SectorMark(angle: .value(L("chart.time"), item.seconds), innerRadius: .ratio(0.58), angularInset: 1.5)
                     .foregroundStyle(TripStyle.bandColor(item.band))
                     .cornerRadius(3)
             }
@@ -229,9 +229,9 @@ struct TripSpeedBandChart: View {
 struct TripSpeedChartLegend: View {
     var body: some View {
         HStack(spacing: 12) {
-            legendItem(color: RVTheme.accent, text: "Скорость (GPS)")
-            legendItem(color: RVTheme.danger, text: "Лимит", dashed: true)
-            legendItem(color: TripStyle.color(.speeding), text: "События", dot: true)
+            legendItem(color: RVTheme.accent, text: L("chart.legend.speed"))
+            legendItem(color: RVTheme.danger, text: L("chart.limit"), dashed: true)
+            legendItem(color: TripStyle.color(.speeding), text: L("chart.events"), dot: true)
         }
         .font(.caption2)
     }

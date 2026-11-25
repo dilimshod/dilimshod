@@ -21,7 +21,7 @@ struct TrackDetailCard: View {
         VStack(alignment: .leading, spacing: 7) {
             header
             if lead != nil {
-                RVBadge(text: "передний автомобиль", color: leadColor, systemImage: "car.rear.fill")
+                RVBadge(text: L("track.lead"), color: leadColor, systemImage: "car.rear.fill")
             }
             Rectangle()
                 .fill(Color.white.opacity(0.14))
@@ -29,50 +29,50 @@ struct TrackDetailCard: View {
             Grid(alignment: .leading, horizontalSpacing: 10, verticalSpacing: 4) {
                 if track.kind == .trafficLight {
                     GridRow {
-                        rowTitle("Цвет")
+                        rowTitle(L("track.color"))
                         HStack(spacing: 6) {
                             TrafficLightDotView(color: track.lightColor ?? .unknown, size: 10)
-                            Text((track.lightColor ?? .unknown).displayName + " (оценка)")
+                            Text(verbatim: (track.lightColor ?? .unknown).localizedName + " (" + L("common.estimate") + ")")
                         }
                         .font(RVTheme.font(12, weight: .semibold))
                     }
                 }
                 GridRow {
-                    rowTitle("Уверенность")
+                    rowTitle(L("track.confidence"))
                     rowValue("\(DetectionOverlayView.confidencePercent(for: track))%")
                 }
                 if let distance = distanceText {
                     GridRow {
-                        rowTitle("Расстояние")
+                        rowTitle(L("routes.row.distance"))
                         rowValue(distance, color: lead != nil ? leadColor : .white)
                     }
                 }
                 if let lead {
                     GridRow {
-                        rowTitle("По признакам")
-                        rowValue(lead.method)
+                        rowTitle(L("track.cues"))
+                        rowValue(FollowingDistanceCalculator.methodDisplay(lead.method, language: .app))
                     }
                 }
                 if let speed = track.estimatedSpeedKmh, speed.isFinite, speed >= 0 {
                     GridRow {
-                        rowTitle("Скорость")
-                        rowValue("≈ \(Int(speed.rounded())) км/ч (оценка)")
+                        rowTitle(L("chart.speed"))
+                        rowValue(L("routes.kmhEstimate", Int(speed.rounded())))
                     }
                 }
                 if let motion = FollowingDistanceText.relativeMotion(relativeSpeedKmh: lead?.relativeSpeedKmh ?? track.relativeSpeedKmh) {
                     GridRow {
-                        rowTitle("Относительно вас")
+                        rowTitle(L("track.relative"))
                         rowValue("≈ " + motion)
                     }
                 }
                 if let assessment, lead != nil, let ttc = FollowingDistanceText.timeToCollision(assessment) {
                     GridRow {
-                        rowTitle("До столкновения")
+                        rowTitle(L("fd.row.ttc"))
                         rowValue(ttc, color: RVTheme.danger)
                     }
                 }
                 GridRow {
-                    rowTitle("В кадре")
+                    rowTitle(L("track.inFrame"))
                     rowValue(ageText)
                 }
             }
@@ -82,7 +82,7 @@ struct TrackDetailCard: View {
         .frame(width: Self.estimatedSize.width, alignment: .leading)
         .rvGlass(cornerRadius: RVTheme.Radius.panel, tint: lead != nil ? leadColor : kindColor.opacity(0.6))
         .accessibilityElement(children: .contain)
-        .accessibilityLabel("Подробности объекта")
+        .accessibilityLabel(L("track.details"))
     }
 
     private var header: some View {
@@ -103,13 +103,13 @@ struct TrackDetailCard: View {
                 Text(track.kind.localizedName)
                     .font(RVTheme.font(15, weight: .bold))
                 if let make = track.make, let confidence = track.makeConfidence {
-                    Text("\(make) · уверенность \(Int((min(max(confidence, 0), 1) * 100).rounded()))%")
+                    Text(verbatim: "\(make) · " + L("track.makeConfidence", Int((min(max(confidence, 0), 1) * 100).rounded())))
                         .font(RVTheme.font(11, weight: .semibold))
                         .foregroundStyle(.white.opacity(0.8))
                         .monospacedDigit()
                         .lineLimit(2)
                 } else if track.kind.isVehicle && track.kind != .bicycle {
-                    Text("Марка не определена")
+                    Text(l: "track.noMake")
                         .font(RVTheme.font(11, weight: .medium))
                         .foregroundStyle(.white.opacity(0.6))
                 }
@@ -126,14 +126,14 @@ struct TrackDetailCard: View {
             .buttonStyle(RVPressableButtonStyle())
             .padding(.top, -9)
             .padding(.trailing, -9)
-            .accessibilityLabel("Закрыть")
+            .accessibilityLabel(L("common.close"))
         }
     }
 
     private var distanceText: String? {
         let meters = lead?.distanceMeters ?? track.distanceMeters
         guard let meters, meters.isFinite, meters > 0 else { return nil }
-        return FollowingDistanceText.gap(meters) + " (оценка)"
+        return FollowingDistanceText.gap(meters) + " (" + L("common.estimate") + ")"
     }
 
     private var ageText: String {
@@ -175,7 +175,7 @@ struct TrackDetailCard: View {
                               make: "Chevrolet", makeConfidence: 0.64, distanceMeters: 21, relativeSpeedKmh: -8,
                               estimatedSpeedKmh: 46)
     let lead = LeadVehicle(trackID: 7, kind: .car, box: track.box, distanceMeters: 18.4, relativeSpeedKmh: -8,
-                           method: "ширина+высота")
+                           method: "width+height")
     let assessment = FollowingDistanceCalculator.assess(distanceMeters: 18.4, ownSpeedKmh: 54, relativeSpeedKmh: -8,
                                                         policy: FollowingDistancePolicy(), condition: .dry)
     return ZStack {

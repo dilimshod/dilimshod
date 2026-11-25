@@ -36,8 +36,7 @@ final class TrafficSignalService {
     private(set) var persistenceError: String?
 
     /// Explanation to show next to signal waiting times.
-    static let estimateDisclaimer =
-        "≈ Оценка: модель цикла светофора и ваши прошлые остановки. Реальные фазы светофоров недоступны."
+    static var estimateDisclaimer: String { L("signal.disclaimer") }
 
     static let statisticsFileName = "signal_stats.json"
     static let locationsFileName = "signal_locations.json"
@@ -307,7 +306,7 @@ final class TrafficSignalService {
                 .sorted { $0.id < $1.id }
             locationsData = try encoder.encode(locations)
         } catch {
-            persistenceError = "Не удалось сохранить статистику светофоров: \(error.localizedDescription)"
+            persistenceError = L("signal.saveFailed", error.localizedDescription)
             return
         }
         let previous = writeChain
@@ -318,7 +317,7 @@ final class TrafficSignalService {
                 try await RoadDataPersistence.write(locationsData, to: Self.locationsFileName)
                 if self?.persistenceError != nil { self?.persistenceError = nil }
             } catch {
-                self?.persistenceError = "Не удалось сохранить статистику светофоров: \(error.localizedDescription)"
+                self?.persistenceError = L("signal.saveFailed", error.localizedDescription)
             }
         }
     }

@@ -202,6 +202,11 @@ public struct ValhallaError: Error, CustomStringConvertible, Sendable {
     public let code: Int?
     public let message: String
     public var description: String { message }
+
+    /// True for the parser's own messages ("not JSON", "no trip") that do not describe a server error.
+    public var isGenericParseFailure: Bool {
+        code == nil && (message.hasPrefix("Ответ Valhalla") || message.hasPrefix("В ответе Valhalla"))
+    }
 }
 
 /// Request building and response parsing for the Valhalla routing engine

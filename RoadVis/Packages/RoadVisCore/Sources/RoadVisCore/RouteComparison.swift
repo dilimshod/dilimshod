@@ -232,31 +232,66 @@ public enum RouteComparison {
         return "+" + RVFormat.duration(delta)
     }
 
+    /// `delayText` in `language`.
+    public static func delayText(_ seconds: Double, comparedTo fastest: Double, language: RVLang) -> String? {
+        let delta = seconds - fastest
+        guard delta >= 30 else { return nil }
+        return "+" + RVFormat.duration(delta, language: language)
+    }
+
     /// Russian notes explaining the comparison (differences between engines, duplicates, time spread).
     public static func notes(for choices: [RouteChoice]) -> [String] {
+        notes(for: choices, language: .ru)
+    }
+
+    /// Notes explaining the comparison in `language`.
+    public static func notes(for choices: [RouteChoice], language: RVLang) -> [String] {
         guard !choices.isEmpty else { return [] }
+        func duration(_ s: Double) -> String { RVFormat.duration(s, language: language) }
         var notes: [String] = []
         let allSources = Set(choices.flatMap(\.sources))
         if allSources.contains(.apple) && allSources.count > 1 {
-            notes.append("Время Apple может учитывать пробки (где у Apple есть данные), время Valhalla и OSRM — "
-                         + "по типичным скоростям OpenStreetMap, без пробок.")
+            switch language {
+            case .ru: notes.append("Время Apple может учитывать пробки (где у Apple есть данные), время Valhalla и OSRM — "
+                                   + "по типичным скоростям OpenStreetMap, без пробок.")
+            case .uz: notes.append("Apple vaqti tirbandlikni hisobga olishi mumkin (Apple’da ma’lumot bor joylarda), Valhalla va "
+                                   + "OSRM vaqti esa OpenStreetMap’ning odatiy tezliklari bo‘yicha, tirbandliksiz.")
+            case .en: notes.append("Apple’s time may include traffic (where Apple has data); Valhalla and OSRM times use "
+                                   + "typical OpenStreetMap speeds, without traffic.")
+            }
         } else if !allSources.contains(.apple) {
-            notes.append("Время рассчитано по типичным скоростям OpenStreetMap, без учёта пробок (≈ оценка).")
+            switch language {
+            case .ru: notes.append("Время рассчитано по типичным скоростям OpenStreetMap, без учёта пробок (≈ оценка).")
+            case .uz: notes.append("Vaqt OpenStreetMap’ning odatiy tezliklari bo‘yicha, tirbandliksiz hisoblangan (≈ taxmin).")
+            case .en: notes.append("Times are based on typical OpenStreetMap speeds, without traffic (≈ estimate).")
+            }
         }
         if choices.count >= 2 {
             let gap = choices[1].route.expectedTravelTime - choices[0].route.expectedTravelTime
             if gap >= 60 {
-                notes.append("Самый быстрый вариант выигрывает ≈ \(RVFormat.duration(gap)) у следующего (оценка).")
+                switch language {
+                case .ru: notes.append("Самый быстрый вариант выигрывает ≈ \(duration(gap)) у следующего (оценка).")
+                case .uz: notes.append("Eng tez variant keyingisidan ≈ \(duration(gap)) yutadi (taxmin).")
+                case .en: notes.append("The fastest option saves ≈ \(duration(gap)) over the next one (estimate).")
+                }
             } else {
-                notes.append("Первые варианты почти равны по времени (разница < 1 мин) — выбирайте по удобству.")
+                switch language {
+                case .ru: notes.append("Первые варианты почти равны по времени (разница < 1 мин) — выбирайте по удобству.")
+                case .uz: notes.append("Birinchi variantlar vaqt bo‘yicha deyarli teng (farq < 1 daq) — qulayini tanlang.")
+                case .en: notes.append("The top options take almost the same time (difference < 1 min) — choose the most convenient.")
+                }
             }
         }
         for choice in choices {
             let range = choice.timeRange
             if !choice.duplicates.isEmpty, range.max - range.min >= 120 {
                 let names = choice.sources.map(\.badge).joined(separator: ", ")
-                notes.append("Маршрут «\(choice.route.name)» нашли \(names); оценки времени расходятся: "
-                             + "\(RVFormat.duration(range.min))–\(RVFormat.duration(range.max)).")
+                let spread = "\(duration(range.min))–\(duration(range.max))"
+                switch language {
+                case .ru: notes.append("Маршрут «\(choice.route.name)» нашли \(names); оценки времени расходятся: \(spread).")
+                case .uz: notes.append("«\(choice.route.name)» yo‘nalishini \(names) topdi; vaqt baholari farq qiladi: \(spread).")
+                case .en: notes.append("Route “\(choice.route.name)” was found by \(names); time estimates differ: \(spread).")
+                }
             }
         }
         return notes

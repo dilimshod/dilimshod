@@ -84,6 +84,66 @@ public struct SpeedLimitSegment: Hashable, Sendable {
 /// Builds the ordered list of events along a route from all sources: maneuvers (routing engine), speed-limit and
 /// lane-count changes and signals (Valhalla trace attributes), OSM features (cameras, schools, crossings, bumps,
 /// rail crossings, construction, fuel, parking) and user-reported incidents.
+/// User-facing texts of `RouteTimeline.build` (titles, details, sources). `.russian` is the default; the app passes
+/// a table in its current language.
+public struct RouteTimelineText {
+    public var engineSource: (RouteSource) -> String
+    public var lanesDetail: (_ total: Int, _ suitable: Int) -> String
+    public var destination: String
+    public var speedLimitTitle: (Int?) -> String
+    public var speedLimitDetail: (_ isFirst: Bool, _ length: Double) -> String
+    public var laneChangeTitle: (_ from: Int, _ to: Int) -> String
+    public var laneChangeDetail: (_ from: Int) -> String
+    public var trafficSignal: String
+    public var cameraLimit: (Int) -> String
+    public var featureName: (RouteFeatureKind) -> String
+    public var incidentName: (RoadIncidentKind) -> String
+    public var incidentSource: (Date) -> String
+
+    public init(engineSource: @escaping (RouteSource) -> String,
+                lanesDetail: @escaping (_ total: Int, _ suitable: Int) -> String,
+                destination: String,
+                speedLimitTitle: @escaping (Int?) -> String,
+                speedLimitDetail: @escaping (_ isFirst: Bool, _ length: Double) -> String,
+                laneChangeTitle: @escaping (_ from: Int, _ to: Int) -> String,
+                laneChangeDetail: @escaping (_ from: Int) -> String,
+                trafficSignal: String,
+                cameraLimit: @escaping (Int) -> String,
+                featureName: @escaping (RouteFeatureKind) -> String,
+                incidentName: @escaping (RoadIncidentKind) -> String,
+                incidentSource: @escaping (Date) -> String) {
+        self.engineSource = engineSource
+        self.lanesDetail = lanesDetail
+        self.destination = destination
+        self.speedLimitTitle = speedLimitTitle
+        self.speedLimitDetail = speedLimitDetail
+        self.laneChangeTitle = laneChangeTitle
+        self.laneChangeDetail = laneChangeDetail
+        self.trafficSignal = trafficSignal
+        self.cameraLimit = cameraLimit
+        self.featureName = featureName
+        self.incidentName = incidentName
+        self.incidentSource = incidentSource
+    }
+
+    /// The original Russian texts.
+    public static var russian: RouteTimelineText {
+        RouteTimelineText(
+            engineSource: { $0 == .apple ? "маршрут Apple" : "маршрут \($0.badge)" },
+            lanesDetail: { total, good in good > 0 ? "полос: \(total), подходят: \(good)" : "полос: \(total)" },
+            destination: "Пункт назначения",
+            speedLimitTitle: { $0.map { "Ограничение \($0) км/ч" } ?? "Ограничение не указано в OSM" },
+            speedLimitDetail: { isFirst, length in isFirst ? "в начале маршрута" : "на \(RVFormat.distance(length))" },
+            laneChangeTitle: { from, to in to > from ? "Расширение до \(to) полос" : "Сужение до \(to) полос" },
+            laneChangeDetail: { "было \($0)" },
+            trafficSignal: "Светофор",
+            cameraLimit: { "контроль \($0) км/ч" },
+            featureName: { $0.displayName },
+            incidentName: { $0.displayName },
+            incidentSource: { "ваша отметка, " + RVFormat.clock($0) })
+    }
+}
+
 public enum RouteTimeline {
     /// Shorter limit / lane segments are folded into their neighbours (avoids noise at junctions), metres.
     public static let minimumSegmentLength: Double = 120
@@ -105,33 +165,33 @@ public enum RouteTimeline {
     }
 
     public static func build(route: NavRoute, edges: [RouteEdgeAttributes], features: [RouteFeature],
-                             incidents: [IncidentOnRoute]) -> [RouteTimelineEvent] {
+                             incidents: [IncidentOnRoute], text: RouteTimelineText = .russian) -> [RouteTimelineEvent] {
         let cumulative = Geo.cumulativeDistances(route.polyline)
         let total = cumulative.last ?? route.distance
         func point(_ d: Double) -> GeoPoint? {
             Geo.point(atDistance: d, along: route.polyline, cumulative: cumulative)
         }
         var events: [RouteTimelineEvent] = []
-        let engine = route.source == .apple ? "маршрут Apple" : "маршрут \(route.source.badge)"
+        let engine = text.engineSource(route.source)
 
         // Maneuvers.
         let starts = maneuverDistances(steps: route.steps, totalLength: total)
         for (i, step) in route.steps.enumerated() where i >= 1 {
-            let text = step.instruction.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !text.isEmpty else { continue }
+            let instruction = step.instruction.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !instruction.isEmpty else { continue }
             let maneuver = step.resolvedManeuver
             if maneuver == .arrive { continue }
             var detail: String?
             if !step.lanes.isEmpty {
                 let good = step.activeLanes.filter { $0 }.count
-                detail = good > 0 ? "полос: \(step.lanes.count), подходят: \(good)" : "полос: \(step.lanes.count)"
+                detail = text.lanesDetail(step.lanes.count, good)
             }
             events.append(RouteTimelineEvent(id: "m\(i)", distanceAlongRoute: starts[i], kind: .maneuver(maneuver),
-                                             title: text, detail: detail, symbolName: maneuver.symbolName,
+                                             title: instruction, detail: detail, symbolName: maneuver.symbolName,
                                              source: engine, coordinate: point(starts[i])))
         }
         events.append(RouteTimelineEvent(id: "dest", distanceAlongRoute: total, kind: .destination,
-                                         title: "Пункт назначения", detail: nil, symbolName: "flag.checkered",
+                                         title: text.destination, detail: nil, symbolName: "flag.checkered",
                                          source: engine, coordinate: route.polyline.last))
 
         // Speed-limit changes.
@@ -142,8 +202,8 @@ public enum RouteTimeline {
             let isFirst = previousLimit == nil
             previousLimit = .some(segment.limitKmh)
             if isFirst && segment.limitKmh == nil { continue }
-            let title = segment.limitKmh.map { "Ограничение \($0) км/ч" } ?? "Ограничение не указано в OSM"
-            let detail = isFirst ? "в начале маршрута" : "на \(RVFormat.distance(segment.length))"
+            let title = text.speedLimitTitle(segment.limitKmh)
+            let detail = text.speedLimitDetail(isFirst, segment.length)
             events.append(RouteTimelineEvent(id: "sl\(Int(segment.start))", distanceAlongRoute: segment.start,
                                              kind: .speedLimit(segment.limitKmh), title: title, detail: detail,
                                              symbolName: "speedometer", source: "Valhalla (OSM)",
@@ -152,10 +212,10 @@ public enum RouteTimeline {
 
         // Lane-count changes (Valhalla's 1 often means "not tagged" → ignored).
         for change in laneChanges(edges: edges) {
-            let title = change.to > change.from ? "Расширение до \(change.to) полос" : "Сужение до \(change.to) полос"
+            let title = text.laneChangeTitle(change.from, change.to)
             events.append(RouteTimelineEvent(id: "ln\(Int(change.distance))", distanceAlongRoute: change.distance,
                                              kind: .lanes(from: change.from, to: change.to), title: title,
-                                             detail: "было \(change.from)", symbolName: "road.lanes",
+                                             detail: text.laneChangeDetail(change.from), symbolName: "road.lanes",
                                              source: "Valhalla (OSM)", coordinate: point(change.distance)))
         }
 
@@ -163,14 +223,14 @@ public enum RouteTimeline {
         let osmSignals = features.filter { $0.kind == .trafficSignals }
         for f in osmSignals {
             events.append(RouteTimelineEvent(id: "s|" + f.id, distanceAlongRoute: f.distanceAlongRoute,
-                                             kind: .trafficSignal, title: "Светофор", detail: f.name,
+                                             kind: .trafficSignal, title: text.trafficSignal, detail: f.name,
                                              symbolName: RouteFeatureKind.trafficSignals.symbolName, source: "OSM",
                                              coordinate: f.coordinate))
         }
         for d in Valhalla.signalDistances(in: edges)
         where !osmSignals.contains(where: { abs($0.distanceAlongRoute - d) < signalMergeDistance }) {
             events.append(RouteTimelineEvent(id: "vs\(Int(d))", distanceAlongRoute: d, kind: .trafficSignal,
-                                             title: "Светофор", detail: nil,
+                                             title: text.trafficSignal, detail: nil,
                                              symbolName: RouteFeatureKind.trafficSignals.symbolName,
                                              source: "Valhalla (OSM)", coordinate: point(d)))
         }
@@ -179,22 +239,22 @@ public enum RouteTimeline {
         for f in features where f.kind != .trafficSignals {
             var detail = f.name
             if f.kind == .speedCamera, let limit = f.tags["maxspeed"].flatMap({ MaxSpeedParser.parse($0)?.kmh }) {
-                detail = [detail, "контроль \(limit) км/ч"].compactMap { $0 }.joined(separator: " · ")
+                detail = [detail, text.cameraLimit(limit)].compactMap { $0 }.joined(separator: " · ")
             }
             if f.kind == .fuel, let brand = f.tags["brand"], brand != f.name {
                 detail = [detail, brand].compactMap { $0 }.joined(separator: " · ")
             }
             events.append(RouteTimelineEvent(id: "f|" + f.id, distanceAlongRoute: f.distanceAlongRoute,
-                                             kind: .feature(f.kind), title: f.kind.displayName, detail: detail,
+                                             kind: .feature(f.kind), title: text.featureName(f.kind), detail: detail,
                                              symbolName: f.kind.symbolName, source: "OSM", coordinate: f.coordinate))
         }
 
         // User-reported incidents.
         for item in incidents {
             events.append(RouteTimelineEvent(id: "i|" + item.id.uuidString, distanceAlongRoute: item.distanceAlongRoute,
-                                             kind: .incident(item.incident.kind), title: item.incident.kind.displayName,
+                                             kind: .incident(item.incident.kind), title: text.incidentName(item.incident.kind),
                                              detail: item.incident.note, symbolName: item.incident.kind.symbolName,
-                                             source: "ваша отметка, " + RVFormat.clock(item.incident.date),
+                                             source: text.incidentSource(item.incident.date),
                                              coordinate: item.incident.coordinate))
         }
 

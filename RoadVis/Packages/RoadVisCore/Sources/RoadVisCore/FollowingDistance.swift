@@ -349,3 +349,18 @@ public final class LeadVehicleTracker {
                            relativeSpeedKmh: rel, method: method)
     }
 }
+
+extension FollowingDistanceCalculator {
+    /// The distance-cue description of a lead estimate ("ширина+высота", "ширина (обрезано)") in `language`.
+    public static func methodDisplay(_ method: String, language: RVLang) -> String {
+        guard language != .ru else { return method }
+        let words: [(String, String, String)] = [
+            ("ширина", "eni", "width"), ("высота", "balandligi", "height"), ("обрезано", "kesilgan", "cropped"),
+        ]
+        var text = method
+        for (ru, uz, en) in words {
+            text = text.replacingOccurrences(of: ru, with: language == .uz ? uz : en)
+        }
+        return text
+    }
+}

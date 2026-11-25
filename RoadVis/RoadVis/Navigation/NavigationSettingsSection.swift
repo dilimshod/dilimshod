@@ -10,7 +10,7 @@ struct NavigationSettingsSection: View {
         @Bindable var settings = app.settings
 
         Section {
-            Picker("Построение маршрутов", selection: $settings.routingEngine) {
+            Picker(L("navset.engine"), selection: $settings.routingEngine) {
                 ForEach(RoutingEngineOption.allCases) { engine in
                     Text(engine.displayName).tag(engine.rawValue)
                 }
@@ -18,7 +18,7 @@ struct NavigationSettingsSection: View {
             .pickerStyle(.inline)
 
             VStack(alignment: .leading, spacing: 6) {
-                Text("Сервер Valhalla")
+                Text(l: "navset.valhallaServer")
                     .font(.subheadline.weight(.semibold))
                 TextField(Valhalla.defaultEndpoint, text: $settings.valhallaEndpoint)
                     .keyboardType(.URL)
@@ -27,7 +27,7 @@ struct NavigationSettingsSection: View {
                     .autocorrectionDisabled()
                     .font(.body.monospaced())
                 if ValhallaClient.url(endpoint: settings.valhallaEndpoint, path: "route") == nil {
-                    Label("Некорректный адрес: нужен http(s)-адрес сервера", systemImage: "exclamationmark.triangle.fill")
+                    Label(L("navset.badURL"), systemImage: "exclamationmark.triangle.fill")
                         .font(.caption)
                         .foregroundStyle(.orange)
                 }
@@ -35,14 +35,14 @@ struct NavigationSettingsSection: View {
             .padding(.vertical, 4)
 
             if settings.valhallaEndpoint != Valhalla.defaultEndpoint {
-                Button("Вернуть сервер Valhalla по умолчанию (FOSSGIS)") {
+                Button(L("navset.resetValhalla")) {
                     settings.valhallaEndpoint = Valhalla.defaultEndpoint
                 }
                 .frame(minHeight: 44)
             }
 
             VStack(alignment: .leading, spacing: 6) {
-                Text("Сервер OSRM")
+                Text(l: "navset.osrmServer")
                     .font(.subheadline.weight(.semibold))
                 TextField(OSRM.defaultEndpoint, text: $osrmEndpoint)
                     .keyboardType(.URL)
@@ -51,7 +51,7 @@ struct NavigationSettingsSection: View {
                     .autocorrectionDisabled()
                     .font(.body.monospaced())
                 if OSRM.routeURL(endpoint: osrmEndpoint, from: GeoPoint(41.3, 69.2), to: GeoPoint(41.31, 69.21)) == nil {
-                    Label("Некорректный адрес: нужен http(s)-адрес сервера OSRM (…/routed-car)",
+                    Label(L("navset.badOSRMURL"),
                           systemImage: "exclamationmark.triangle.fill")
                         .font(.caption)
                         .foregroundStyle(.orange)
@@ -60,33 +60,27 @@ struct NavigationSettingsSection: View {
             .padding(.vertical, 4)
 
             if osrmEndpoint != OSRM.defaultEndpoint {
-                Button("Вернуть сервер OSRM по умолчанию (FOSSGIS)") {
+                Button(L("navset.resetOSRM")) {
                     osrmEndpoint = OSRM.defaultEndpoint
                 }
                 .frame(minHeight: 44)
             }
 
-            Toggle("Ограничения скорости, полосы и светофоры по маршруту (Valhalla)",
+            Toggle(L("navset.routeAttributes"),
                    isOn: $settings.routeAttributesEnabled)
                 .frame(minHeight: 44)
         } header: {
-            Text("Маршрутизация")
+            Text(l: "navset.routing")
         } footer: {
-            Text("«Авто» запрашивает одновременно Apple Maps (где Apple поддерживает маршруты — по данным Apple, "
-                 + "в Узбекистане нет), Valhalla и OSRM, объединяет совпадающие маршруты (≥ 85 % общего пути), "
-                 + "сравнивает варианты и выбирает самый быстрый; причина неудачи каждого источника показывается. "
-                 + "Публичные серверы FOSSGIS (valhalla1.openstreetmap.de, routing.openstreetmap.de) бесплатны и "
-                 + "предназначены для лёгкого некоммерческого использования: приложение отправляет каждому не больше "
-                 + "одного запроса в секунду и указывает источник — © участники OpenStreetMap. Для частого "
-                 + "использования укажите собственные серверы.")
+            Text(l: "navset.routing.footer")
         }
 
         Section {
-            Toggle("Слой пробок Apple — где есть данные", isOn: $settings.showTrafficOnMap)
+            Toggle(L("navset.appleTraffic"), isOn: $settings.showTrafficOnMap)
                 .frame(minHeight: 44)
 
             VStack(alignment: .leading, spacing: 6) {
-                Text("Свой источник тайлов пробок")
+                Text(l: "navset.customTiles")
                     .font(.subheadline.weight(.semibold))
                 TextField("https://…/{z}/{x}/{y}.png", text: $settings.trafficTileTemplate)
                     .keyboardType(.URL)
@@ -103,35 +97,32 @@ struct NavigationSettingsSection: View {
             .padding(.vertical, 4)
 
             if !settings.trafficTileTemplate.isEmpty {
-                Button("Отключить свой источник", role: .destructive) {
+                Button(L("navset.customTiles.off"), role: .destructive) {
                     settings.trafficTileTemplate = ""
                 }
                 .frame(minHeight: 44)
             }
         } header: {
-            Text("Пробки")
+            Text(l: "navset.traffic")
         } footer: {
-            Text("Бесплатных данных о пробках в реальном времени для Узбекистана из открытых источников нет, а слой "
-                 + "пробок Apple там пуст. Если у вас есть права или ключ доступа к сервису растровых тайлов пробок, "
-                 + "укажите шаблон адреса с {z}, {x} и {y} — слой будет наложен на карту. Загруженность текущего "
-                 + "участка в навигаторе оценивается по вашей собственной скорости (оценка, не данные о трафике).")
+            Text(l: "navset.traffic.footer")
         }
     }
 
-    /// Russian problem description for a non-empty, invalid tile template; nil when empty or valid.
+    /// Localized problem description for a non-empty, invalid tile template; nil when empty or valid.
     private func tileTemplateProblem(_ template: String) -> String? {
         let trimmed = template.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
         let lower = trimmed.lowercased()
         if lower.hasPrefix("http://") {
-            return "Незащищённые адреса http:// запрещены iOS (App Transport Security) — нужен https://"
+            return L("navset.tiles.http")
         }
         if !lower.hasPrefix("https://") {
-            return "Адрес должен начинаться с https://"
+            return L("navset.tiles.https")
         }
         let missing = ["{z}", "{x}", "{y}"].filter { !trimmed.contains($0) }
         if !missing.isEmpty {
-            return "В шаблоне не хватает: \(missing.joined(separator: ", "))"
+            return L("navset.tiles.missing", missing.joined(separator: ", "))
         }
         return nil
     }

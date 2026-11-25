@@ -45,7 +45,7 @@ struct RouteOptionsView: View {
                 Button {
                     showsComparison = true
                 } label: {
-                    Label("Сравнить", systemImage: "list.bullet.rectangle")
+                    Label(L("routes.compare"), systemImage: "list.bullet.rectangle")
                         .font(.subheadline.weight(.semibold))
                         .frame(minHeight: 50)
                         .padding(.horizontal, 6)
@@ -56,7 +56,7 @@ struct RouteOptionsView: View {
                 Button {
                     app.startDrive()
                 } label: {
-                    Label("Поехали", systemImage: "location.north.line.fill")
+                    Label(L("routes.go"), systemImage: "location.north.line.fill")
                         .font(.title3.weight(.bold))
                         .frame(maxWidth: .infinity, minHeight: 50)
                 }
@@ -77,10 +77,10 @@ struct RouteOptionsView: View {
     private func header(_ nav: NavigationService) -> some View {
         HStack(alignment: .center, spacing: 10) {
             VStack(alignment: .leading, spacing: 1) {
-                Text("Маршрут · вариантов: \(nav.routeOptions.count)")
+                Text(l: "routes.header", nav.routeOptions.count)
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                Text(nav.destinationName ?? "Пункт назначения")
+                Text(verbatim: nav.destinationName ?? L("weather.destination"))
                     .font(.headline)
                     .lineLimit(1)
             }
@@ -88,7 +88,7 @@ struct RouteOptionsView: View {
             Button {
                 nav.stopNavigation()
             } label: {
-                Text("Отмена")
+                Text(l: "common.cancel")
                     .font(.subheadline.weight(.semibold))
                     .padding(.horizontal, 10)
                     .frame(minHeight: 44)
@@ -103,7 +103,7 @@ struct RouteOptionsView: View {
         if nav.isLoadingRouteAttributes || app.roadInfo.isLoadingRouteFeatures {
             HStack(spacing: 8) {
                 ProgressView().controlSize(.small)
-                Text("Загружаю ограничения, полосы, светофоры, камеры и погоду по маршруту…")
+                Text(l: "routes.loadingAttributes")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
             }
@@ -149,11 +149,14 @@ struct RouteContentSummary: View {
         func count(_ predicate: (RouteTimelineKind) -> Bool) -> Int { events.filter { predicate($0.kind) }.count }
         var items: [Item] = []
         let signals = count { $0 == .trafficSignal }
-        if signals > 0 { items.append(Item(symbol: "light.beacon.max", count: signals, color: .orange, label: "Светофоры")) }
-        let pairs: [(RouteFeatureKind, String)] = [(.speedCamera, "Камеры"), (.school, "Школы"),
-                                                   (.kindergarten, "Детские сады"), (.pedestrianCrossing, "Переходы"),
-                                                   (.trafficCalming, "Неровности"), (.railwayCrossing, "Ж/д переезды"),
-                                                   (.construction, "Дорожные работы"), (.fuel, "АЗС"), (.parking, "Парковки")]
+        if signals > 0 { items.append(Item(symbol: "light.beacon.max", count: signals, color: .orange, label: L("settings.signal.title"))) }
+        let pairs: [(RouteFeatureKind, String)] = [(.speedCamera, L("routes.sum.cameras")), (.school, L("routes.sum.schools")),
+                                                   (.kindergarten, L("routes.sum.kindergartens")),
+                                                   (.pedestrianCrossing, L("routes.sum.crossings")),
+                                                   (.trafficCalming, L("routes.sum.bumps")),
+                                                   (.railwayCrossing, L("routes.sum.railway")),
+                                                   (.construction, L("feature.construction")), (.fuel, L("feature.fuel")),
+                                                   (.parking, L("routes.sum.parkings"))]
         for (kind, label) in pairs {
             let n = count { $0 == .feature(kind) }
             if n > 0 {
@@ -164,7 +167,7 @@ struct RouteContentSummary: View {
         let maneuvers = count { if case .maneuver = $0 { return true } else { return false } }
         if maneuvers > 0 {
             items.append(Item(symbol: "arrow.triangle.turn.up.right.diamond", count: maneuvers, color: .white,
-                              label: "Манёвры"))
+                              label: L("routes.sum.maneuvers")))
         }
         return items
     }
@@ -183,12 +186,12 @@ private struct RouteOptionCard: View {
                 Text(RVFormat.appDuration(option.expectedTravelTime))
                     .font(RVTheme.font(22, weight: .bold))
                     .monospacedDigit()
-                if let delta = RouteComparison.delayText(option.expectedTravelTime, comparedTo: fastestTime) {
+                if let delta = RouteComparison.delayText(option.expectedTravelTime, comparedTo: fastestTime, language: .app) {
                     Text(delta)
                         .font(RVTheme.font(12, weight: .bold))
                         .foregroundStyle(RVTheme.caution)
                 } else {
-                    Text("быстрее всех")
+                    Text(l: "routes.fastest")
                         .font(RVTheme.font(11, weight: .bold))
                         .foregroundStyle(RVTheme.safe)
                 }
@@ -212,19 +215,19 @@ private struct RouteOptionCard: View {
                     ForEach(option.sources, id: \.self) { EngineBadge(source: $0) }
                     if let signals = facts.signalCount {
                         RVBadge(text: "\(signals)", color: .orange, systemImage: "light.beacon.max")
-                            .accessibilityLabel("Светофоров: \(signals)")
+                            .accessibilityLabel(L("routes.signals.a11y", signals))
                     }
                     if let maxLimit = facts.maxSpeedLimitKmh {
-                        RVBadge(text: "до \(maxLimit)", color: NavigatorStyle.speedLimitColor(maxLimit), systemImage: "speedometer")
-                            .accessibilityLabel("Максимальное ограничение \(maxLimit) километров в час")
+                        RVBadge(text: L("routes.upTo", maxLimit), color: NavigatorStyle.speedLimitColor(maxLimit), systemImage: "speedometer")
+                            .accessibilityLabel(L("routes.maxLimit.a11y", maxLimit))
                     }
                     if let share = facts.primaryRoadShare {
-                        RVBadge(text: "главные \(Int((share * 100).rounded()))%", color: .teal, systemImage: "road.lanes")
+                        RVBadge(text: L("routes.mainShare", Int((share * 100).rounded())), color: .teal, systemImage: "road.lanes")
                     }
-                    if facts.hasTolls { RVBadge(text: "Платная", color: .yellow, systemImage: "dollarsign.circle") }
-                    if facts.hasHighways { RVBadge(text: "Магистрали", color: .teal, systemImage: "car.rear.road.lane") }
+                    if facts.hasTolls { RVBadge(text: L("routes.toll"), color: .yellow, systemImage: "dollarsign.circle") }
+                    if facts.hasHighways { RVBadge(text: L("routes.highways"), color: .teal, systemImage: "car.rear.road.lane") }
                     if let unpaved = facts.unpavedShare, unpaved >= 0.05 {
-                        RVBadge(text: "грунт \(Int((unpaved * 100).rounded()))%", color: .brown, systemImage: "exclamationmark.triangle")
+                        RVBadge(text: L("routes.unpavedShare", Int((unpaved * 100).rounded())), color: .brown, systemImage: "exclamationmark.triangle")
                     }
                 }
             }
@@ -233,7 +236,7 @@ private struct RouteOptionCard: View {
                     .font(.caption2.weight(.semibold))
                     .foregroundStyle(NavigatorStyle.congestionColor(traffic.level))
             } else if !option.source.mayIncludeTraffic {
-                Text("≈ время по типичным скоростям OSM, без пробок (оценка)")
+                Text(l: "routes.osmTimeNote")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
             }
@@ -253,7 +256,7 @@ private struct RouteOptionCard: View {
         )
         .contentShape(RoundedRectangle(cornerRadius: RVTheme.Radius.control, style: .continuous))
         .accessibilityElement(children: .combine)
-        .accessibilityValue(isSelected ? "выбран" : "")
+        .accessibilityValue(isSelected ? L("routes.selected") : "")
     }
 }
 
@@ -266,7 +269,7 @@ struct RouteComparisonSheet: View {
         let nav = app.navigation
         NavigationStack {
             List {
-                Section("Варианты") {
+                Section(L("routes.options")) {
                     let fastest = nav.routeOptions.map(\.expectedTravelTime).min() ?? 0
                     ForEach(nav.routeOptions) { option in
                         comparisonRow(option, facts: nav.facts(for: option), fastest: fastest,
@@ -276,7 +279,7 @@ struct RouteComparisonSheet: View {
                     }
                 }
                 if !nav.comparisonNotes.isEmpty {
-                    Section("Пояснения") {
+                    Section(L("routes.notes")) {
                         ForEach(nav.comparisonNotes, id: \.self) { note in
                             Text(note).font(.footnote)
                         }
@@ -289,21 +292,19 @@ struct RouteComparisonSheet: View {
                             .foregroundStyle(report.isSuccess ? Color.primary : Color.secondary)
                     }
                 } header: {
-                    Text("Источники маршрутов")
+                    Text(l: "routes.sources")
                 } footer: {
-                    Text("Valhalla и OSRM — бесплатные серверы FOSSGIS на данных © участников OpenStreetMap "
-                         + "(не чаще 1 запроса в секунду). Ограничения, полосы и светофоры по каждому варианту — "
-                         + "Valhalla trace_attributes. Пробки в реальном времени бесплатно для этого региона недоступны.")
+                    Text(l: "routes.sources.footer")
                 }
-                Section("Цвета ограничений скорости") {
+                Section(L("nav.speedLimitColors")) {
                     SpeedLimitLegend()
                 }
             }
-            .navigationTitle("Сравнение маршрутов")
+            .navigationTitle(L("routes.comparison"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("Готово") { dismiss() }
+                    Button(L("common.done")) { dismiss() }
                 }
             }
         }
@@ -320,30 +321,30 @@ struct RouteComparisonSheet: View {
                 ForEach(option.sources, id: \.self) { EngineBadge(source: $0) }
             }
             Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 3) {
-                row("Время", RVFormat.appDuration(option.expectedTravelTime)
-                    + (RouteComparison.delayText(option.expectedTravelTime, comparedTo: fastest).map { " (\($0))" } ?? ""))
+                row(L("routes.row.time"), RVFormat.appDuration(option.expectedTravelTime)
+                    + (RouteComparison.delayText(option.expectedTravelTime, comparedTo: fastest, language: .app).map { " (\($0))" } ?? ""))
                 ForEach(option.alsoFoundBy, id: \.self) { estimate in
                     row("  \(estimate.source.badge)", "≈ \(RVFormat.appDuration(estimate.expectedTravelTime)), "
                         + RVFormat.appDistance(estimate.distance))
                 }
-                row("Расстояние", RVFormat.appDistance(option.distance))
-                if let average = facts.averageSpeedKmh { row("Средняя скорость", "≈ \(Int(average.rounded())) км/ч (оценка)") }
-                row("Светофоры", facts.signalCount.map { "\($0)" } ?? "загрузка…")
-                if let maxLimit = facts.maxSpeedLimitKmh { row("Макс. ограничение", "\(maxLimit) км/ч") }
+                row(L("routes.row.distance"), RVFormat.appDistance(option.distance))
+                if let average = facts.averageSpeedKmh { row(L("routes.row.avgSpeed"), L("routes.kmhEstimate", Int(average.rounded()))) }
+                row(L("settings.signal.title"), facts.signalCount.map { "\($0)" } ?? L("status.loading"))
+                if let maxLimit = facts.maxSpeedLimitKmh { row(L("routes.row.maxLimit"), "\(maxLimit) \(RVFormat.appKmh)") }
                 if let avgLimit = facts.averageSpeedLimitKmh {
-                    row("Среднее ограничение", "≈ \(Int(avgLimit.rounded())) км/ч")
+                    row(L("routes.row.avgLimit"), "≈ \(Int(avgLimit.rounded())) \(RVFormat.appKmh)")
                 }
                 if let coverage = facts.speedLimitCoverage {
-                    row("Знаки ограничений в OSM", "\(Int((coverage * 100).rounded()))% длины")
+                    row(L("routes.row.limitCoverage"), L("routes.ofLength", Int((coverage * 100).rounded())))
                 }
-                if let share = facts.primaryRoadShare { row("Главные дороги", "\(Int((share * 100).rounded()))%") }
-                if let unpaved = facts.unpavedShare, unpaved > 0 { row("Без покрытия", "\(Int((unpaved * 100).rounded()))%") }
-                row("Манёвров", "\(facts.maneuverCount)")
+                if let share = facts.primaryRoadShare { row(L("routes.row.mainRoads"), "\(Int((share * 100).rounded()))%") }
+                if let unpaved = facts.unpavedShare, unpaved > 0 { row(L("routes.row.unpaved"), "\(Int((unpaved * 100).rounded()))%") }
+                row(L("routes.row.maneuvers"), "\(facts.maneuverCount)")
                 if facts.tunnelCount > 0 || facts.bridgeCount > 0 {
-                    row("Мосты / тоннели", "\(facts.bridgeCount) / \(facts.tunnelCount)")
+                    row(L("routes.row.bridges"), "\(facts.bridgeCount) / \(facts.tunnelCount)")
                 }
-                row("Платные / магистрали", (facts.hasTolls ? "да" : "нет") + " / " + (facts.hasHighways ? "да" : "нет"))
-                if let traffic = option.traffic { row("Пробки (Apple)", traffic.localizedSummary) }
+                row(L("routes.row.tollsHighways"), (facts.hasTolls ? L("common.yesLower") : L("common.noLower")) + " / " + (facts.hasHighways ? L("common.yesLower") : L("common.noLower")))
+                if let traffic = option.traffic { row(L("routes.row.appleTraffic"), traffic.localizedSummary) }
             }
             .font(.caption)
             ForEach(option.route.advisories, id: \.self) { advisory in

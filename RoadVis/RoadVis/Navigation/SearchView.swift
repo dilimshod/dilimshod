@@ -33,11 +33,11 @@ struct SearchView: View {
                 .listStyle(.insetGrouped)
                 .scrollDismissesKeyboard(.interactively)
             }
-            .navigationTitle("Куда едем?")
+            .navigationTitle(L("nav.whereTo"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Закрыть") { dismiss() }
+                    Button(L("common.close")) { dismiss() }
                 }
             }
         }
@@ -64,7 +64,7 @@ struct SearchView: View {
             Image(systemName: "magnifyingglass")
                 .font(.title3)
                 .foregroundStyle(.secondary)
-            TextField("Адрес, место или организация", text: $search.query)
+            TextField(L("search.placeholder"), text: $search.query)
                 .font(.title3)
                 .textInputAutocapitalization(.sentences)
                 .autocorrectionDisabled()
@@ -81,7 +81,7 @@ struct SearchView: View {
                         .foregroundStyle(.secondary)
                         .frame(width: 44, height: 52)
                 }
-                .accessibilityLabel("Очистить")
+                .accessibilityLabel(L("search.clear"))
             }
         }
         .padding(.horizontal, 14)
@@ -97,7 +97,7 @@ struct SearchView: View {
             Section {
                 HStack(spacing: 12) {
                     ProgressView()
-                    Text("Ищем…")
+                    Text(l: "search.searching")
                         .font(.headline)
                 }
                 .frame(minHeight: 52)
@@ -115,7 +115,7 @@ struct SearchView: View {
     private var recentsSection: some View {
         if search.recents.isEmpty {
             Section {
-                Text("Начните вводить адрес или название места. Здесь появятся недавние пункты назначения.")
+                Text(l: "search.empty")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
                     .frame(minHeight: 52, alignment: .leading)
@@ -137,9 +137,9 @@ struct SearchView: View {
                 }
             } header: {
                 HStack {
-                    Text("Недавние")
+                    Text(l: "search.recents")
                     Spacer()
-                    Button("Очистить") { search.clearRecents() }
+                    Button(L("search.clear")) { search.clearRecents() }
                         .font(.caption.weight(.semibold))
                         .textCase(nil)
                 }
@@ -150,7 +150,7 @@ struct SearchView: View {
     @ViewBuilder
     private var resultsSection: some View {
         if !results.isEmpty {
-            Section("Результаты") {
+            Section(L("search.results")) {
                 ForEach(results, id: \.self) { item in
                     Button {
                         select(item)
@@ -169,7 +169,7 @@ struct SearchView: View {
     @ViewBuilder
     private var completionsSection: some View {
         if !search.completions.isEmpty {
-            Section("Подсказки") {
+            Section(L("search.suggestions")) {
                 ForEach(search.completions, id: \.self) { completion in
                     Button {
                         resolve(completion)
@@ -187,7 +187,7 @@ struct SearchView: View {
             Section {
                 HStack(spacing: 12) {
                     ProgressView()
-                    Text("Подбираю подсказки…")
+                    Text(l: "search.loadingSuggestions")
                         .foregroundStyle(.secondary)
                 }
                 .frame(minHeight: 52)
@@ -197,7 +197,7 @@ struct SearchView: View {
                 Button {
                     runTextSearch()
                 } label: {
-                    row(title: "Искать «\(trimmedQuery)»", subtitle: nil, systemImage: "magnifyingglass", distance: nil)
+                    row(title: L("search.searchFor", trimmedQuery), subtitle: nil, systemImage: "magnifyingglass", distance: nil)
                 }
                 .buttonStyle(.plain)
             }

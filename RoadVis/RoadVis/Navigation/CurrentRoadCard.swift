@@ -53,7 +53,7 @@ struct CurrentRoadCard: View {
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-                .accessibilityHint(isExpanded ? "Свернуть сведения о дороге" : "Подробнее о дороге")
+                .accessibilityHint(isExpanded ? L("road.collapse") : L("road.expand"))
 
                 SpeedometerView(speedKmh: app.location.speedKmh,
                                 limitKmh: speedLimit(road: road, edge: edge),
@@ -101,26 +101,26 @@ struct CurrentRoadCard: View {
     private func facts(road: RoadSegmentInfo?, edge: RouteEdgeAttributes?) -> [Fact] {
         var result: [Fact] = []
         if let limit = road?.speedLimit {
-            let text = limit.isImplicit ? "Лимит \(limit.kmh) км/ч (по типу зоны)" : "Лимит \(limit.kmh) км/ч"
+            let text = limit.isImplicit ? L("road.limit.implicit", limit.kmh) : L("road.limit", limit.kmh)
             result.append(Fact(symbol: "speedometer", text: text, source: "OSM"))
         }
         if let limit = edge?.speedLimitKmh, limit != road?.speedLimit?.kmh {
-            result.append(Fact(symbol: "speedometer", text: "Лимит \(limit) км/ч", source: "Valhalla"))
+            result.append(Fact(symbol: "speedometer", text: L("road.limit", limit), source: "Valhalla"))
         }
         if let info = road?.laneInfo {
             var parts: [String] = []
-            if let mine = info.lanesInDirection { parts.append("в моём направлении \(info.isEstimated ? "≈" : "")\(mine)") }
-            if let opposite = info.lanesOpposite, opposite > 0 { parts.append("встречных \(opposite)") }
-            if let total = info.totalLanes { parts.append("всего \(total)") }
+            if let mine = info.lanesInDirection { parts.append(L("road.lanes.mine", "\(info.isEstimated ? "≈" : "")\(mine)")) }
+            if let opposite = info.lanesOpposite, opposite > 0 { parts.append(L("road.lanes.opposite", opposite)) }
+            if let total = info.totalLanes { parts.append(L("road.lanes.total", total)) }
             if !parts.isEmpty {
-                result.append(Fact(symbol: "road.lanes", text: "Полосы: " + parts.joined(separator: ", "),
-                                   source: info.isEstimated ? "оценка по классу" : "OSM"))
+                result.append(Fact(symbol: "road.lanes", text: L("road.lanes", parts.joined(separator: ", ")),
+                                   source: info.isEstimated ? L("road.estimatedByClass") : "OSM"))
             }
             result.append(Fact(symbol: info.isOneway ? "arrow.up" : "arrow.up.arrow.down",
-                               text: info.isOneway ? "Одностороннее" : "Двустороннее", source: "OSM"))
+                               text: info.isOneway ? L("road.oneway") : L("road.twoway"), source: "OSM"))
         }
         if let lanes = edge?.laneCount, lanes > 1 {
-            result.append(Fact(symbol: "road.lanes", text: "Полос по ходу: \(lanes)", source: "Valhalla"))
+            result.append(Fact(symbol: "road.lanes", text: L("road.lanesForward", lanes), source: "Valhalla"))
         }
         if let surface = road?.localizedSurfaceName {
             result.append(Fact(symbol: "square.grid.3x3.fill", text: surface, source: "OSM"))
@@ -129,17 +129,17 @@ struct CurrentRoadCard: View {
         }
         if let lit = road?.lit {
             result.append(Fact(symbol: lit ? "lightbulb.fill" : "lightbulb.slash",
-                               text: lit ? "Освещение есть" : "Без освещения", source: "OSM"))
+                               text: lit ? L("road.lit") : L("road.unlit"), source: "OSM"))
         }
         if let typical = edge?.typicalSpeedKmh, typical > 0 {
             result.append(Fact(symbol: "gauge.with.dots.needle.50percent",
-                               text: "Типичная скорость ≈ \(Int(typical.rounded())) км/ч (оценка)", source: "Valhalla"))
+                               text: L("road.typicalSpeed", Int(typical.rounded())), source: "Valhalla"))
         }
-        if edge?.isTunnel == true { result.append(Fact(symbol: "road.lanes", text: "Тоннель", source: "Valhalla")) }
-        if edge?.isBridge == true { result.append(Fact(symbol: "road.lanes", text: "Мост", source: "Valhalla")) }
-        if edge?.isToll == true { result.append(Fact(symbol: "dollarsign.circle", text: "Платный участок", source: "Valhalla")) }
+        if edge?.isTunnel == true { result.append(Fact(symbol: "road.lanes", text: L("road.tunnel"), source: "Valhalla")) }
+        if edge?.isBridge == true { result.append(Fact(symbol: "road.lanes", text: L("road.bridge"), source: "Valhalla")) }
+        if edge?.isToll == true { result.append(Fact(symbol: "dollarsign.circle", text: L("road.toll"), source: "Valhalla")) }
         if result.isEmpty {
-            result.append(Fact(symbol: "questionmark.circle", text: "Нет данных OSM о дороге", source: "OSM"))
+            result.append(Fact(symbol: "questionmark.circle", text: L("road.noOSM"), source: "OSM"))
         }
         return result
     }
@@ -149,7 +149,7 @@ struct CurrentRoadCard: View {
     private func roadName(road: RoadSegmentInfo?, edge: RouteEdgeAttributes?) -> String {
         if let road { return road.localizedDisplayName }
         if let name = edge?.names.first, !name.isEmpty { return name }
-        return "Дорога"
+        return L("highway.road")
     }
 
     private func roadClass(road: RoadSegmentInfo?, edge: RouteEdgeAttributes?) -> String? {
@@ -177,7 +177,7 @@ struct CurrentRoadCard: View {
         }
         guard let count else { return nil }
         var text = (estimated ? "≈" : "") + "\(count)"
-        if let total = osm?.totalLanes, total > count { text += " из \(total)" }
+        if let total = osm?.totalLanes, total > count { text += " / \(total)" }
         return text
     }
 

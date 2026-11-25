@@ -63,7 +63,7 @@ struct TripInfoPanel: View {
                     } else {
                         HStack(spacing: 6) {
                             ProgressView().controlSize(.small)
-                            Text("Ожидание GPS…").font(.subheadline.weight(.semibold))
+                            Text(l: "nav.waitingGPS").font(.subheadline.weight(.semibold))
                         }
                     }
                     Spacer(minLength: 0)
@@ -78,12 +78,12 @@ struct TripInfoPanel: View {
             }
             .buttonStyle(.plain)
             .accessibilityLabel(headerAccessibilityText(nav))
-            .accessibilityHint(isExpanded ? "Свернуть подробности" : "Показать подробности")
+            .accessibilityHint(isExpanded ? L("nav.collapseDetails") : L("common.showDetails"))
 
             Button(role: .destructive) {
                 nav.stopNavigation()
             } label: {
-                Text("Завершить")
+                Text(l: "nav.end")
                     .font(.subheadline.weight(.semibold))
                     .padding(.horizontal, 4)
                     .frame(minHeight: 32)
@@ -96,10 +96,10 @@ struct TripInfoPanel: View {
     }
 
     private func headerAccessibilityText(_ nav: NavigationService) -> String {
-        guard let progress = nav.progress else { return "Ожидание GPS" }
+        guard let progress = nav.progress else { return L("nav.waitingGPS.a11y") }
         let arrival = RVFormat.clock(Date().addingTimeInterval(progress.remainingTimeSeconds))
-        return "Прибытие в \(arrival), осталось \(RVFormat.appDuration(progress.remainingTimeSeconds)), "
-            + RVFormat.appDistance(progress.remainingDistance)
+        return L("nav.header.a11y", arrival, RVFormat.appDuration(progress.remainingTimeSeconds),
+                 RVFormat.appDistance(progress.remainingDistance))
     }
 
     // MARK: Chips
@@ -111,27 +111,27 @@ struct TripInfoPanel: View {
                 if summary.count > 0 {
                     chip(symbol: "light.beacon.max", tint: .orange,
                          text: "\(summary.count) · ≈ \(RVFormat.appDuration(summary.seconds))")
-                        .accessibilityLabel("Светофоров впереди \(summary.count), ожидание примерно \(RVFormat.appDuration(summary.seconds)), оценка")
+                        .accessibilityLabel(L("nav.signals.a11y", summary.count, RVFormat.appDuration(summary.seconds)))
                 }
                 if let level = nav.congestion {
                     chip(symbol: "car.2.fill", tint: NavigatorStyle.congestionColor(level), text: level.localizedName + " ≈")
                 } else if nav.isWaitingAtSignal {
-                    chip(symbol: "pause.circle", tint: .secondary, text: "у светофора")
+                    chip(symbol: "pause.circle", tint: .secondary, text: L("nav.atSignal"))
                 }
                 let cameras = nav.upcomingEvents().filter { $0.kind == .feature(.speedCamera) }
                 if let camera = cameras.first {
                     chip(symbol: "camera.fill", tint: .purple,
                          text: RVFormat.appDistance(max(0, camera.distanceAlongRoute - nav.distanceAlong)))
-                        .accessibilityLabel("Камера через \(RVFormat.appDistance(camera.distanceAlongRoute - nav.distanceAlong))")
+                        .accessibilityLabel(L("nav.cameraIn.a11y", RVFormat.appDistance(camera.distanceAlongRoute - nav.distanceAlong)))
                 }
                 if let weather = app.weather.current {
-                    chip(symbol: weather.symbolName, tint: weather.roadWarnings.isEmpty ? .secondary : .orange,
+                    chip(symbol: weather.symbolName, tint: weather.localizedRoadWarnings.isEmpty ? .secondary : .orange,
                          text: weather.temperatureC.map { "\(Int($0.rounded()))°" } ?? weather.localizedCondition)
                 }
                 if let destination = nav.routeWeather.points.last?.snapshot, let t = destination.temperatureC {
-                    chip(symbol: "flag.checkered", tint: destination.roadWarnings.isEmpty ? .secondary : .orange,
+                    chip(symbol: "flag.checkered", tint: destination.localizedRoadWarnings.isEmpty ? .secondary : .orange,
                          text: "\(Int(t.rounded()))°")
-                        .accessibilityLabel("Погода в пункте назначения \(Int(t.rounded())) градусов")
+                        .accessibilityLabel(L("nav.destWeather.a11y", Int(t.rounded())))
                 }
             }
         }
@@ -160,10 +160,10 @@ struct TripInfoPanel: View {
         let all = nav.upcomingEvents()
         let shown = showsWholeRoute ? all : Array(all.prefix(10))
         VStack(alignment: .leading, spacing: 4) {
-            sectionTitle("Впереди", trailing: all.isEmpty ? nil : "\(all.count) событий")
+            sectionTitle(L("nav.ahead"), trailing: all.isEmpty ? nil : L("nav.eventsCount", all.count))
             if shown.isEmpty {
                 Text(nav.isLoadingRouteAttributes || app.roadInfo.isLoadingRouteFeatures
-                     ? "Загружаю данные о маршруте…" : "Событий впереди нет")
+                     ? L("nav.loadingRouteData") : L("nav.noEventsAhead"))
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -173,7 +173,7 @@ struct TripInfoPanel: View {
                             timeAhead: nav.timeUntil(event))
             }
             if all.count > 10 {
-                Button(showsWholeRoute ? "Только ближайшие" : "Весь маршрут (\(all.count))") {
+                Button(showsWholeRoute ? L("nav.nearestOnly") : L("nav.wholeRoute", all.count)) {
                     withAnimation(RVTheme.snappy) { showsWholeRoute.toggle() }
                 }
                 .font(.caption.weight(.semibold))
@@ -190,14 +190,14 @@ struct TripInfoPanel: View {
         let summary = signalSummary(nav, along: along)
         if summary.count > 0 || nav.distanceToNextSignal != nil {
             VStack(alignment: .leading, spacing: 4) {
-                sectionTitle("Светофоры", trailing: nil)
+                sectionTitle(L("settings.signal.title"), trailing: nil)
                 if summary.count > 0 {
-                    Text("Впереди: \(summary.count) · суммарное ожидание ≈ \(RVFormat.appDuration(summary.seconds)) (оценка)")
+                    Text(l: "nav.signals.total", summary.count, RVFormat.appDuration(summary.seconds))
                         .font(.footnote.weight(.semibold))
                         .monospacedDigit()
                 }
                 nextSignalRow(nav, along: along)
-                Text(TrafficSignalService.estimateDisclaimer)
+                Text(verbatim: TrafficSignalService.estimateDisclaimer)
                     .font(.caption2)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -219,9 +219,9 @@ struct TripInfoPanel: View {
     /// "по вашим поездкам" only for learned estimates, "частично по поездкам" when blended, else "модель".
     static func signalSourceText(_ source: SignalWaitEstimate.Source) -> String {
         switch source {
-        case .learned: return "по вашим поездкам"
-        case .blended: return "частично по поездкам"
-        case .model: return "модель"
+        case .learned: return L("signal.src.learned")
+        case .blended: return L("signal.src.blended")
+        case .model: return L("signal.src.model")
         }
     }
 
@@ -229,13 +229,13 @@ struct TripInfoPanel: View {
     private func nextSignalRow(_ nav: NavigationService, along: Double) -> some View {
         if let next = app.signals.upcoming(fromDistance: along, limit: 1).first {
             signalRow(distance: next.distanceAhead,
-                      waitText: "≈ \(RVFormat.appDuration(next.estimate.expectedWaitSeconds)) (оценка)",
+                      waitText: L("common.approxEstimate", RVFormat.appDuration(next.estimate.expectedWaitSeconds)),
                       sourceText: Self.signalSourceText(next.estimate.source),
                       stopProbability: next.estimate.stopProbability)
         } else if let distance = nav.distanceToNextSignal {
             let model = SignalWaitModel.estimate(app.settings.signalAssumptions)
             signalRow(distance: distance,
-                      waitText: "≈ \(RVFormat.appDuration(model.expectedWaitSeconds)) (оценка)",
+                      waitText: L("common.approxEstimate", RVFormat.appDuration(model.expectedWaitSeconds)),
                       sourceText: Self.signalSourceText(.model),
                       stopProbability: model.stopProbability)
         }
@@ -243,17 +243,17 @@ struct TripInfoPanel: View {
 
     private func signalRow(distance: Double, waitText: String, sourceText: String, stopProbability: Double) -> some View {
         VStack(alignment: .leading, spacing: 2) {
-            Text("Ближайший через \(RVFormat.appDistance(distance)) · ожидание \(waitText)")
+            Text(l: "nav.nextSignal", RVFormat.appDistance(distance), waitText)
                 .font(.footnote)
                 .monospacedDigit()
             HStack(spacing: 6) {
-                Text("Источник: \(sourceText) · вероятность остановки ≈ \(Int((stopProbability * 100).rounded()))%")
+                Text(l: "nav.signalSource", sourceText, Int((stopProbability * 100).rounded()))
                     .font(.caption2)
                     .foregroundStyle(.secondary)
                 if let color = app.recognition.currentLightColor, color != .unknown, distance < 150 {
                     HStack(spacing: 4) {
                         TrafficLightDotView(color: color, size: 10)
-                        Text("камера: \(color.localizedName.lowercased())")
+                        Text(l: "nav.cameraColor", color.localizedName.lowercased())
                     }
                     .font(.caption2.weight(.semibold))
                 }
@@ -265,23 +265,23 @@ struct TripInfoPanel: View {
 
     private func congestionSection(_ nav: NavigationService) -> some View {
         VStack(alignment: .leading, spacing: 4) {
-            sectionTitle("Загруженность", trailing: nil)
+            sectionTitle(L("nav.congestion"), trailing: nil)
             if let level = nav.congestion {
                 HStack(spacing: 8) {
                     Circle().fill(NavigatorStyle.congestionColor(level)).frame(width: 10, height: 10)
-                    Text("\(level.localizedName) · по вашей скорости (оценка)")
+                    Text(l: "nav.congestion.level", level.localizedName)
                         .font(.footnote.weight(.semibold))
                 }
                 if let own = nav.averageSpeedKmh, let typical = nav.currentEdge?.typicalSpeedKmh {
-                    Text("Ваша средняя ≈ \(Int(own.rounded())) км/ч, типичная для участка ≈ \(Int(typical.rounded())) км/ч")
+                    Text(l: "nav.congestion.speeds", Int(own.rounded()), Int(typical.rounded()))
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                 }
             } else if nav.isWaitingAtSignal {
-                Label("Стоим у светофора — оценка приостановлена", systemImage: "pause.circle")
+                Label(L("nav.congestion.paused"), systemImage: "pause.circle")
                     .font(.footnote)
             } else {
-                Label("Недостаточно данных для оценки", systemImage: "speedometer")
+                Label(L("nav.congestion.noData"), systemImage: "speedometer")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }
@@ -297,8 +297,7 @@ struct TripInfoPanel: View {
         if let traffic = option.traffic {
             return "Apple Maps: \(traffic.localizedSummary)."
         }
-        return "Бесплатных данных о пробках в реальном времени для этого региона нет. Загруженность оценивается "
-            + "по вашей скорости относительно типичной скорости участка (Valhalla/OSM) — один автомобиль, не данные о трафике."
+        return L("nav.congestion.note")
     }
 
     // MARK: Weather
@@ -308,9 +307,9 @@ struct TripInfoPanel: View {
         let route = nav.routeWeather.points
         if app.weather.current != nil || !route.isEmpty {
             VStack(alignment: .leading, spacing: 4) {
-                sectionTitle("Погода", trailing: "Open-Meteo")
+                sectionTitle(L("sources.weather.title"), trailing: "Open-Meteo")
                 if let weather = app.weather.current {
-                    WeatherLine(label: "Здесь", snapshot: weather, error: nil)
+                    WeatherLine(label: L("nav.weatherHere"), snapshot: weather, error: nil)
                 }
                 ForEach(route) { point in
                     WeatherLine(label: point.label, snapshot: point.snapshot, error: point.error)
@@ -326,10 +325,9 @@ struct TripInfoPanel: View {
         let notes = [nav.routeAttributesError, app.roadInfo.routeFeaturesCoverageNote].compactMap { $0 }
         if !notes.isEmpty || nav.selectedRouteOption != nil {
             VStack(alignment: .leading, spacing: 3) {
-                sectionTitle("Источники", trailing: nil)
+                sectionTitle(L("nav.sources"), trailing: nil)
                 if let option = nav.selectedRouteOption {
-                    Text("Маршрут: \(option.sources.map(\.badge).joined(separator: ", ")). Ограничения и полосы: "
-                         + "Valhalla (OSM). Объекты на маршруте: OpenStreetMap (Overpass).")
+                    Text(l: "nav.sources.text", option.sources.map(\.badge).joined(separator: ", "))
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -417,11 +415,11 @@ struct WeatherLine: View {
                     .frame(width: 18)
                 Text(label + ": ")
                     .font(.footnote.weight(.semibold))
-                + Text(snapshot?.summary ?? error.map { "нет данных (\($0))" } ?? "загрузка…")
+                + Text(verbatim: snapshot?.localizedSummary ?? error.map { L("nav.weather.noData", $0) } ?? L("status.loading"))
                     .font(.footnote)
             }
             .lineLimit(2)
-            ForEach(snapshot?.roadWarnings.prefix(2).map { $0 } ?? [], id: \.self) { warning in
+            ForEach(snapshot?.localizedRoadWarnings.prefix(2).map { $0 } ?? [], id: \.self) { warning in
                 Label(warning, systemImage: "exclamationmark.triangle.fill")
                     .font(.caption2.weight(.semibold))
                     .foregroundStyle(.orange)

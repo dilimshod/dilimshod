@@ -72,6 +72,86 @@ enum UzbekSpeechText {
         text.unicodeScalars.contains { (0x0400...0x04FF).contains($0.value) }
     }
 
+    /// True when Cyrillic letters outnumber Latin letters (a Russian sentence, not a localized phrase that only
+    /// contains a Cyrillic street name).
+    static func isMostlyCyrillic(_ text: String) -> Bool {
+        var cyrillic = 0, latin = 0
+        for scalar in text.unicodeScalars {
+            if (0x0400...0x04FF).contains(scalar.value) {
+                cyrillic += 1
+            } else if CharacterSet.letters.contains(scalar), scalar.isASCII {
+                latin += 1
+            }
+        }
+        return cyrillic > latin
+    }
+
+    /// Cyrillic words (e.g. OSM street names "улица Навои") → Latin letters, so an Uzbek-text or English voice
+    /// can read a localized phrase that contains them. `english` uses English letter values (х → kh, ғ → gh).
+    static func latinizingCyrillic(_ text: String, english: Bool = false) -> String {
+        guard containsCyrillic(text) else { return text }
+        var output = ""
+        var previous: Character?
+        for character in text {
+            let lower = Character(character.lowercased())
+            guard let mapped = cyrillicToLatin(lower, english: english, wordStart: !(previous?.isLetter ?? false)) else {
+                output.append(character)
+                previous = character
+                continue
+            }
+            if character != lower, let first = mapped.first {
+                output += first.uppercased() + mapped.dropFirst()
+            } else {
+                output += mapped
+            }
+            previous = character
+        }
+        return output
+    }
+
+    private static func cyrillicToLatin(_ c: Character, english: Bool, wordStart: Bool) -> String? {
+        switch c {
+        case "а": return "a"
+        case "б": return "b"
+        case "в": return "v"
+        case "г": return "g"
+        case "д": return "d"
+        case "е": return wordStart ? "ye" : "e"
+        case "ё": return "yo"
+        case "ж": return english ? "zh" : "j"
+        case "з": return "z"
+        case "и": return "i"
+        case "й": return "y"
+        case "к": return "k"
+        case "л": return "l"
+        case "м": return "m"
+        case "н": return "n"
+        case "о": return "o"
+        case "п": return "p"
+        case "р": return "r"
+        case "с": return "s"
+        case "т": return "t"
+        case "у": return "u"
+        case "ф": return "f"
+        case "х": return english ? "kh" : "x"
+        case "ц": return "ts"
+        case "ч": return "ch"
+        case "ш": return "sh"
+        case "щ": return "shch"
+        case "ъ": return english ? "" : "’"
+        case "ы": return "i"
+        case "ь": return ""
+        case "э": return "e"
+        case "ю": return "yu"
+        case "я": return "ya"
+        case "ў": return english ? "o" : "o‘"
+        case "қ": return "q"
+        case "ғ": return english ? "gh" : "g‘"
+        case "ҳ": return "h"
+        default: return nil
+        }
+    }
+
     // MARK: Numbers
 
     private static let ones = ["nol", "bir", "ikki", "uch", "to'rt", "besh", "olti", "yetti", "sakkiz", "to'qqiz"]

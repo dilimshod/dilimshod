@@ -11,12 +11,12 @@ struct TripHistoryView: View {
             Section {
                 recordingRow
             } footer: {
-                Text("С «Поехали» запись начинается сама, если в Настройках включена «Автозапись поездок».")
+                Text(l: "history.autoNote")
             }
             if store.trips.isEmpty {
                 Section {
                     if store.isLoaded {
-                        Text("Поездок пока нет. Постройте маршрут и нажмите «Поехали» — после приезда здесь появится отчёт.")
+                        Text(l: "history.empty")
                             .font(.footnote)
                             .foregroundStyle(.secondary)
                     } else {
@@ -37,7 +37,7 @@ struct TripHistoryView: View {
                         store.delete(at: offsets)
                     }
                 } header: {
-                    Text("Поездки (\(store.trips.count))")
+                    Text(l: "history.count", store.trips.count)
                 }
             }
             if let error = store.lastError {
@@ -46,7 +46,7 @@ struct TripHistoryView: View {
                 }
             }
         }
-        .navigationTitle("История поездок")
+        .navigationTitle(L("history.title"))
         .onAppear { store.load() }
     }
 
@@ -56,7 +56,7 @@ struct TripHistoryView: View {
         if recorder.isFinishing {
             HStack {
                 ProgressView()
-                Text("Сохраняю поездку…")
+                Text(l: "trip.saving")
             }
         } else if recorder.isRecording, let started = recorder.startedAt {
             HStack(spacing: 12) {
@@ -65,17 +65,17 @@ struct TripHistoryView: View {
                     .foregroundStyle(RVTheme.recording)
                     .rvPulse(true, minOpacity: 0.4, period: 1.4)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("Идёт запись поездки")
+                    Text(l: "trip.recording")
                         .font(.subheadline.weight(.semibold))
                     HStack(spacing: 4) {
                         Text(started, style: .timer).monospacedDigit()
-                        Text("· \(RVFormat.appDistance(recorder.liveDistanceMeters)) · событий: \(recorder.liveEventCount)")
+                        Text(l: "history.live", RVFormat.appDistance(recorder.liveDistanceMeters), recorder.liveEventCount)
                     }
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 }
                 Spacer()
-                Button("Стоп", role: .destructive) {
+                Button(L("history.stop"), role: .destructive) {
                     app.stopTripRecording()
                 }
                 .buttonStyle(.bordered)
@@ -84,7 +84,7 @@ struct TripHistoryView: View {
             Button {
                 app.startTripRecording()
             } label: {
-                Label("Начать запись поездки", systemImage: "record.circle")
+                Label(L("trip.record.start"), systemImage: "record.circle")
             }
         }
     }
@@ -114,9 +114,9 @@ struct TripHistoryRow: View {
                             .foregroundStyle(RVTheme.caution)
                     }
                     if isRecording {
-                        Text("идёт запись").foregroundStyle(RVTheme.recording)
+                        Text(l: "history.recordingLower").foregroundStyle(RVTheme.recording)
                     } else if trip.endedAt == nil {
-                        Text("прервана").foregroundStyle(RVTheme.caution)
+                        Text(l: "history.interrupted").foregroundStyle(RVTheme.caution)
                     }
                 }
                 .font(.caption2)
@@ -136,7 +136,7 @@ struct TripHistorySheet: View {
             TripHistoryView()
                 .toolbar {
                     ToolbarItem(placement: .confirmationAction) {
-                        Button("Готово") { dismiss() }
+                        Button(L("common.done")) { dismiss() }
                             .fontWeight(.semibold)
                     }
                 }

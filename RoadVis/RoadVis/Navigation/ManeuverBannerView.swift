@@ -22,15 +22,15 @@ struct ManeuverBannerView: View {
 
                 VStack(alignment: .leading, spacing: 1) {
                     if isRerouting {
-                        Text("Перестраиваю маршрут…")
+                        Text(l: "banner.rerouting")
                             .font(.headline)
-                        Text("Новый маршрут от текущего положения")
+                        Text(l: "banner.reroutingDetail")
                             .font(.caption)
                             .foregroundStyle(.white.opacity(0.8))
                     } else if progress.isOffRoute {
-                        Text("Вы съехали с маршрута")
+                        Text(l: "banner.offRoute")
                             .font(.headline)
-                        Text("Маршрут будет перестроен")
+                        Text(l: "banner.offRouteDetail")
                             .font(.caption)
                             .foregroundStyle(.white.opacity(0.8))
                     } else {
@@ -49,7 +49,7 @@ struct ManeuverBannerView: View {
                         }
                         if let following = progress.followingInstruction, !following.isEmpty {
                             HStack(spacing: 4) {
-                                Text("затем")
+                                Text(l: "banner.then")
                                 Image(systemName: ManeuverClassifier.classify(following).symbolName)
                                     .font(.caption2.weight(.bold))
                                 Text(following)
@@ -116,7 +116,7 @@ struct ManeuverBannerView: View {
 
     private var instructionText: String {
         let text = progress.nextInstruction?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        return text.isEmpty ? "Продолжайте движение по маршруту" : text
+        return text.isEmpty ? L("banner.followRoute") : text
     }
 
     private var background: Color {
@@ -127,12 +127,12 @@ struct ManeuverBannerView: View {
     }
 
     private var accessibilityText: String {
-        if isRerouting { return "Перестраиваю маршрут" }
-        if progress.isOffRoute { return "Вы съехали с маршрута" }
+        if isRerouting { return L("voice.rerouting") }
+        if progress.isOffRoute { return L("banner.offRoute") }
         var parts: [String] = []
         if let distance = progress.distanceToNextManeuver { parts.append(RVFormat.appSpokenDistance(distance)) }
         parts.append(instructionText)
-        if let following = progress.followingInstruction, !following.isEmpty { parts.append("затем \(following)") }
+        if let following = progress.followingInstruction, !following.isEmpty { parts.append(L("banner.thenWith", following)) }
         return parts.joined(separator: ", ")
     }
 }

@@ -197,3 +197,74 @@ extension CoreText {
         return value == key ? nil : value
     }
 }
+
+extension WeatherSnapshot {
+    /// Localized `summary`: "+12°, rain, wind 18 km/h".
+    var localizedSummary: String {
+        var parts: [String] = []
+        if let t = temperatureC, t.isFinite { parts.append(Self.formatTemperature(t)) }
+        if weatherCode != nil {
+            let description = localizedCondition
+            parts.append(description.prefix(1).lowercased() + description.dropFirst())
+        }
+        if let wind = windSpeedKmh, wind.isFinite {
+            parts.append(L("weather.wind", Int(max(0, wind).rounded())))
+        }
+        return parts.isEmpty ? L("weather.noData") : parts.joined(separator: ", ")
+    }
+
+    /// Localized `roadWarnings` (same rules and order as RoadVisCore).
+    var localizedRoadWarnings: [String] {
+        var warnings: [String] = []
+        let code = weatherCode ?? -1
+        let temperature = temperatureC.flatMap { $0.isFinite ? $0 : nil }
+        let precipitation = max(precipitationMm ?? 0, 0)
+        let snowfall = max(snowfallCm ?? 0, 0)
+        let freezingCodes: Set<Int> = [56, 57, 66, 67]
+        let snowCodes: Set<Int> = [71, 73, 75, 77, 85, 86]
+        let nearFreezing = temperature.map { $0 <= 1 } ?? false
+        if freezingCodes.contains(code)
+            || (nearFreezing && (precipitation > 0 || snowfall > 0 || snowCodes.contains(code) || code == 48)) {
+            warnings.append(L("weather.warn.ice"))
+        }
+        if code == 45 || code == 48 || (visibilityMeters.map { $0.isFinite && $0 < 1000 } ?? false) {
+            warnings.append(L("weather.warn.fog"))
+        }
+        if snowCodes.contains(code) || snowfall > 0 {
+            warnings.append(L("weather.warn.snow"))
+        }
+        if code == 65 || code == 82 || precipitation >= 4 {
+            warnings.append(L("weather.warn.heavyRain"))
+        }
+        if (95...99).contains(code) {
+            warnings.append(L("weather.warn.thunder"))
+        }
+        if let gusts = windGustsKmh, gusts.isFinite, gusts >= 50 {
+            warnings.append(L("weather.warn.wind", Int(gusts.rounded())))
+        }
+        return warnings
+    }
+}
+
+extension RouteTimelineText {
+    /// Timeline texts in the current app language.
+    static var app: RouteTimelineText {
+        RouteTimelineText(
+            engineSource: { $0 == .apple ? L("timeline.source.apple") : L("timeline.source.engine", $0.badge) },
+            lanesDetail: { total, good in
+                good > 0 ? L("timeline.lanes.suitable", total, good) : L("timeline.lanes", total)
+            },
+            destination: L("weather.destination"),
+            speedLimitTitle: { kmh in kmh.map { L("timeline.limit", $0) } ?? L("timeline.limit.none") },
+            speedLimitDetail: { isFirst, length in
+                isFirst ? L("timeline.limit.atStart") : L("timeline.limit.for", RVFormat.appDistance(length))
+            },
+            laneChangeTitle: { from, to in to > from ? L("timeline.lanes.widen", to) : L("timeline.lanes.narrow", to) },
+            laneChangeDetail: { L("timeline.lanes.was", $0) },
+            trafficSignal: L("vehicle.trafficLight"),
+            cameraLimit: { L("timeline.cameraLimit", $0) },
+            featureName: { $0.localizedName },
+            incidentName: { $0.localizedName },
+            incidentSource: { L("timeline.yourMarker", RVFormat.clock($0)) })
+    }
+}

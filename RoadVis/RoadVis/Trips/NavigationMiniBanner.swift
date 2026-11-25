@@ -78,7 +78,7 @@ struct NavigationMiniBanner: View {
         }
         .buttonStyle(RVPressableButtonStyle())
         .accessibilityLabel(accessibilityText(nav))
-        .accessibilityHint("Открыть навигатор")
+        .accessibilityHint(L("mini.openNavigator"))
     }
 
     private func symbolName(_ nav: NavigationService) -> String {
@@ -90,17 +90,17 @@ struct NavigationMiniBanner: View {
     @ViewBuilder
     private func primaryText(_ nav: NavigationService) -> some View {
         if nav.state == .arrived {
-            Text("Вы прибыли")
+            Text(l: "voice.arrived")
                 .font(RVTheme.font(17, weight: .bold))
         } else if nav.isRecalculating || nav.progress?.isOffRoute == true {
-            Text("Перестраиваю…")
+            Text(l: "mini.rerouting")
                 .font(RVTheme.font(16, weight: .bold))
         } else if let distance = nav.progress?.distanceToNextManeuver {
             Text(RVFormat.appDistance(distance))
                 .rvNumeric(20, weight: .heavy)
                 .contentTransition(.numericText())
         } else {
-            Text("Ожидаю GPS…")
+            Text(l: "nav.waitingGPS")
                 .font(RVTheme.font(15, weight: .bold))
         }
     }
@@ -136,7 +136,7 @@ struct NavigationMiniBanner: View {
             }
         }
         .padding(.leading, 4)
-        .accessibilityLabel("Идёт запись поездки")
+        .accessibilityLabel(L("trip.recording"))
     }
 
     private func recordingChip(_ recorder: TripRecorder) -> some View {
@@ -146,12 +146,12 @@ struct NavigationMiniBanner: View {
                 .frame(width: 7, height: 7)
                 .rvPulse(recorder.isRecording, minOpacity: 0.35, period: 1.4)
             if recorder.isFinishing {
-                Text("Сохраняю поездку…")
+                Text(l: "trip.saving")
             } else if let started = recorder.startedAt {
                 Text(started, style: .timer)
                     .monospacedDigit()
                 if recorder.liveEventCount > 0 {
-                    Text("· \(recorder.liveEventCount) соб.")
+                    Text(l: "mini.eventsShort", recorder.liveEventCount)
                         .foregroundStyle(RVTheme.caution)
                 }
             }
@@ -165,7 +165,7 @@ struct NavigationMiniBanner: View {
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-                .accessibilityLabel("Остановить запись поездки")
+                .accessibilityLabel(L("trip.record.stop"))
             }
         }
         .font(RVTheme.font(11, weight: .semibold))
@@ -179,9 +179,9 @@ struct NavigationMiniBanner: View {
     }
 
     private func accessibilityText(_ nav: NavigationService) -> String {
-        if nav.state == .arrived { return "Вы прибыли" }
-        guard let progress = nav.progress else { return "Навигация" }
+        if nav.state == .arrived { return L("voice.arrived") }
+        guard let progress = nav.progress else { return L("settings.nav.title") }
         let distance = progress.distanceToNextManeuver.map { RVFormat.appDistance($0) + ", " } ?? ""
-        return distance + (progress.nextInstruction ?? "Продолжайте движение")
+        return distance + (progress.nextInstruction ?? L("mini.continue"))
     }
 }

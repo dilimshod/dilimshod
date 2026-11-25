@@ -102,4 +102,15 @@ final class LocalizedTextTests: XCTestCase {
                        "400 metrdan keyin o‘ngga buriling")
         XCTAssertEqual(NavInstructionText.destination(arrived: true, language: .en), "You have arrived")
     }
+
+    func testDelayTextAndMethodDisplay() {
+        XCTAssertEqual(RouteComparison.delayText(600, comparedTo: 300, language: .uz), "+5 daq")
+        XCTAssertEqual(RouteComparison.delayText(600, comparedTo: 300, language: .en), "+5 min")
+        XCTAssertEqual(RouteComparison.delayText(600, comparedTo: 300, language: .ru),
+                       RouteComparison.delayText(600, comparedTo: 300))
+        XCTAssertNil(RouteComparison.delayText(310, comparedTo: 300, language: .en))
+        XCTAssertEqual(FollowingDistanceCalculator.methodDisplay("ширина+высота", language: .en), "width+height")
+        XCTAssertEqual(FollowingDistanceCalculator.methodDisplay("ширина (обрезано)", language: .uz), "eni (kesilgan)")
+        XCTAssertEqual(FollowingDistanceCalculator.methodDisplay("ширина", language: .ru), "ширина")
+    }
 }

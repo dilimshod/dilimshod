@@ -132,7 +132,7 @@ struct DetectionOverlayView: View {
             parts.append("≈ " + RVFormat.gapMeters(distance))
         }
         if showSpeed, let speed = track.estimatedSpeedKmh, speed.isFinite, speed >= 0 {
-            parts.append("≈ \(Int(speed.rounded())) км/ч")
+            parts.append("≈ \(Int(speed.rounded())) \(RVFormat.appKmh)")
         }
         return parts.isEmpty ? nil : parts.joined(separator: " · ")
     }
@@ -350,7 +350,7 @@ struct TrackHitLayer: View {
                         .position(x: rect.midX, y: rect.midY)
                         .accessibilityElement()
                         .accessibilityLabel(Self.accessibilityText(for: track))
-                        .accessibilityHint("Показать подробности")
+                        .accessibilityHint(L("common.showDetails"))
                         .accessibilityAddTraits(.isButton)
                 }
             }
@@ -362,7 +362,7 @@ struct TrackHitLayer: View {
     static func accessibilityText(for track: TrackedObject) -> String {
         var text = DetectionOverlayView.titleText(for: track)
         if let estimate = DetectionOverlayView.estimateText(for: track, showDistance: true, showSpeed: false) {
-            text += ", " + estimate.replacingOccurrences(of: "≈ ", with: "примерно ") + " (оценка)"
+            text += ", " + estimate.replacingOccurrences(of: "≈ ", with: L("common.approxWord") + " ") + " (" + L("common.estimate") + ")"
         }
         return text
     }
@@ -382,7 +382,7 @@ struct TrackHitLayer: View {
                       confidence: 0.4, firstSeen: 0, lastSeen: 1),
     ]
     let lead = LeadVehicle(trackID: 1, kind: .car, box: tracks[0].box, distanceMeters: 18,
-                           relativeSpeedKmh: -6, method: "ширина+высота")
+                           relativeSpeedKmh: -6, method: "width+height")
     return ZStack {
         Color(white: 0.2).ignoresSafeArea()
         DetectionOverlayView(tracks: tracks, imageSize: CGSize(width: 1080, height: 1920),

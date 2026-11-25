@@ -61,16 +61,16 @@ struct NavigatorView: View {
             IncidentReportView(coordinate: target.coordinate)
                 .presentationDetents([.medium, .large])
         }
-        .confirmationDialog("Точка на карте", isPresented: $showLongPressDialog, titleVisibility: .visible,
+        .confirmationDialog(L("nav.mapPoint"), isPresented: $showLongPressDialog, titleVisibility: .visible,
                             presenting: longPressCoordinate) { coordinate in
-            Button("Маршрут сюда") {
-                let item = PlaceSearchService.mapItem(coordinate: GeoPoint(coordinate), name: "Точка на карте")
+            Button(L("nav.routeHere")) {
+                let item = PlaceSearchService.mapItem(coordinate: GeoPoint(coordinate), name: L("nav.mapPoint"))
                 startPlanning(to: item, rememberAsRecent: false)
             }
-            Button("Сообщить о событии здесь") {
+            Button(L("nav.reportHere")) {
                 incidentTarget = IncidentReportTarget(coordinate: GeoPoint(coordinate))
             }
-            Button("Отмена", role: .cancel) {}
+            Button(L("common.cancel"), role: .cancel) {}
         }
         .onChange(of: nav.state) { _, newState in
             if newState == .previewing || newState == .navigating {
@@ -200,15 +200,15 @@ struct NavigatorView: View {
                     SpeedometerView(speedKmh: app.location.speedKmh, limitKmh: nil, compact: true)
                 }
                 if !isFollowing {
-                    GlassIconButton(systemName: "location.fill", label: "Центр", size: RVTheme.HUD.button, tint: .blue) {
+                    GlassIconButton(systemName: "location.fill", label: L("nav.center"), size: RVTheme.HUD.button, tint: .blue) {
                         isFollowing = true
                     }
                 }
                 layersMenu
-                GlassIconButton(systemName: "exclamationmark.bubble.fill", label: "Сообщить", size: RVTheme.HUD.button) {
+                GlassIconButton(systemName: "exclamationmark.bubble.fill", label: L("nav.report"), size: RVTheme.HUD.button) {
                     incidentTarget = IncidentReportTarget(coordinate: nil)
                 }
-                GlassIconButton(systemName: "gearshape.fill", label: "Настройки", size: RVTheme.HUD.button) {
+                GlassIconButton(systemName: "gearshape.fill", label: L("common.settings"), size: RVTheme.HUD.button) {
                     app.showSettings = true
                 }
             }
@@ -220,16 +220,16 @@ struct NavigatorView: View {
         @Bindable var settings = app.settings
         let style = NavigatorMapStyle(rawValue: mapStyleRaw) ?? .standard
         return Menu {
-            Picker("Слой карты", selection: $mapStyleRaw) {
+            Picker(L("nav.mapLayer"), selection: $mapStyleRaw) {
                 ForEach(NavigatorMapStyle.allCases) { option in
                     Label(option.displayName, systemImage: option.symbolName).tag(option.rawValue)
                 }
             }
             Toggle(isOn: $is3D) {
-                Label("3D (рельеф, наклон)", systemImage: "view.3d")
+                Label(L("nav.3d"), systemImage: "view.3d")
             }
             Toggle(isOn: $settings.showTrafficOnMap) {
-                Label("Пробки Apple (где есть данные)", systemImage: "car.2.fill")
+                Label(L("nav.appleTraffic"), systemImage: "car.2.fill")
             }
         } label: {
             Image(systemName: style.symbolName)
@@ -243,7 +243,7 @@ struct NavigatorView: View {
                 .frame(width: GlassIconButton.minimumHitSize, height: GlassIconButton.minimumHitSize)
                 .contentShape(Rectangle())
         }
-        .accessibilityLabel("Слои карты: \(style.displayName)\(is3D ? ", 3D" : "")")
+        .accessibilityLabel(L("nav.mapLayers.a11y", style.displayName + (is3D ? ", 3D" : "")))
     }
 
     @ViewBuilder
@@ -252,7 +252,7 @@ struct NavigatorView: View {
             // Live camera with recognition boxes; it sizes and styles itself and returns to the camera on tap.
             CameraPiPView(pipeline: app.recognition)
         } else {
-            GlassIconButton(systemName: "camera.fill", label: "Камера", size: RVTheme.HUD.button) {
+            GlassIconButton(systemName: "camera.fill", label: L("common.camera"), size: RVTheme.HUD.button) {
                 app.switchTo(.camera)
             }
         }
@@ -305,7 +305,7 @@ struct NavigatorView: View {
                 HStack(spacing: 10) {
                     Image(systemName: "magnifyingglass")
                         .font(.headline)
-                    Text("Куда едем?")
+                    Text(l: "nav.whereTo")
                         .font(.headline)
                     Spacer(minLength: 0)
                 }
@@ -326,7 +326,7 @@ struct NavigatorView: View {
             Button {
                 app.showTripHistory = true
             } label: {
-                Label("Поездки", systemImage: "list.bullet.rectangle.portrait")
+                Label(L("common.trips"), systemImage: "list.bullet.rectangle.portrait")
                     .font(.footnote.weight(.semibold))
                     .padding(.horizontal, 14)
                     .frame(minHeight: 44)
@@ -348,7 +348,7 @@ struct NavigatorView: View {
                         }
                         .foregroundStyle(RVTheme.recording)
                     } else {
-                        Label("Записать поездку", systemImage: "record.circle")
+                        Label(L("trip.record"), systemImage: "record.circle")
                     }
                 }
                 .font(.footnote.weight(.semibold))
@@ -358,7 +358,7 @@ struct NavigatorView: View {
             }
             .buttonStyle(.plain)
             .disabled(recorder.isFinishing)
-            .accessibilityLabel(recorder.isRecording ? "Остановить запись поездки" : "Начать запись поездки")
+            .accessibilityLabel(recorder.isRecording ? L("trip.record.stop") : L("trip.record.start"))
             Spacer(minLength: 0)
             Button {
                 app.showAbout = true
@@ -369,7 +369,7 @@ struct NavigatorView: View {
                     .background(.regularMaterial, in: Circle())
             }
             .buttonStyle(.plain)
-            .accessibilityLabel("О приложении")
+            .accessibilityLabel(L("about.title"))
         }
     }
 
@@ -378,7 +378,7 @@ struct NavigatorView: View {
             ProgressView()
                 .controlSize(.large)
             VStack(alignment: .leading, spacing: 2) {
-                Text("Строю маршрут…")
+                Text(l: "nav.planning")
                     .font(.headline)
                 if let name = nav.destinationName {
                     Text(name)
@@ -391,7 +391,7 @@ struct NavigatorView: View {
             Button {
                 nav.stopNavigation()
             } label: {
-                Text("Отмена")
+                Text(l: "common.cancel")
                     .font(.headline)
                     .padding(.horizontal, 16)
                     .frame(minHeight: 52)
@@ -410,7 +410,7 @@ struct NavigatorView: View {
                     .font(.system(size: 34, weight: .bold))
                     .foregroundStyle(.green)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("Вы прибыли")
+                    Text(l: "voice.arrived")
                         .font(.title2.weight(.bold))
                     if let name = nav.destinationName {
                         Text(name)
@@ -423,7 +423,7 @@ struct NavigatorView: View {
             Button {
                 nav.stopNavigation()
             } label: {
-                Text("Готово")
+                Text(l: "common.done")
                     .font(.title3.weight(.bold))
                     .frame(maxWidth: .infinity, minHeight: 56)
             }
@@ -456,7 +456,7 @@ struct NavigatorView: View {
             }
             .buttonStyle(.plain)
             .foregroundStyle(.white)
-            .accessibilityLabel("Закрыть сообщение")
+            .accessibilityLabel(L("nav.closeMessage"))
         }
         .padding(.leading, 14)
         .background(Color(red: 0.45, green: 0.12, blue: 0.08).opacity(0.92),
@@ -473,10 +473,10 @@ struct NavigatorView: View {
         if showsOSM || showsWeather {
             HStack(spacing: 12) {
                 if showsOSM {
-                    Link("© участники OpenStreetMap", destination: Self.fixTheMapURL)
+                    Link(L("nav.osmCredit"), destination: Self.fixTheMapURL)
                 }
                 if showsWeather {
-                    Text("Погода: Open-Meteo")
+                    Text(l: "nav.weatherCredit")
                 }
                 Spacer(minLength: 0)
             }

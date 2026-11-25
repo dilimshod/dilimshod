@@ -58,44 +58,41 @@ final class DriverAssistSettings {
 /// Form sections of the driver assistant, to be embedded in the app's settings `Form`.
 struct DriverAssistSettingsSection: View {
     @Bindable private var settings = DriverAssistSettings.shared
-    @AppStorage(coachLanguageDefaultsKey) private var language = "uz"
 
     var body: some View {
         Section {
             Toggle(isOn: $settings.voiceCoachingEnabled) {
-                Label(t("Ovozli maslahatlar", "Голосовые подсказки", "Voice coaching"), systemImage: "person.wave.2.fill")
+                Label(L("assist.voice"), systemImage: "person.wave.2.fill")
             }
             Toggle(isOn: $settings.trafficLightHintsEnabled) {
-                Label(t("Svetofor maslahatlari", "Подсказки светофора", "Traffic-light hints"),
+                Label(L("assist.lights"),
                       systemImage: "light.beacon.max.fill")
             }
             .disabled(!settings.voiceCoachingEnabled)
             Toggle(isOn: $settings.signAnnouncementsEnabled) {
-                Label(t("Belgilar haqida ogohlantirish", "Объявлять знаки", "Announce road signs"),
+                Label(L("assist.signs"),
                       systemImage: "exclamationmark.triangle.fill")
             }
             .disabled(!settings.voiceCoachingEnabled)
         } header: {
-            Text(t("Yangi haydovchi yordamchisi", "Помощник начинающего водителя", "Beginner driver assistant"))
+            Text(l: "assist.title")
         } footer: {
-            Text(t("Masofa, qizil chiroq, chiziqdan chiqish va belgilar haqida ovozli ogohlantiradi. Hammasi qurilmada ishlaydi. Masofa ogohlantirishlari alohida sozlanadi.",
-                   "Голосом предупреждает о дистанции, красном свете, выезде за разметку и знаках. Всё работает на устройстве. Предупреждения о дистанции настраиваются отдельно.",
-                   "Warns by voice about following distance, red lights, leaving the lane and road signs. Everything runs on the device. Distance warnings have their own switch."))
+            Text(l: "assist.footer")
         }
 
         Section {
             Toggle(isOn: $settings.laneDepartureEnabled) {
-                Label(t("Chiziqdan chiqish ogohlantirishi", "Предупреждать о выезде за разметку", "Lane departure warnings"),
+                Label(L("assist.laneWarnings"),
                       systemImage: "road.lanes")
             }
             Toggle(isOn: $settings.showLaneOverlay) {
-                Label(t("Chiziqlarni ko‘rsatish", "Показывать разметку", "Show lane lines"), systemImage: "line.diagonal")
+                Label(L("assist.showLanes"), systemImage: "line.diagonal")
             }
             VStack(alignment: .leading, spacing: 4) {
                 HStack {
-                    Text(t("Minimal tezlik", "Минимальная скорость", "Minimum speed"))
+                    Text(l: "assist.minSpeed")
                     Spacer()
-                    Text("\(Int(settings.laneWarningMinSpeedKmh)) \(t("km/soat", "км/ч", "km/h"))")
+                    Text(verbatim: "\(Int(settings.laneWarningMinSpeedKmh)) \(RVFormat.appKmh)")
                         .monospacedDigit()
                         .foregroundStyle(.secondary)
                 }
@@ -103,19 +100,9 @@ struct DriverAssistSettingsSection: View {
             }
             .disabled(!settings.laneDepartureEnabled)
         } header: {
-            Text(t("Yo‘l chiziqlari", "Разметка", "Lane markings"))
+            Text(l: "assist.lanes.title")
         } footer: {
-            Text(t("Taxminiy: kunduzi, aniq oq yoki sariq chiziqlarda ishlaydi. Burilish chirog‘i hisobga olinmaydi.",
-                   "Эвристика: работает днём на чёткой белой или жёлтой разметке. Поворотник не учитывается.",
-                   "Heuristic: works in daylight on clear white or yellow markings. The turn signal is not known."))
-        }
-    }
-
-    private func t(_ uz: String, _ ru: String, _ en: String) -> String {
-        switch language.lowercased().prefix(2) {
-        case "ru": return ru
-        case "en": return en
-        default: return uz
+            Text(l: "assist.lanes.footer")
         }
     }
 }

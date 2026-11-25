@@ -1,13 +1,14 @@
 import Foundation
 
 // Spoken phrases of the beginner-driver coach (`CoachMessage` → text) in Uzbek (Latin), Russian and English.
-// Short, calm, imperative — they are heard while driving. Foundation only.
+// Short, calm, imperative — they are heard while driving. The texts live in the string tables
+// (Localization/Strings+uz/ru/en.swift, keys "coach.*").
 //
 // The language normally comes from the app language (UserDefaults "rv.appLanguage", default "uz"); unknown codes fall
 // back to Uzbek. Numbers stay as digits: `SpeechService` / `UzbekSpeechText` spell them for the chosen voice.
 
 /// UserDefaults key of the app language (owned by the localization layer; read here only).
-let coachLanguageDefaultsKey = "rv.appLanguage"
+let coachLanguageDefaultsKey = AppLanguage.storageKey
 
 /// Current app language code for coach phrases ("uz", "ru" or "en").
 func currentCoachLanguage(_ defaults: UserDefaults = .standard) -> String {
@@ -17,157 +18,65 @@ func currentCoachLanguage(_ defaults: UserDefaults = .standard) -> String {
 
 /// Localized spoken text of a coach message.
 func coachText(_ message: CoachMessage, language: String) -> String {
-    switch language.lowercased().prefix(2) {
-    case "ru": return CoachPhrases.russian(message)
-    case "en": return CoachPhrases.english(message)
-    default: return CoachPhrases.uzbek(message)
-    }
+    let lang = AppLanguage(rawValue: String(language.lowercased().prefix(2))) ?? .uz
+    return CoachPhrases.phrase(message, in: lang)
 }
 
 enum CoachPhrases {
-    // MARK: Uzbek (Latin)
+    static func uzbek(_ m: CoachMessage) -> String { phrase(m, in: .uz) }
+    static func russian(_ m: CoachMessage) -> String { phrase(m, in: .ru) }
+    static func english(_ m: CoachMessage) -> String { phrase(m, in: .en) }
 
-    static func uzbek(_ m: CoachMessage) -> String {
+    /// The spoken text of `m` in `language`.
+    static func phrase(_ m: CoachMessage, in language: AppLanguage) -> String {
+        func text(_ key: String) -> String { L(key, in: language) }
+        func format(_ key: String, _ args: CVarArg...) -> String {
+            LocalizationManager.shared.format(key, in: language, args)
+        }
         switch m {
         case .collisionRisk:
-            return "Diqqat! Oldingi mashinaga xavfli yaqinlashyapsiz, tormoz bering!"
+            return text("coach.collision")
         case .redLightAhead:
-            return "Oldinda qizil chiroq, tezlikni pasaytiring."
+            return text("coach.redLight")
         case .laneDeparture(let side):
-            return side == .left ? "Chap chiziqdan chiqib ketyapsiz." : "O‘ng chiziqdan chiqib ketyapsiz."
+            return text(side == .left ? "coach.lane.left" : "coach.lane.right")
         case .keepDistance(let meters):
-            if let meters, meters > 0 { return "Masofani saqlang, kamida \(meters) metr." }
-            return "Masofani saqlang."
+            if let meters, meters > 0 { return format("coach.keepDistance.meters", meterQuantity(meters, language)) }
+            return text("coach.keepDistance")
         case let .roadSign(kind, distance):
-            return "\(distance) metrdan keyin \(uzbekName(kind))."
+            return format("coach.roadSign", meterQuantity(distance, language), name(kind, in: language))
         case .speedLimit(let kmh):
-            return "Tezlik chegarasi soatiga \(kmh) kilometr."
+            return format("coach.speedLimit", kmh)
         case let .speedLimitAhead(kmh, distance):
-            return "\(distance) metrdan keyin tezlik chegarasi soatiga \(kmh) kilometr."
+            return format("coach.speedLimitAhead", meterQuantity(distance, language), kmh)
         case .stopSignAhead:
-            return "Oldinda STOP belgisi. To‘liq to‘xtang."
+            return text("coach.stopSign")
         case .overSpeedLimit(let limit):
-            return "Tezlikni kamaytiring, chegara soatiga \(limit) kilometr."
+            return format("coach.overLimit", limit)
         case .greenLightGo:
-            return "Yashil chiroq. Atrofga qarab, harakatlanishingiz mumkin."
+            return text("coach.green")
         }
     }
 
-    static func uzbekName(_ kind: RouteFeatureKind) -> String {
-        switch kind {
-        case .speedCamera: return "tezlik kamerasi"
-        case .pedestrianCrossing: return "piyodalar o‘tish joyi"
-        case .school: return "maktab, bolalarga ehtiyot bo‘ling"
-        case .kindergarten: return "bolalar bog‘chasi, ehtiyot bo‘ling"
-        case .railwayCrossing: return "temir yo‘l kesishmasi"
-        case .stopSign: return "STOP belgisi, to‘liq to‘xtang"
-        case .giveWay: return "yo‘l bering belgisi"
-        case .trafficCalming: return "sun’iy notekislik"
-        case .trafficSignals: return "svetofor"
-        case .construction: return "yo‘l ta’mirlash ishlari"
-        case .fuel: return "yoqilg‘i quyish shoxobchasi"
-        case .parking: return "avtoturargoh"
-        }
+    /// Spoken name of a road feature ("coach.sign.<kind>").
+    static func name(_ kind: RouteFeatureKind, in language: AppLanguage) -> String {
+        L("coach.sign.\(kind.rawValue)", in: language)
     }
 
-    // MARK: Russian
+    static func uzbekName(_ kind: RouteFeatureKind) -> String { name(kind, in: .uz) }
+    static func russianName(_ kind: RouteFeatureKind) -> String { name(kind, in: .ru) }
+    static func englishName(_ kind: RouteFeatureKind) -> String { name(kind, in: .en) }
 
-    static func russian(_ m: CoachMessage) -> String {
-        switch m {
-        case .collisionRisk:
-            return "Внимание! Опасное сближение, тормозите!"
-        case .redLightAhead:
-            return "Впереди красный, снижайте скорость."
-        case .laneDeparture(let side):
-            return side == .left ? "Вы выезжаете за левую разметку." : "Вы выезжаете за правую разметку."
-        case .keepDistance(let meters):
-            if let meters, meters > 0 { return "Держите дистанцию, не меньше \(meters) \(russianMeters(meters))." }
-            return "Держите дистанцию."
-        case let .roadSign(kind, distance):
-            return "Через \(distance) \(russianMeters(distance)) \(russianName(kind))."
-        case .speedLimit(let kmh):
-            return "Ограничение скорости \(kmh)."
-        case let .speedLimitAhead(kmh, distance):
-            return "Через \(distance) \(russianMeters(distance)) ограничение скорости \(kmh)."
-        case .stopSignAhead:
-            return "Впереди знак STOP. Остановитесь полностью."
-        case .overSpeedLimit(let limit):
-            return "Снизьте скорость, ограничение \(limit)."
-        case .greenLightGo:
-            return "Зелёный. Убедитесь, что безопасно, и трогайтесь."
-        }
+    /// "300 metr" / "300 метров" / "300 metres" (unit word from `unit.meter.one/few/many`).
+    static func meterQuantity(_ n: Int, _ language: AppLanguage) -> String {
+        let one = L("unit.meter.one", in: language), few = L("unit.meter.few", in: language)
+        let many = L("unit.meter.many", in: language)
+        if language == .ru { return "\(n) " + RVFormat.plural(n, one, few, many) }
+        return "\(n) " + (n == 1 ? one : many)
     }
 
-    static func russianName(_ kind: RouteFeatureKind) -> String {
-        switch kind {
-        case .speedCamera: return "камера контроля скорости"
-        case .pedestrianCrossing: return "пешеходный переход"
-        case .school: return "школа, осторожно, дети"
-        case .kindergarten: return "детский сад, осторожно, дети"
-        case .railwayCrossing: return "железнодорожный переезд"
-        case .stopSign: return "знак STOP, остановитесь полностью"
-        case .giveWay: return "знак «Уступите дорогу»"
-        case .trafficCalming: return "искусственная неровность"
-        case .trafficSignals: return "светофор"
-        case .construction: return "дорожные работы"
-        case .fuel: return "заправка"
-        case .parking: return "парковка"
-        }
-    }
-
-    /// метр / метра / метров.
+    /// Russian form of "metre" for `n` (метр / метра / метров).
     static func russianMeters(_ n: Int) -> String {
-        let mod100 = abs(n) % 100, mod10 = abs(n) % 10
-        if (11...14).contains(mod100) { return "метров" }
-        switch mod10 {
-        case 1: return "метр"
-        case 2, 3, 4: return "метра"
-        default: return "метров"
-        }
-    }
-
-    // MARK: English
-
-    static func english(_ m: CoachMessage) -> String {
-        switch m {
-        case .collisionRisk:
-            return "Warning! You are closing in fast. Brake!"
-        case .redLightAhead:
-            return "Red light ahead. Slow down."
-        case .laneDeparture(let side):
-            return side == .left ? "You are drifting over the left line." : "You are drifting over the right line."
-        case .keepDistance(let meters):
-            if let meters, meters > 0 { return "Keep your distance, at least \(meters) metres." }
-            return "Keep your distance."
-        case let .roadSign(kind, distance):
-            return "In \(distance) metres, \(englishName(kind))."
-        case .speedLimit(let kmh):
-            return "Speed limit \(kmh)."
-        case let .speedLimitAhead(kmh, distance):
-            return "Speed limit \(kmh) in \(distance) metres."
-        case .stopSignAhead:
-            return "Stop sign ahead. Come to a full stop."
-        case .overSpeedLimit(let limit):
-            return "Slow down, the limit is \(limit)."
-        case .greenLightGo:
-            return "Green light. Check it is clear, then go."
-        }
-    }
-
-    static func englishName(_ kind: RouteFeatureKind) -> String {
-        switch kind {
-        case .speedCamera: return "speed camera"
-        case .pedestrianCrossing: return "pedestrian crossing"
-        case .school: return "school, watch for children"
-        case .kindergarten: return "kindergarten, watch for children"
-        case .railwayCrossing: return "railway crossing"
-        case .stopSign: return "stop sign, come to a full stop"
-        case .giveWay: return "give way sign"
-        case .trafficCalming: return "speed bump"
-        case .trafficSignals: return "traffic lights"
-        case .construction: return "road works"
-        case .fuel: return "fuel station"
-        case .parking: return "parking"
-        }
+        RVFormat.plural(n, L("unit.meter.one", in: .ru), L("unit.meter.few", in: .ru), L("unit.meter.many", in: .ru))
     }
 }

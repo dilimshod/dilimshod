@@ -23,43 +23,43 @@ enum ValhallaClientError: LocalizedError, Equatable {
         switch self {
         case .invalidEndpoint(let value):
             return value.isEmpty
-                ? "Не задан адрес сервера Valhalla (Настройки → Маршрутизация)."
-                : "Некорректный адрес сервера Valhalla: \(value)"
+                ? L("valhallaErr.noEndpoint")
+                : L("valhallaErr.badEndpoint", value)
         case .offline:
-            return "Нет подключения к интернету — маршрут OpenStreetMap недоступен."
+            return L("valhallaErr.offline")
         case .timedOut:
-            return "Сервер Valhalla не ответил вовремя. Попробуйте ещё раз."
+            return L("valhallaErr.timeout")
         case .network(let reason):
-            return "Нет связи с сервером Valhalla: \(reason)."
+            return L("valhallaErr.network", reason)
         case .rateLimited:
-            return "Сервер Valhalla временно ограничил частоту запросов (HTTP 429). Попробуйте через минуту."
+            return L("valhallaErr.rateLimited")
         case .http(let status):
-            return "Сервер Valhalla вернул ошибку HTTP \(status)."
+            return L("valhallaErr.http", status)
         case .server(let code, let message):
             return Self.describeServerError(code: code, message: message)
         case .emptyResult:
-            return "Valhalla не нашёл маршрут между этими точками."
+            return L("valhallaErr.noRoute")
         }
     }
 
-    /// Russian explanation for well-known Valhalla error codes; other messages are passed through.
+    /// Localized explanation for well-known Valhalla error codes; other messages are passed through.
     private static func describeServerError(code: Int?, message: String) -> String {
         switch code {
         case 170:
-            return "Точки находятся в несвязанных частях дорожной сети OpenStreetMap — маршрут невозможен."
+            return L("valhallaErr.170")
         case 171:
-            return "Рядом с точкой старта или назначения нет подходящих дорог в OpenStreetMap."
+            return L("valhallaErr.171")
         case 154:
-            return "Маршрут слишком длинный для сервера Valhalla."
+            return L("valhallaErr.154")
         case 442:
-            return "Valhalla не нашёл маршрут между этими точками."
+            return L("valhallaErr.noRoute")
         case 443, 444:
-            return "Не удалось сопоставить маршрут с дорогами OpenStreetMap."
+            return L("valhallaErr.443")
         default:
             let trimmed = message.trimmingCharacters(in: .whitespacesAndNewlines)
-            let text = trimmed.isEmpty ? "неизвестная ошибка" : trimmed
-            if let code { return "Ошибка Valhalla (код \(code)): \(text)" }
-            return "Ошибка Valhalla: \(text)"
+            let text = trimmed.isEmpty ? L("common.unknownError") : trimmed
+            if let code { return L("valhallaErr.withCode", code, text) }
+            return L("valhallaErr.other", text)
         }
     }
 }
@@ -118,15 +118,15 @@ actor ValhallaClient {
     func routes(from: GeoPoint, to: GeoPoint, heading: Double?, avoidTolls: Bool, avoidHighways: Bool) async throws -> [NavRoute] {
         let body: Data
         do {
-            body = try Valhalla.routeRequestBody(from: from, to: to, heading: heading, language: "ru-RU",
+            body = try Valhalla.routeRequestBody(from: from, to: to, heading: heading, language: RVLang.app.valhallaLanguage,
                                                  alternates: 2, avoidTolls: avoidTolls, avoidHighways: avoidHighways)
         } catch {
-            throw ValhallaClientError.server(code: nil, message: "не удалось сформировать запрос")
+            throw ValhallaClientError.server(code: nil, message: L("net.cannotBuildRequest"))
         }
         let data = try await post(path: "route", body: body)
         let routes: [NavRoute]
         do {
-            routes = try Valhalla.parseRoutes(data)
+            routes = try Valhalla.parseRoutes(data, language: .app)
         } catch let error as ValhallaError {
             throw ValhallaClientError.server(code: error.code, message: error.message)
         }
@@ -144,7 +144,7 @@ actor ValhallaClient {
         do {
             body = try Valhalla.traceAttributesBody(polyline: polyline, edgeWalk: edgeWalk)
         } catch {
-            throw ValhallaClientError.server(code: nil, message: "не удалось сформировать запрос")
+            throw ValhallaClientError.server(code: nil, message: L("net.cannotBuildRequest"))
         }
         let data = try await post(path: "trace_attributes", body: body)
         let edges: [RouteEdgeAttributes]
@@ -216,12 +216,12 @@ actor ValhallaClient {
             case .timedOut:
                 throw ValhallaClientError.timedOut
             case .cannotFindHost, .dnsLookupFailed:
-                throw ValhallaClientError.network("сервер не найден")
+                throw ValhallaClientError.network(L("net.hostNotFound"))
             case .cannotConnectToHost, .networkConnectionLost:
-                throw ValhallaClientError.network("не удалось подключиться")
+                throw ValhallaClientError.network(L("net.cannotConnect"))
             case .secureConnectionFailed, .serverCertificateUntrusted, .serverCertificateHasBadDate,
                  .serverCertificateNotYetValid, .serverCertificateHasUnknownRoot:
-                throw ValhallaClientError.network("ошибка защищённого соединения")
+                throw ValhallaClientError.network(L("net.tls"))
             case .badURL, .unsupportedURL:
                 throw ValhallaClientError.invalidEndpoint(url.absoluteString)
             default:
@@ -233,7 +233,7 @@ actor ValhallaClient {
         try Task.checkCancellation()
 
         guard let http = response as? HTTPURLResponse else {
-            throw ValhallaClientError.network("неизвестный ответ сервера")
+            throw ValhallaClientError.network(L("net.unknownResponse"))
         }
         guard (200..<300).contains(http.statusCode) else {
             if http.statusCode == 429 { throw ValhallaClientError.rateLimited }
@@ -241,7 +241,7 @@ actor ValhallaClient {
             do {
                 _ = try Valhalla.parseRoutes(data)
             } catch let error as ValhallaError {
-                if error.code != nil || !Self.isGenericParseMessage(error.message) {
+                if !error.isGenericParseFailure {
                     throw ValhallaClientError.server(code: error.code, message: error.message)
                 }
             } catch {
@@ -253,11 +253,6 @@ actor ValhallaClient {
     }
 
     // MARK: - Helpers
-
-    /// True for the parser's own messages ("not JSON", "no trip") that do not describe a server error.
-    private static func isGenericParseMessage(_ message: String) -> Bool {
-        message.hasPrefix("Ответ Valhalla") || message.hasPrefix("В ответе Valhalla")
-    }
 
     private static func normalized(_ endpoint: String) -> String {
         var value = endpoint.trimmingCharacters(in: .whitespacesAndNewlines)

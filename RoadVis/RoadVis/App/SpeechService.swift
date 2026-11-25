@@ -32,7 +32,8 @@ enum SpeechVoiceKind: Equatable {
 /// 1. any installed voice whose language starts with "uz" (e.g. from a third-party Speech Synthesis Provider app);
 /// 2. a Turkish voice reading `UzbekSpeechText.forTurkishVoice(text)` (approximate pronunciation);
 /// 3. a Russian voice reading the Cyrillic transliteration `UzbekSpeechText.forRussianVoice(text)` (approximate).
-/// Text that contains Cyrillic letters is always spoken with the Russian voice (prompts not yet translated).
+/// Mostly-Cyrillic text (e.g. Apple Maps instructions in a Russian system language) is spoken with the Russian voice;
+/// single Cyrillic words inside a localized phrase (OSM street names) are transliterated to Latin for the uz / en voice.
 ///
 /// The audio session ducks other audio only while speaking and is deactivated after the last utterance.
 @Observable
@@ -129,11 +130,14 @@ final class SpeechService: NSObject {
     }
 
     /// Text actually spoken and the voice to speak it with.
-    private func prepared(_ text: String) -> (String, AVSpeechSynthesisVoice?) {
+    private func prepared(_ original: String) -> (String, AVSpeechSynthesisVoice?) {
         let lang = language
-        // Untranslated Russian prompts stay on the Russian voice, whatever the app language.
+        var text = original
         if lang != .ru, UzbekSpeechText.containsCyrillic(text) {
-            return (text, russianVoice())
+            // Russian sentences (not produced by RoadVis, e.g. Apple Maps steps) stay on the Russian voice.
+            if UzbekSpeechText.isMostlyCyrillic(text) { return (text, russianVoice()) }
+            // A localized phrase with a Cyrillic street name: read the name in Latin letters.
+            text = UzbekSpeechText.latinizingCyrillic(text, english: lang == .en)
         }
         let selected = choice(for: lang)
         switch selected.kind {

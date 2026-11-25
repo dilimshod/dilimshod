@@ -90,7 +90,7 @@ final class RoadInfoService {
     /// At most this many chunk queries per route (≈ 300 km); the rest is reported as not loaded.
     static let maxRouteChunks = 100
     /// Prefix of every network error shown to the user.
-    static let errorPrefix = "Нет связи с OpenStreetMap (Overpass): "
+    static var errorPrefix: String { L("roadInfo.errorPrefix") + " " }
 
     // MARK: Internals
 
@@ -426,18 +426,18 @@ final class RoadInfoService {
         guard isCurrentRouteLoad(generation) else { return }
         var notes: [String] = []
         if failedChunks > 0 {
-            notes.append("не загружено частей маршрута: \(failedChunks) из \(chunks.count)")
+            notes.append(L("roadInfo.chunksFailed", failedChunks, chunks.count))
         }
         if !plan.plan.isComplete {
-            notes.append("объекты OSM загружены для первых \(RVFormat.appDistance(plan.plan.coveredLength)) из "
-                         + RVFormat.appDistance(plan.plan.totalLength))
+            notes.append(L("roadInfo.partialCoverage", RVFormat.appDistance(plan.plan.coveredLength),
+                           RVFormat.appDistance(plan.plan.totalLength)))
         }
         routeFeaturesIncomplete = !notes.isEmpty
         routeFeaturesCoverageNote = notes.isEmpty ? nil
-            : "Светофоры, камеры и опасности OSM неполные: " + notes.joined(separator: "; ") + "."
+            : L("roadInfo.incomplete", notes.joined(separator: "; "))
         if let lastFailure {
             routeErrorMessage = Self.describe(lastFailure)
-                + " (не загружено частей маршрута: \(failedChunks) из \(chunks.count))"
+                + " (" + L("roadInfo.chunksFailed", failedChunks, chunks.count) + ")"
         } else {
             routeErrorMessage = nil
         }
@@ -470,8 +470,23 @@ final class RoadInfoService {
     }
 
     private static func describe(_ error: Error) -> String {
+        if let overpass = error as? OverpassError { return errorPrefix + Self.describeOverpass(overpass) }
         let detail = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
         return errorPrefix + detail
+    }
+
+    /// Localized `OverpassError.errorDescription`.
+    private static func describeOverpass(_ error: OverpassError) -> String {
+        switch error {
+        case .htmlError(let message):
+            if error.isRateLimited { return L("overpassErr.rateLimited") }
+            if error.isTimeout { return L("overpassErr.timeout") }
+            return L("overpassErr.html", message)
+        case .invalidJSON(let message):
+            return L("overpassErr.json", message)
+        case .emptyResponse:
+            return L("overpassErr.empty")
+        }
     }
 }
 

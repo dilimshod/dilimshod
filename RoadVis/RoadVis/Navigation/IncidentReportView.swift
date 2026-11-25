@@ -46,20 +46,18 @@ struct IncidentReportView: View {
                         }
                     }
 
-                    Text("Отметка сохраняется только на этом телефоне и исчезнет через "
-                         + "\(Int(app.settings.incidentLifetimeMinutes.rounded())) мин. "
-                         + "Это ваши заметки, а не данные дорожных служб; навигатор предупредит о них на маршруте.")
+                    Text(l: "incident.footer", RVFormat.appDuration(app.settings.incidentLifetimeMinutes * 60))
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 .padding(16)
             }
-            .navigationTitle("Сообщить о событии")
+            .navigationTitle(L("incident.title"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Закрыть") { dismiss() }
+                    Button(L("common.close")) { dismiss() }
                 }
             }
         }
@@ -71,10 +69,10 @@ struct IncidentReportView: View {
     }
 
     private var locationText: String {
-        if coordinate != nil { return "Точка, выбранная на карте" }
+        if coordinate != nil { return L("incident.mapPoint") }
         return app.location.coordinate == nil
-            ? "Нет данных о местоположении — отметка недоступна"
-            : "Ваше текущее местоположение"
+            ? L("incident.noLocation")
+            : L("incident.currentLocation")
     }
 
     private func report(_ kind: RoadIncidentKind) {

@@ -36,8 +36,8 @@ enum TripStyle {
 
     /// "Дом → Работа".
     static func title(_ trip: Trip) -> String {
-        let a = trip.origin.name ?? "Старт"
-        let b = trip.destination?.name ?? "Финиш"
+        let a = trip.origin.name ?? L("trip.start")
+        let b = trip.destination?.name ?? L("trip.finish")
         return "\(a) → \(b)"
     }
 
@@ -52,26 +52,26 @@ enum TripStyle {
 
     /// Measured value of an event in words, estimates marked with ≈.
     static func valueText(_ event: DrivingEvent) -> String {
-        func n(_ v: Double, _ digits: Int = 0) -> String { RVFormat.decimal(v, digits: digits) }
+        func n(_ v: Double, _ digits: Int = 0) -> String { RVFormat.appDecimal(v, digits: digits) }
         switch event.kind {
         case .speeding:
-            var text = event.value.map { "+\(n($0)) км/ч" } ?? "превышение"
-            if let limit = event.limit { text += " при лимите \(n(limit))" }
+            var text = event.value.map { "+\(n($0)) \(RVFormat.appKmh)" } ?? L("tripval.speeding")
+            if let limit = event.limit { text += " " + L("tripval.atLimit", n(limit)) }
             if event.duration > 0 { text += " · \(RVFormat.appDuration(event.duration))" }
             return text
         case .tailgating:
-            var text = event.value.map { "≈ \(n($0)) м" } ?? "≈ мало"
-            if let limit = event.limit { text += " при норме ≥ \(n(limit)) м" }
-            return text + " (оценка)"
+            var text = event.value.map { "≈ \(n($0)) \(RVFormat.appMeters)" } ?? L("tripval.tooClose")
+            if let limit = event.limit { text += " " + L("tripval.atNorm", n(limit)) }
+            return text + " (" + L("common.estimate") + ")"
         case .collisionRisk:
-            return (event.value.map { "≈ \(n($0, 1)) с до столкновения" } ?? "≈ опасное сближение") + " (оценка)"
+            return (event.value.map { L("tripval.ttc", n($0, 1)) } ?? L("tripval.closing")) + " (" + L("common.estimate") + ")"
         case .harshBraking, .harshAcceleration:
-            var text = event.value.map { "\(n($0, 1)) м/с²" } ?? "—"
-            if let limit = event.limit { text += " (порог \(n(limit, 1)))" }
+            var text = event.value.map { "\(n($0, 1)) \(L("event.unit.harshBraking"))" } ?? "—"
+            if let limit = event.limit { text += " (" + L("tripval.threshold", n(limit, 1)) + ")" }
             return text
         case .laneDeparture, .redLightRunning, .stopSignIgnored:
-            let speed = event.speedKmh.map { " на \(n($0)) км/ч" } ?? ""
-            return "≈ оценка камеры" + speed
+            let speed = event.speedKmh.map { " " + L("tripval.atSpeed", n($0)) } ?? ""
+            return "≈ " + L("fd.cameraEstimate") + speed
         }
     }
 

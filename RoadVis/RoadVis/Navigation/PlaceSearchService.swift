@@ -77,7 +77,7 @@ final class PlaceSearchService: NSObject {
         if let region = currentRegion() { request.region = region }
         let items = try await run(request)
         guard let first = items.first else {
-            errorMessage = "Место «\(completion.title)» не найдено."
+            errorMessage = L("search.placeNotFound", completion.title)
             throw PlaceSearchError.notFound
         }
         if first.name?.isEmpty ?? true {
@@ -97,7 +97,7 @@ final class PlaceSearchService: NSObject {
         if let region = currentRegion() { request.region = region }
         let items = try await run(request)
         if items.isEmpty {
-            errorMessage = "По запросу «\(trimmed)» ничего не найдено."
+            errorMessage = L("search.queryNotFound", trimmed)
         }
         return items
     }
@@ -187,7 +187,7 @@ final class PlaceSearchService: NSObject {
         let placemark = item.placemark
         let parts = [placemark.thoroughfare, placemark.subThoroughfare].compactMap { $0 }
         if !parts.isEmpty { return parts.joined(separator: " ") }
-        return placemark.locality ?? "Точка на карте"
+        return placemark.locality ?? L("nav.mapPoint")
     }
 
     /// Secondary line (street / city) of a map item, nil when it would repeat the name.
@@ -268,26 +268,26 @@ final class PlaceSearchService: NSObject {
         if let urlError = error as? URLError {
             switch urlError.code {
             case .notConnectedToInternet, .dataNotAllowed, .internationalRoamingOff:
-                return "Нет подключения к интернету — поиск недоступен."
+                return L("search.err.offline")
             case .timedOut:
-                return "Поиск не ответил вовремя. Попробуйте ещё раз."
+                return L("search.err.timeout")
             default:
-                return "Ошибка сети при поиске: \(urlError.localizedDescription)"
+                return L("search.err.network", urlError.localizedDescription)
             }
         }
         if let mkError = error as? MKError {
             switch mkError.code {
             case .placemarkNotFound:
-                return "Ничего не найдено."
+                return L("search.err.nothing")
             case .loadingThrottled:
-                return "Слишком много запросов поиска. Подождите немного."
+                return L("search.err.throttled")
             case .serverFailure:
-                return "Сервер поиска Apple недоступен. Попробуйте позже."
+                return L("search.err.server")
             default:
                 break
             }
         }
-        return "Не удалось выполнить поиск: \(error.localizedDescription)"
+        return L("search.err.failed", error.localizedDescription)
     }
 }
 
@@ -298,7 +298,7 @@ enum PlaceSearchError: LocalizedError {
 
     var errorDescription: String? {
         switch self {
-        case .notFound: return "Место не найдено."
+        case .notFound: return L("search.err.notFound")
         case .failed(let message): return message
         }
     }

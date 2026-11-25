@@ -19,11 +19,11 @@ struct SettingsView: View {
                 SettingsSignalSection()
                 SettingsAboutSection()
             }
-            .navigationTitle("Настройки")
+            .navigationTitle(L("common.settings"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("Готово") { dismiss() }
+                    Button(L("common.done")) { dismiss() }
                         .fontWeight(.semibold)
                 }
             }
@@ -58,44 +58,44 @@ private struct SettingsRecognitionSection: View {
         Section {
             VStack(alignment: .leading, spacing: 8) {
                 HStack {
-                    Text("Порог детектора")
+                    Text(l: "settings.rec.threshold")
                     Spacer()
-                    Text("уверенность ≥ \(settingsPercent(settings.detectionConfidence))")
+                    Text(l: "settings.rec.confidenceValue", settingsPercent(settings.detectionConfidence))
                         .monospacedDigit()
                         .foregroundStyle(.secondary)
                 }
                 Slider(value: $settings.detectionConfidence, in: 0.15...0.8, step: 0.05)
-                    .accessibilityLabel("Минимальная уверенность детектора")
+                    .accessibilityLabel(L("settings.rec.threshold.a11y"))
                     .accessibilityValue(settingsPercent(settings.detectionConfidence))
             }
-            statusRow(title: "Детектор ТС", status: detectorStatus)
+            statusRow(title: L("settings.rec.detector"), status: detectorStatus)
             Toggle(isOn: $settings.makeRecognitionEnabled) {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("Распознавать марки")
-                    Text("Модель марок: \(makeStatus.text)")
+                    Text(l: "settings.rec.makes")
+                    Text(l: "settings.rec.makeModel", makeStatus.text)
                         .font(.caption)
                         .foregroundStyle(makeStatus.color)
                 }
             }
-            Toggle("≈ Расстояние до ТС (оценка)", isOn: $settings.showDistanceEstimates)
-            Toggle("≈ Скорость других ТС (оценка)", isOn: $settings.showSpeedEstimates)
-            Toggle("Пешеходы", isOn: $settings.trackPedestrians)
-            Toggle("Светофоры и их цвет", isOn: $settings.detectTrafficLights)
-            Toggle("Журнал для исследования (CSV)", isOn: $settings.recordExperimentLog)
-            LabeledContent("Уникальных ТС за сессию", value: "\(app.recognition.totalUniqueVehicles)")
-            Button("Сбросить счётчики", role: .destructive) {
+            Toggle(L("settings.rec.distance"), isOn: $settings.showDistanceEstimates)
+            Toggle(L("settings.rec.speed"), isOn: $settings.showSpeedEstimates)
+            Toggle(L("settings.rec.pedestrians"), isOn: $settings.trackPedestrians)
+            Toggle(L("settings.rec.lights"), isOn: $settings.detectTrafficLights)
+            Toggle(L("settings.rec.log"), isOn: $settings.recordExperimentLog)
+            LabeledContent(L("settings.rec.unique"), value: "\(app.recognition.totalUniqueVehicles)")
+            Button(L("counters.reset"), role: .destructive) {
                 confirmReset = true
             }
-            .confirmationDialog("Сбросить счётчики ТС?", isPresented: $confirmReset, titleVisibility: .visible) {
-                Button("Сбросить", role: .destructive) {
+            .confirmationDialog(L("settings.rec.resetConfirm"), isPresented: $confirmReset, titleVisibility: .visible) {
+                Button(L("common.reset"), role: .destructive) {
                     app.recognition.resetCounters()
                 }
-                Button("Отмена", role: .cancel) {}
+                Button(L("common.cancel"), role: .cancel) {}
             }
         } header: {
-            Text("Распознавание")
+            Text(l: "recStatus.title")
         } footer: {
-            Text("Уверенность — оценка самой модели, а не точность распознавания. ≈ Расстояние и скорость других ТС — оценка по одной камере, погрешность может быть большой.")
+            Text(l: "settings.rec.footer")
         }
     }
 
@@ -109,19 +109,19 @@ private struct SettingsRecognitionSection: View {
 
     private var detectorStatus: (text: String, color: Color) {
         switch app.recognition.detectorStatus {
-        case .loading: return ("загружается…", .secondary)
-        case .ready(let name): return ("готов (\(name))", .green)
-        case .missing: return ("модель не добавлена", .orange)
-        case .failed(let message): return ("ошибка: \(message)", .red)
+        case .loading: return (L("settings.status.loading"), .secondary)
+        case .ready(let name): return (L("settings.status.readyDetector", name), .green)
+        case .missing: return (L("settings.status.noModel"), .orange)
+        case .failed(let message): return (L("status.error", message), .red)
         }
     }
 
     private var makeStatus: (text: String, color: Color) {
         switch app.recognition.makeClassifierStatus {
-        case .loading: return ("загружается…", .secondary)
-        case .ready(let name): return ("готова (\(name))", .green)
-        case .missing: return ("не добавлена в приложение", .orange)
-        case .failed(let message): return ("ошибка: \(message)", .red)
+        case .loading: return (L("settings.status.loading"), .secondary)
+        case .ready(let name): return (L("settings.status.readyMake", name), .green)
+        case .missing: return (L("settings.status.makeMissing"), .orange)
+        case .failed(let message): return (L("status.error", message), .red)
         }
     }
 }
@@ -134,53 +134,53 @@ private struct SettingsFollowingDistanceSection: View {
     var body: some View {
         @Bindable var settings = app.settings
         Section {
-            Toggle("Дистанция до впереди идущего", isOn: $settings.followingDistanceEnabled)
+            Toggle(L("settings.fd.enabled"), isOn: $settings.followingDistanceEnabled)
             Group {
                 Stepper(value: $settings.followingTimeGapDry, in: 1...4, step: 0.5) {
                     HStack {
-                        Text("Интервал на сухой дороге")
+                        Text(l: "settings.fd.dryGap")
                         Spacer()
-                        Text("\(RVFormat.decimal(settings.followingTimeGapDry, digits: 1)) с")
+                        Text(verbatim: "\(RVFormat.appDecimal(settings.followingTimeGapDry, digits: 1)) \(RVFormat.appSeconds)")
                             .monospacedDigit()
                             .foregroundStyle(.secondary)
                     }
                 }
                 Stepper(value: $settings.stoppedGapMeters, in: 1...10, step: 0.5) {
                     HStack {
-                        Text("Зазор в пробке / у светофора")
+                        Text(l: "settings.fd.stoppedGap")
                         Spacer()
-                        Text("\(RVFormat.decimal(settings.stoppedGapMeters, digits: 1)) м")
+                        Text(verbatim: "\(RVFormat.appDecimal(settings.stoppedGapMeters, digits: 1)) \(RVFormat.appMeters)")
                             .monospacedDigit()
                             .foregroundStyle(.secondary)
                     }
                 }
                 Stepper(value: $settings.reactionTimeSeconds, in: 0.5...2.5, step: 0.1) {
                     HStack {
-                        Text("Время реакции")
+                        Text(l: "settings.fd.reaction")
                         Spacer()
-                        Text("\(RVFormat.decimal(settings.reactionTimeSeconds, digits: 1)) с")
+                        Text(verbatim: "\(RVFormat.appDecimal(settings.reactionTimeSeconds, digits: 1)) \(RVFormat.appSeconds)")
                             .monospacedDigit()
                             .foregroundStyle(.secondary)
                     }
                 }
-                Picker("Покрытие дороги", selection: $settings.roadSurfaceMode) {
-                    Text("Авто (по погоде)").tag("auto")
+                Picker(L("settings.fd.surface"), selection: $settings.roadSurfaceMode) {
+                    Text(l: "settings.fd.surfaceAuto").tag("auto")
                     ForEach(RoadSurfaceCondition.allCases, id: \.self) { surface in
                         Text(surface.localizedName).tag(surface.rawValue)
                     }
                 }
-                Toggle("Предупреждения: вибрация, звук, голос", isOn: $settings.distanceWarningsEnabled)
-                Toggle("Показывать свою полосу", isOn: $settings.showEgoCorridor)
+                Toggle(L("settings.fd.warnings"), isOn: $settings.distanceWarningsEnabled)
+                Toggle(L("settings.fd.corridor"), isOn: $settings.showEgoCorridor)
                 VStack(alignment: .leading, spacing: 8) {
                     HStack {
-                        Text("Линия горизонта")
+                        Text(l: "settings.fd.horizon")
                         Spacer()
                         Text(settingsPercent(settings.corridorHorizon))
                             .monospacedDigit()
                             .foregroundStyle(.secondary)
                     }
                     Slider(value: $settings.corridorHorizon, in: 0.25...0.65, step: 0.01)
-                        .accessibilityLabel("Линия горизонта для коридора полосы")
+                        .accessibilityLabel(L("settings.fd.horizon.a11y"))
                         .accessibilityValue(settingsPercent(settings.corridorHorizon))
                 }
             }
@@ -188,12 +188,12 @@ private struct SettingsFollowingDistanceSection: View {
             NavigationLink {
                 DistanceNormsView()
             } label: {
-                Label("Требования к дистанции", systemImage: "book.closed")
+                Label(L("fd.norms.title"), systemImage: "book.closed")
             }
         } header: {
-            Text("Дистанция")
+            Text(l: "settings.fd.title")
         } footer: {
-            Text("Безопасный интервал: мокро ×2, снег ×3, гололёд ×5 от сухого. Расстояние до машины впереди — ≈ оценка по одной камере и не заменяет внимание водителя. Линию горизонта подстройте под крепление телефона: на ней сходится коридор вашей полосы.")
+            Text(l: "settings.fd.footer")
         }
     }
 }
@@ -215,11 +215,11 @@ private struct SettingsExperimentsSection: View {
     var body: some View {
         Section {
             if app.recognition.isRecording {
-                Label("Идёт запись журнала — файлы появятся после остановки", systemImage: "record.circle")
+                Label(L("settings.exp.recording"), systemImage: "record.circle")
                     .foregroundStyle(.red)
             }
             if files.isEmpty {
-                Text("Файлов пока нет. Включите «Журнал для исследования» и запустите запись на экране камеры.")
+                Text(l: "settings.exp.empty")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             } else {
@@ -248,9 +248,9 @@ private struct SettingsExperimentsSection: View {
                 .onDelete(perform: delete)
             }
         } header: {
-            Text("Эксперименты")
+            Text(l: "settings.exp.title")
         } footer: {
-            Text("CSV: покадровые детекции и сводка «детекции в кадрах ↔ уникальные ТС». Нажмите, чтобы отправить; смахните влево, чтобы удалить.")
+            Text(l: "settings.exp.footer")
         }
         .onAppear(perform: reload)
         .onChange(of: app.recognition.isRecording) { _, _ in
@@ -313,16 +313,16 @@ private struct SettingsNavigationSection: View {
     var body: some View {
         @Bindable var settings = app.settings
         Section {
-            Toggle("Голосовые подсказки", isOn: $settings.voiceGuidanceEnabled)
-            Toggle("Избегать платных дорог", isOn: $settings.avoidTolls)
-            Toggle("Избегать автомагистралей", isOn: $settings.avoidHighways)
-            Toggle("Окно камеры поверх карты", isOn: $settings.showCameraPiP)
-            Toggle("Предупреждать о превышении скорости", isOn: $settings.speedWarningEnabled)
+            Toggle(L("settings.nav.voice"), isOn: $settings.voiceGuidanceEnabled)
+            Toggle(L("settings.nav.avoidTolls"), isOn: $settings.avoidTolls)
+            Toggle(L("settings.nav.avoidHighways"), isOn: $settings.avoidHighways)
+            Toggle(L("settings.nav.pip"), isOn: $settings.showCameraPiP)
+            Toggle(L("settings.nav.speedWarning"), isOn: $settings.speedWarningEnabled)
             Stepper(value: $settings.speedWarningTolerance, in: 0...30, step: 1) {
                 HStack {
-                    Text("Допуск")
+                    Text(l: "settings.nav.tolerance")
                     Spacer()
-                    Text("+\(Int(settings.speedWarningTolerance)) км/ч")
+                    Text(verbatim: "+\(Int(settings.speedWarningTolerance)) \(RVFormat.appKmh)")
                         .monospacedDigit()
                         .foregroundStyle(.secondary)
                 }
@@ -330,7 +330,7 @@ private struct SettingsNavigationSection: View {
             .disabled(!settings.speedWarningEnabled)
             Stepper(value: $settings.incidentLifetimeMinutes, in: 15...720, step: 15) {
                 HStack {
-                    Text("Срок жизни отметок")
+                    Text(l: "settings.nav.incidentLifetime")
                     Spacer()
                     Text(RVFormat.appDuration(settings.incidentLifetimeMinutes * 60))
                         .monospacedDigit()
@@ -338,9 +338,9 @@ private struct SettingsNavigationSection: View {
                 }
             }
         } header: {
-            Text("Навигация")
+            Text(l: "settings.nav.title")
         } footer: {
-            Text("Ограничение скорости берётся из OpenStreetMap и может отсутствовать или быть устаревшим. Отметки о ДТП, ремонте и т. п. хранятся только на этом телефоне и удаляются по истечении срока.")
+            Text(l: "settings.nav.footer")
         }
     }
 }
@@ -358,12 +358,12 @@ private struct SettingsRoadDataSection: View {
     var body: some View {
         @Bindable var settings = app.settings
         Section {
-            Toggle("Данные OpenStreetMap", isOn: $settings.roadDataEnabled)
-            Picker("Сервер Overpass API", selection: $choice) {
+            Toggle(L("settings.road.osm"), isOn: $settings.roadDataEnabled)
+            Picker(L("settings.road.server"), selection: $choice) {
                 ForEach(AppSettings.overpassEndpoints, id: \.self) { endpoint in
                     Text(Self.hostName(endpoint)).tag(endpoint)
                 }
-                Text("Свой сервер").tag(Self.customTag)
+                Text(l: "settings.customServer").tag(Self.customTag)
             }
             .disabled(!settings.roadDataEnabled)
             .onAppear(perform: syncChoice)
@@ -385,9 +385,9 @@ private struct SettingsRoadDataSection: View {
                 }
             }
         } header: {
-            Text("Данные о дорогах")
+            Text(l: "settings.road.title")
         } footer: {
-            Text("Полосы, ограничения скорости, светофоры, переходы, камеры и ремонт — из OpenStreetMap (© участники OpenStreetMap, лицензия ODbL) через публичный Overpass API. Если сервер не отвечает, используется резервный.")
+            Text(l: "settings.road.footer")
         }
     }
 
@@ -424,7 +424,7 @@ private struct SettingsRoadDataSection: View {
             return
         }
         guard let valid = settingsValidatedURL(trimmed) else {
-            customError = "Введите адрес вида https://…/api/interpreter"
+            customError = L("settings.road.invalidURL")
             return
         }
         app.settings.overpassEndpoint = valid
@@ -445,48 +445,48 @@ private struct SettingsSignalSection: View {
         Section {
             Stepper(value: $settings.signalCycleSeconds, in: 40...180, step: 5) {
                 HStack {
-                    Text("Цикл светофора")
+                    Text(l: "settings.signal.cycle")
                     Spacer()
-                    Text("\(Int(settings.signalCycleSeconds)) с")
+                    Text(verbatim: "\(Int(settings.signalCycleSeconds)) \(RVFormat.appSeconds)")
                         .monospacedDigit()
                         .foregroundStyle(.secondary)
                 }
             }
             VStack(alignment: .leading, spacing: 8) {
                 HStack {
-                    Text("Доля зелёного")
+                    Text(l: "settings.signal.green")
                     Spacer()
                     Text(settingsPercent(settings.signalGreenRatio))
                         .monospacedDigit()
                         .foregroundStyle(.secondary)
                 }
                 Slider(value: $settings.signalGreenRatio, in: 0.2...0.8, step: 0.05)
-                    .accessibilityLabel("Доля зелёного сигнала")
+                    .accessibilityLabel(L("settings.signal.green.a11y"))
                     .accessibilityValue(settingsPercent(settings.signalGreenRatio))
             }
-            LabeledContent("Ожидание по модели") {
-                Text("≈ \(RVFormat.appDuration(estimate.expectedWaitSeconds)) (оценка), остановка в \(settingsPercent(estimate.stopProbability)) случаев")
+            LabeledContent(L("settings.signal.modelWait")) {
+                Text(l: "settings.signal.modelWaitValue", RVFormat.appDuration(estimate.expectedWaitSeconds), settingsPercent(estimate.stopProbability))
                     .multilineTextAlignment(.trailing)
                     .foregroundStyle(.secondary)
             }
-            Toggle("Учиться на моих остановках", isOn: $settings.learnSignalTimings)
-            Text("Накоплено наблюдений: \(app.signals.observationCount)")
+            Toggle(L("settings.signal.learn"), isOn: $settings.learnSignalTimings)
+            Text(l: "settings.signal.observations", app.signals.observationCount)
                 .monospacedDigit()
-            Button("Сбросить накопленные данные", role: .destructive) {
+            Button(L("settings.signal.reset"), role: .destructive) {
                 confirmReset = true
             }
             .disabled(app.signals.observationCount == 0)
-            .confirmationDialog("Удалить все наблюдения у светофоров?", isPresented: $confirmReset,
+            .confirmationDialog(L("settings.signal.resetConfirm"), isPresented: $confirmReset,
                                 titleVisibility: .visible) {
-                Button("Удалить", role: .destructive) {
+                Button(L("common.delete"), role: .destructive) {
                     app.signals.resetLearnedData()
                 }
-                Button("Отмена", role: .cancel) {}
+                Button(L("common.cancel"), role: .cancel) {}
             }
         } header: {
-            Text("Светофоры")
+            Text(l: "settings.signal.title")
         } footer: {
-            Text("Реальные фазы светофоров в Узбекистане публично недоступны, поэтому время ожидания — оценка: модель светофора с фиксированным циклом (цикл и доля зелёного выше) плюс ваши собственные остановки у светофоров, если включено обучение. Наблюдения хранятся только на телефоне.")
+            Text(l: "settings.signal.footer")
         }
     }
 }
@@ -499,48 +499,48 @@ private struct SettingsAboutSection: View {
             NavigationLink {
                 AboutHubView(embedInNavigationStack: false)
             } label: {
-                Label("О приложении, оферта, разработчики", systemImage: "info.circle")
+                Label(L("settings.about.link"), systemImage: "info.circle")
             }
-            LabeledContent("Версия", value: versionText)
+            LabeledContent(L("common.version"), value: versionText)
         } header: {
-            Text("О приложении")
+            Text(l: "about.title")
         }
 
         Section {
-            sourceRow(title: "Карты, поиск и маршруты",
-                      detail: "Apple Maps (MapKit); пробки и время в пути — данные Apple, где они есть.")
+            sourceRow(title: L("sources.maps.title"),
+                      detail: L("sources.maps.detail"))
             VStack(alignment: .leading, spacing: 6) {
-                sourceRow(title: "Данные о дорогах и маршруты OSM",
-                          detail: "© участники OpenStreetMap, лицензия ODbL. Запросы через Overpass API и Valhalla (FOSSGIS).")
+                sourceRow(title: L("sources.osm.title"),
+                          detail: L("sources.osm.detail"))
                 if let copyright = URL(string: "https://www.openstreetmap.org/copyright") {
                     Link("openstreetmap.org/copyright", destination: copyright)
                         .font(.footnote)
                 }
                 if let fixTheMap = URL(string: "https://www.openstreetmap.org/fixthemap") {
-                    Link("Сообщить об ошибке на карте", destination: fixTheMap)
+                    Link(L("sources.osm.fix"), destination: fixTheMap)
                         .font(.footnote)
                 }
             }
             VStack(alignment: .leading, spacing: 6) {
-                sourceRow(title: "Погода", detail: "Weather data by Open-Meteo.com, лицензия CC BY 4.0.")
+                sourceRow(title: L("sources.weather.title"), detail: L("sources.weather.detail"))
                 if let openMeteo = URL(string: "https://open-meteo.com/") {
                     Link("open-meteo.com", destination: openMeteo)
                         .font(.footnote)
                 }
             }
-            sourceRow(title: "Распознавание ТС",
-                      detail: "Модели Ultralytics YOLO распространяются по лицензии AGPL-3.0; для закрытого коммерческого распространения нужна корпоративная лицензия Ultralytics. Модель марок — по лицензии её набора данных.")
+            sourceRow(title: L("sources.yolo.title"),
+                      detail: L("sources.yolo.detail") + " " + L("settings.sources.makeLicense"))
         } header: {
-            Text("Источники данных и лицензии")
+            Text(l: "about.sources")
         }
 
         Section {
-            Text("RoadVis — вспомогательное приложение. Следите за дорогой и соблюдайте ПДД. Полосы, ограничения скорости, светофоры, пробки и события могут быть неточными или устаревшими; расстояния, скорости других ТС и время на светофорах — лишь оценки. Не управляйте телефоном во время движения.")
+            Text(l: "sources.safety.body")
                 .font(.footnote)
-            Text("YOUR USE OF THIS REAL TIME ROUTE GUIDANCE APPLICATION IS AT YOUR SOLE RISK. LOCATION DATA MAY NOT BE ACCURATE.")
+            Text(verbatim: "YOUR USE OF THIS REAL TIME ROUTE GUIDANCE APPLICATION IS AT YOUR SOLE RISK. LOCATION DATA MAY NOT BE ACCURATE.")
                 .font(.footnote.weight(.semibold))
         } header: {
-            Text("Безопасность")
+            Text(l: "sources.safety.header")
         }
     }
 

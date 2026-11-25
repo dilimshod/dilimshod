@@ -18,15 +18,15 @@ enum OverpassClientError: LocalizedError, Equatable {
         switch self {
         case .rateLimited(let retryAfter):
             let seconds = max(1, Int(retryAfter.rounded(.up)))
-            return "серверы временно ограничили частоту запросов, повтор через \(seconds) с"
+            return L("overpass.rateLimited", seconds)
         case .badQuery(let message):
-            return message.isEmpty ? "сервер отклонил запрос" : "сервер отклонил запрос (\(message))"
+            return message.isEmpty ? L("overpass.rejected") : L("overpass.rejectedWith", message)
         case .offline:
-            return "нет подключения к интернету"
+            return L("net.noInternet")
         case .allEndpointsFailed(let reasons):
-            return reasons.isEmpty ? "все серверы недоступны" : "все серверы недоступны — " + reasons.joined(separator: "; ")
+            return reasons.isEmpty ? L("overpass.allFailed") : L("overpass.allFailed") + " — " + reasons.joined(separator: "; ")
         case .noValidEndpoint:
-            return "не задан корректный адрес сервера Overpass"
+            return L("overpass.noEndpoint")
         }
     }
 }
@@ -154,7 +154,7 @@ actor OverpassClient {
             let host = Self.hostName(endpoint)
             guard let url = URL(string: endpoint), let scheme = url.scheme?.lowercased(),
                   scheme == "https" || scheme == "http", url.host != nil else {
-                reasons.append("\(host): некорректный адрес")
+                reasons.append("\(host): " + L("overpass.badAddress"))
                 continue
             }
             switch try await attempt(url: url, endpoint: endpoint, body: body, timeout: timeout) {
@@ -172,7 +172,7 @@ actor OverpassClient {
                 reasons.append("\(host): \(reason)")
             case .rejected(let message):
                 rejection = message
-                reasons.append("\(host): запрос отклонён")
+                reasons.append("\(host): " + L("overpass.requestRejected"))
             }
         }
         // A 400 from one server while no other server accepted the query means the query itself is invalid.
@@ -207,14 +207,14 @@ actor OverpassClient {
             case .notConnectedToInternet, .dataNotAllowed, .internationalRoamingOff:
                 throw OverpassClientError.offline
             case .timedOut:
-                return .failed("истекло время ожидания")
+                return .failed(L("net.timedOut"))
             case .cannotFindHost, .dnsLookupFailed:
-                return .failed("сервер не найден")
+                return .failed(L("net.hostNotFound"))
             case .cannotConnectToHost, .networkConnectionLost:
-                return .failed("не удалось подключиться")
+                return .failed(L("net.cannotConnect"))
             case .secureConnectionFailed, .serverCertificateUntrusted, .serverCertificateHasBadDate,
                  .serverCertificateNotYetValid, .serverCertificateHasUnknownRoot:
-                return .failed("ошибка защищённого соединения")
+                return .failed(L("net.tls"))
             default:
                 return .failed(error.localizedDescription)
             }
@@ -227,18 +227,18 @@ actor OverpassClient {
         if Task.isCancelled { throw CancellationError() }
 
         guard let http = response as? HTTPURLResponse else {
-            return .failed("неизвестный ответ сервера")
+            return .failed(L("net.unknownResponse"))
         }
         switch http.statusCode {
         case 200:
             if Self.looksLikeHTML(data) {
-                return .failed("сервер вернул страницу ошибки (\(Self.shortened(Self.textSummary(of: data))))")
+                return .failed(L("overpass.errorPage", Self.shortened(Self.textSummary(of: data))))
             }
             let elements: [OSMElement]
             do {
                 elements = try OverpassQuery.decode(data)
             } catch {
-                return .failed("не удалось разобрать ответ")
+                return .failed(L("overpass.unparsable"))
             }
             if let remark = Self.remark(in: data) {
                 return .partial(elements, remark: remark)
@@ -247,11 +247,11 @@ actor OverpassClient {
         case 429, 406:
             let wait = Self.retryAfter(from: http) ?? Self.rateLimitCooldown
             cooldownUntil[endpoint] = Date().addingTimeInterval(wait)
-            return .rateLimited("слишком много запросов (HTTP \(http.statusCode))")
+            return .rateLimited(L("overpass.tooMany", http.statusCode))
         case 400:
             return .rejected(Self.shortened(Self.textSummary(of: data)))
         case 502, 503, 504:
-            return .failed("сервер перегружен (HTTP \(http.statusCode))")
+            return .failed(L("overpass.overloaded", http.statusCode))
         default:
             return .failed("HTTP \(http.statusCode)")
         }
@@ -299,7 +299,7 @@ actor OverpassClient {
     }
 
     private static func hostName(_ endpoint: String) -> String {
-        URL(string: endpoint)?.host ?? (endpoint.isEmpty ? "(пусто)" : endpoint)
+        URL(string: endpoint)?.host ?? (endpoint.isEmpty ? L("overpass.empty") : endpoint)
     }
 
     /// Overpass error pages are HTML even when JSON output was requested.
@@ -340,7 +340,7 @@ actor OverpassClient {
             }
         }
         let text = plainText(html)
-        return text.isEmpty ? "пустая страница" : text
+        return text.isEmpty ? L("overpass.emptyPage") : text
     }
 
     /// Inner HTML of every `<tag …>…</tag>` element (case-insensitive, non-nested).

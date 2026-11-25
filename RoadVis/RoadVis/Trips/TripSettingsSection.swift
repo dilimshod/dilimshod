@@ -12,7 +12,7 @@ struct TripSettingsSection: View {
                 TripHistoryView()
             } label: {
                 HStack {
-                    Label("История поездок", systemImage: "list.bullet.rectangle.portrait")
+                    Label(L("history.title"), systemImage: "list.bullet.rectangle.portrait")
                     Spacer()
                     if app.trips.isLoaded {
                         Text("\(app.trips.trips.count)")
@@ -25,34 +25,34 @@ struct TripSettingsSection: View {
                 Button(role: .destructive) {
                     app.stopTripRecording()
                 } label: {
-                    Label("Остановить запись поездки", systemImage: "stop.circle")
+                    Label(L("trip.record.stop"), systemImage: "stop.circle")
                 }
             } else {
                 Button {
                     app.startTripRecording()
                 } label: {
-                    Label("Начать запись поездки", systemImage: "record.circle")
+                    Label(L("trip.record.start"), systemImage: "record.circle")
                 }
                 .disabled(recorder.isFinishing)
             }
-            Toggle("Автозапись поездок", isOn: $settings.tripAutoRecord)
-            Toggle("Записывать CSV камеры во время поездки", isOn: $settings.tripRecordCameraCSV)
+            Toggle(L("tripset.auto"), isOn: $settings.tripAutoRecord)
+            Toggle(L("tripset.cameraCSV"), isOn: $settings.tripRecordCameraCSV)
             Stepper(value: $settings.tripSpeedToleranceKmh, in: 0...20, step: 1) {
-                valueRow("Допуск превышения", "+\(Int(settings.tripSpeedToleranceKmh)) км/ч")
+                valueRow(L("tripset.tolerance"), "+\(Int(settings.tripSpeedToleranceKmh)) \(RVFormat.appKmh)")
             }
             Stepper(value: $settings.tripSpeedingMinSeconds, in: 5...30, step: 1) {
-                valueRow("Превышение дольше", "\(Int(settings.tripSpeedingMinSeconds)) с")
+                valueRow(L("tripset.speedingLonger"), "\(Int(settings.tripSpeedingMinSeconds)) \(RVFormat.appSeconds)")
             }
             Stepper(value: $settings.tripHarshBrakingMps2, in: 2.5...6, step: 0.5) {
-                valueRow("Резкое торможение от", "\(RVFormat.decimal(settings.tripHarshBrakingMps2, digits: 1)) м/с²")
+                valueRow(L("tripset.braking"), "\(RVFormat.appDecimal(settings.tripHarshBrakingMps2, digits: 1)) \(L("event.unit.harshBraking"))")
             }
             Stepper(value: $settings.tripHarshAccelerationMps2, in: 2...5, step: 0.5) {
-                valueRow("Резкий разгон от", "\(RVFormat.decimal(settings.tripHarshAccelerationMps2, digits: 1)) м/с²")
+                valueRow(L("tripset.acceleration"), "\(RVFormat.appDecimal(settings.tripHarshAccelerationMps2, digits: 1)) \(L("event.unit.harshAcceleration"))")
             }
         } header: {
-            Text("Поездки")
+            Text(l: "common.trips")
         } footer: {
-            Text("При «Поехали» запись поездки начинается автоматически и заканчивается по прибытии — затем открывается отчёт с картой, оценкой, графиками и списком нарушений (PDF и CSV). Превышение — по скорости GPS и ограничению из OpenStreetMap / Valhalla; резкие торможения и разгоны — по GPS и датчикам движения телефона; события камеры — ≈ оценка. Поездки хранятся только на телефоне. Пороги применяются к новым поездкам.")
+            Text(l: "tripset.footer")
         }
     }
 

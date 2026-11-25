@@ -19,7 +19,7 @@ final class WeatherService {
     private(set) var isLoading = false
 
     /// Attribution required by the Open-Meteo licence; show it wherever weather data is displayed.
-    static let attribution = "Погода: Open-Meteo.com (CC BY 4.0)"
+    static var attribution: String { L("weather.attribution") }
     /// Refresh period, seconds.
     static let refreshInterval: TimeInterval = 15 * 60
     /// Distance from the last refresh position that triggers a new refresh, metres.
@@ -80,7 +80,7 @@ final class WeatherService {
         }
         guard let point = location.coordinate, point.isValid else {
             if current == nil {
-                lastError = "Погода: местоположение пока неизвестно"
+                lastError = L("weather.noLocation")
             }
             return
         }
@@ -147,7 +147,7 @@ final class WeatherService {
             if let urlError = error as? URLError, urlError.code == .cancelled { return }
             consecutiveFailures += 1
             nextAttemptAllowed = Date().addingTimeInterval(retryDelay(after: error))
-            lastError = "Не удалось обновить погоду (Open-Meteo): " + Self.describe(error)
+            lastError = L("weather.updateFailed", Self.describe(error))
         }
     }
 
@@ -164,9 +164,9 @@ final class WeatherService {
         if let urlError = error as? URLError {
             switch urlError.code {
             case .notConnectedToInternet, .dataNotAllowed, .internationalRoamingOff:
-                return "нет подключения к интернету"
+                return L("net.noInternet")
             case .timedOut:
-                return "истекло время ожидания"
+                return L("net.timedOut")
             default:
                 return urlError.localizedDescription
             }
@@ -183,7 +183,7 @@ final class WeatherService {
     }
 }
 
-/// Failures of `WeatherService` requests (Russian descriptions).
+/// Failures of `WeatherService` requests (localized descriptions).
 enum WeatherServiceError: LocalizedError, Equatable {
     case invalidResponse
     case http(status: Int, reason: String?)
@@ -191,9 +191,9 @@ enum WeatherServiceError: LocalizedError, Equatable {
     var errorDescription: String? {
         switch self {
         case .invalidResponse:
-            return "некорректный ответ сервера"
+            return L("net.invalidResponse")
         case .http(429, _):
-            return "превышен дневной лимит запросов, повтор через 15 мин"
+            return L("weather.dailyLimit")
         case .http(let status, let reason):
             if let reason { return "HTTP \(status): \(reason)" }
             return "HTTP \(status)"

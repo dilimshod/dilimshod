@@ -27,7 +27,7 @@ enum TripReportExporter {
         let eventsURL = directory.appendingPathComponent("\(base)_events.csv")
         let pointsURL = directory.appendingPathComponent("\(base)_track.csv")
         // UTF-8 BOM so spreadsheet apps detect the Cyrillic text.
-        try (Data([0xEF, 0xBB, 0xBF]) + Data(TripExport.eventsCSV(trip).utf8)).write(to: eventsURL, options: .atomic)
+        try (Data([0xEF, 0xBB, 0xBF]) + Data(TripExport.eventsCSV(trip, title: { $0.localizedTitle }).utf8)).write(to: eventsURL, options: .atomic)
         try (Data([0xEF, 0xBB, 0xBF]) + Data(TripExport.pointsCSV(trip).utf8)).write(to: pointsURL, options: .atomic)
 
         let snapshot = await mapSnapshot(trip, size: CGSize(width: 545, height: 300))
@@ -136,7 +136,7 @@ enum TripReportExporter {
         var mediaBox = CGRect(origin: .zero, size: pageSize)
         guard let consumer = CGDataConsumer(url: url as CFURL),
               let context = CGContext(consumer: consumer, mediaBox: &mediaBox, [
-                  kCGPDFContextTitle as String: "RoadVis — отчёт о поездке",
+                  kCGPDFContextTitle as String: L("report.pdfTitle"),
                   kCGPDFContextCreator as String: "RoadVis",
               ] as CFDictionary) else {
             throw CocoaError(.fileWriteUnknown)
@@ -170,7 +170,7 @@ private struct TripPDFPageFrame<Content: View>: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
-                Text("RoadVis · отчёт о поездке")
+                Text(l: "report.pageHeader")
                     .font(.system(size: 10, weight: .semibold))
                     .foregroundStyle(.secondary)
                 Spacer()
@@ -181,12 +181,12 @@ private struct TripPDFPageFrame<Content: View>: View {
             content
             Spacer(minLength: 0)
             HStack(alignment: .bottom) {
-                Text("Скорость — GPS; лимиты — OpenStreetMap / Valhalla (могут отсутствовать); события камеры и дистанция — ≈ оценка. Отчёт не является официальным документом.")
+                Text(l: "report.pdfFooter")
                     .font(.system(size: 7))
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
                 Spacer(minLength: 12)
-                Text("стр. \(page) из \(pageCount)")
+                Text(l: "report.page", page, pageCount)
                     .font(.system(size: 8))
                     .foregroundStyle(.secondary)
             }
@@ -217,7 +217,7 @@ private struct TripPDFSummaryPage: View {
                 } else {
                     Rectangle()
                         .fill(Color.gray.opacity(0.15))
-                        .overlay(Text("Карта недоступна (нет сети)").font(.caption).foregroundStyle(.secondary))
+                        .overlay(Text(l: "report.noMap").font(.caption).foregroundStyle(.secondary))
                         .frame(height: 300)
                 }
             }
@@ -227,7 +227,7 @@ private struct TripPDFSummaryPage: View {
                 VStack(alignment: .leading, spacing: 4) {
                     Text(TripScoring.localizedGrade(score.score))
                         .font(.system(size: 16, weight: .bold))
-                    Text("Штрафных очков: \(RVFormat.decimal(score.totalPenalty, digits: 1)) · на 1 км: \(RVFormat.decimal(score.penaltyPerKm, digits: 2))")
+                    Text(l: "report.penaltyPdf", RVFormat.appDecimal(score.totalPenalty, digits: 1), RVFormat.appDecimal(score.penaltyPerKm, digits: 2))
                         .font(.system(size: 10))
                     Text(TripScoring.localizedFormulaDescription)
                         .font(.system(size: 8))
@@ -249,28 +249,28 @@ private struct TripPDFChartsPage: View {
 
     var body: some View {
         TripPDFPageFrame(trip: trip, page: page, pageCount: pageCount) {
-            Text("Скорость и ограничение").font(.system(size: 13, weight: .bold))
+            Text(l: "report.speedAndLimit").font(.system(size: 13, weight: .bold))
             TripSpeedChart(data: data, height: 190)
             TripSpeedChartLegend()
             HStack(alignment: .top, spacing: 20) {
                 VStack(alignment: .leading, spacing: 6) {
-                    Text("События по видам").font(.system(size: 13, weight: .bold))
+                    Text(l: "report.eventsByKind").font(.system(size: 13, weight: .bold))
                     if data.kindCounts.isEmpty {
-                        Text("Событий нет").font(.caption).foregroundStyle(.secondary)
+                        Text(l: "report.noEvents").font(.caption).foregroundStyle(.secondary)
                     } else {
                         TripEventsByKindChart(data: data)
                     }
                 }
                 VStack(alignment: .leading, spacing: 6) {
-                    Text("Время по скоростям").font(.system(size: 13, weight: .bold))
+                    Text(l: "report.timeBySpeed").font(.system(size: 13, weight: .bold))
                     TripSpeedBandChart(data: data)
                 }
             }
-            Text("≈ Дистанция до впереди идущего (оценка камеры)").font(.system(size: 13, weight: .bold))
+            Text(l: "report.leadDistanceCamera").font(.system(size: 13, weight: .bold))
             if data.hasLeadData {
                 TripLeadDistanceChart(data: data, height: 150)
             } else {
-                Text("Камера не измеряла дистанцию в этой поездке.").font(.caption).foregroundStyle(.secondary)
+                Text(l: "report.noLeadData").font(.caption).foregroundStyle(.secondary)
             }
         }
     }
@@ -285,13 +285,13 @@ private struct TripPDFEventsPage: View {
 
     var body: some View {
         TripPDFPageFrame(trip: trip, page: page, pageCount: pageCount) {
-            Text("Нарушения и события (\(trip.events.count))").font(.system(size: 13, weight: .bold))
+            Text(l: "report.violations", trip.events.count).font(.system(size: 13, weight: .bold))
             if rows.isEmpty {
-                Text("За поездку событий не зафиксировано.").font(.system(size: 11))
+                Text(l: "report.noEventsTrip").font(.system(size: 11))
             } else {
                 Grid(alignment: .leading, horizontalSpacing: 8, verticalSpacing: 5) {
                     GridRow {
-                        Text("№"); Text("Время"); Text("Событие"); Text("Значение"); Text("Место")
+                        Text(l: "report.col.number"); Text(l: "report.col.time"); Text(l: "report.col.event"); Text(l: "report.col.value"); Text(l: "report.col.place")
                     }
                     .font(.system(size: 9, weight: .bold))
                     Divider()

@@ -27,52 +27,52 @@ struct TripReportView: View {
                 mapLegend
                 scoreCard(score)
                 TripStatsGrid(trip: trip, stats: stats, columns: 2, compact: false)
-                chartCard(title: "Скорость и ограничение", systemImage: "speedometer") {
+                chartCard(title: L("report.speedAndLimit"), systemImage: "speedometer") {
                     TripSpeedChart(data: data)
                     TripSpeedChartLegend()
                     if stats.speedLimitCoverage < 0.999 {
-                        Text("Ограничение известно для \(Int((stats.speedLimitCoverage * 100).rounded()))% времени (OpenStreetMap / Valhalla).")
+                        Text(l: "report.limitCoverage", Int((stats.speedLimitCoverage * 100).rounded()))
                             .font(.caption2)
                             .foregroundStyle(.secondary)
                     }
                 }
-                chartCard(title: "События по видам", systemImage: "chart.bar.fill") {
+                chartCard(title: L("report.eventsByKind"), systemImage: "chart.bar.fill") {
                     if data.kindCounts.isEmpty {
-                        Label("Событий нет — отличная поездка!", systemImage: "checkmark.seal.fill")
+                        Label(L("report.noEventsGreat"), systemImage: "checkmark.seal.fill")
                             .foregroundStyle(RVTheme.safe)
                     } else {
                         TripEventsByKindChart(data: data)
                     }
                 }
-                chartCard(title: "≈ Дистанция до впереди идущего", systemImage: "car.2.fill") {
+                chartCard(title: L("report.leadDistance"), systemImage: "car.2.fill") {
                     if data.hasLeadData {
                         TripLeadDistanceChart(data: data)
                         HStack(spacing: 12) {
-                            Label("≈ дистанция (камера)", systemImage: "line.diagonal").foregroundStyle(RVTheme.safe)
-                            Label("рекомендуемая", systemImage: "line.diagonal").foregroundStyle(RVTheme.caution)
+                            Label(L("report.legend.lead"), systemImage: "line.diagonal").foregroundStyle(RVTheme.safe)
+                            Label(L("report.legend.recommended"), systemImage: "line.diagonal").foregroundStyle(RVTheme.caution)
                         }
                         .font(.caption2)
                         if let share = stats.shareBelowRecommendedGap {
-                            Text("Меньше рекомендуемой ≈ \(Int((share * 100).rounded()))% времени, когда впереди была машина (оценка).")
+                            Text(l: "report.belowRecommended", Int((share * 100).rounded()))
                                 .font(.caption2)
                                 .foregroundStyle(.secondary)
                         }
                     } else {
-                        Text("Камера не измеряла дистанцию в этой поездке (камера выключена или впереди не было машин).")
+                        Text(l: "report.noLeadDataLong")
                             .font(.footnote)
                             .foregroundStyle(.secondary)
                     }
                 }
-                chartCard(title: "Время по скоростям", systemImage: "chart.pie.fill") {
+                chartCard(title: L("report.timeBySpeed"), systemImage: "chart.pie.fill") {
                     if data.bands.isEmpty {
-                        Text("Нет данных о скорости.").font(.footnote).foregroundStyle(.secondary)
+                        Text(l: "report.noSpeedData").font(.footnote).foregroundStyle(.secondary)
                     } else {
                         TripSpeedBandChart(data: data)
                     }
                 }
                 eventsList
                 exportCard
-                Text("Скорость — по GPS. Ограничения — из OpenStreetMap / Valhalla и могут отсутствовать или устареть. События камеры и дистанция — ≈ оценка по одной камере. Отчёт помогает учиться и не является официальным документом.")
+                Text(l: "report.footer")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
                     .padding(.bottom, 20)
@@ -81,7 +81,7 @@ struct TripReportView: View {
             .padding(.top, 8)
         }
         .background(Color(uiColor: .systemGroupedBackground))
-        .navigationTitle("Отчёт о поездке")
+        .navigationTitle(L("report.title"))
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
@@ -89,7 +89,7 @@ struct TripReportView: View {
                     ShareLink(items: files.all) {
                         Image(systemName: "square.and.arrow.up")
                     }
-                    .accessibilityLabel("Поделиться отчётом")
+                    .accessibilityLabel(L("report.share"))
                 } else {
                     Button {
                         Task { await prepareExport() }
@@ -97,7 +97,7 @@ struct TripReportView: View {
                         if isExporting { ProgressView() } else { Image(systemName: "square.and.arrow.up") }
                     }
                     .disabled(isExporting)
-                    .accessibilityLabel("Подготовить отчёт для отправки")
+                    .accessibilityLabel(L("report.prepare.a11y"))
                 }
             }
         }
@@ -113,9 +113,9 @@ struct TripReportView: View {
             HStack(spacing: 6) {
                 Text(TripStyle.dateText(trip))
                 if trip.arrived {
-                    RVBadge(text: "доехали", color: RVTheme.safe, systemImage: "flag.checkered")
+                    RVBadge(text: L("report.arrived"), color: RVTheme.safe, systemImage: "flag.checkered")
                 } else if trip.endedAt == nil && trip.id != app.tripRecorder.currentTripID {
-                    RVBadge(text: "запись прервана", color: RVTheme.caution, systemImage: "exclamationmark.triangle")
+                    RVBadge(text: L("report.interrupted"), color: RVTheme.caution, systemImage: "exclamationmark.triangle")
                 }
                 if let source = trip.routeSource {
                     RVBadge(text: source, color: RVTheme.accent, systemImage: "point.topleft.down.to.point.bottomright.curvepath")
@@ -129,8 +129,8 @@ struct TripReportView: View {
     private var mapLegend: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 10) {
-                legendDot(RVTheme.accent, "Проехали")
-                if !trip.routePolyline.isEmpty { legendDot(.gray, "Маршрут") }
+                legendDot(RVTheme.accent, L("report.legend.driven"))
+                if !trip.routePolyline.isEmpty { legendDot(.gray, L("report.legend.route")) }
                 ForEach(DrivingEventKind.allCases.filter { kind in trip.events.contains { $0.kind == kind } }, id: \.self) { kind in
                     legendDot(TripStyle.color(kind), kind.localizedTitle)
                 }
@@ -151,19 +151,19 @@ struct TripReportView: View {
             HStack(spacing: 16) {
                 TripScoreRing(score: score.score, size: 92)
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("Оценка вождения")
+                    Text(l: "report.score")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                     Text(TripScoring.localizedGrade(score.score))
                         .font(.title3.weight(.bold))
                         .foregroundStyle(TripStyle.scoreColor(score.score))
-                    Text("Штрафных очков \(RVFormat.decimal(score.totalPenalty, digits: 1)) · \(RVFormat.decimal(score.penaltyPerKm, digits: 2)) на км")
+                    Text(l: "report.penalty", RVFormat.appDecimal(score.totalPenalty, digits: 1), RVFormat.appDecimal(score.penaltyPerKm, digits: 2))
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
                 Spacer(minLength: 0)
             }
-            DisclosureGroup("Как считается балл", isExpanded: $showsFormula) {
+            DisclosureGroup(L("report.howScored"), isExpanded: $showsFormula) {
                 VStack(alignment: .leading, spacing: 6) {
                     Text(TripScoring.localizedFormulaDescription)
                         .font(.caption)
@@ -173,7 +173,7 @@ struct TripReportView: View {
                             Circle().fill(TripStyle.color(kind)).frame(width: 8, height: 8)
                             Text(kind.localizedTitle)
                             Spacer()
-                            Text("−\(RVFormat.decimal(score.penaltyByKind[kind] ?? 0, digits: 1)) очк.")
+                            Text(l: "report.points", RVFormat.appDecimal(score.penaltyByKind[kind] ?? 0, digits: 1))
                                 .monospacedDigit()
                         }
                         .font(.caption)
@@ -202,9 +202,9 @@ struct TripReportView: View {
     }
 
     private var eventsList: some View {
-        chartCard(title: "Все события (\(trip.events.count))", systemImage: "list.bullet.rectangle") {
+        chartCard(title: L("report.allEvents", trip.events.count), systemImage: "list.bullet.rectangle") {
             if trip.events.isEmpty {
-                Text("За поездку событий не зафиксировано.")
+                Text(l: "report.noEventsTrip")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             } else {
@@ -224,13 +224,13 @@ struct TripReportView: View {
     }
 
     private var exportCard: some View {
-        chartCard(title: "Поделиться отчётом", systemImage: "square.and.arrow.up") {
-            Text("PDF с картой, графиками и таблицей нарушений, плюс CSV событий и точек трека.")
+        chartCard(title: L("report.share"), systemImage: "square.and.arrow.up") {
+            Text(l: "report.shareDetail")
                 .font(.caption)
                 .foregroundStyle(.secondary)
             if let files = exportFiles {
                 ShareLink(items: files.all) {
-                    Label("Отправить PDF и CSV", systemImage: "square.and.arrow.up.on.square")
+                    Label(L("report.sendFiles"), systemImage: "square.and.arrow.up.on.square")
                         .font(.headline)
                         .frame(maxWidth: .infinity, minHeight: 48)
                 }
@@ -238,9 +238,9 @@ struct TripReportView: View {
                 HStack {
                     ShareLink(item: files.pdf) { Label("PDF", systemImage: "doc.richtext") }
                     Spacer()
-                    ShareLink(item: files.eventsCSV) { Label("События CSV", systemImage: "tablecells") }
+                    ShareLink(item: files.eventsCSV) { Label(L("report.eventsCSV"), systemImage: "tablecells") }
                     Spacer()
-                    ShareLink(item: files.pointsCSV) { Label("Трек CSV", systemImage: "point.3.connected.trianglepath.dotted") }
+                    ShareLink(item: files.pointsCSV) { Label(L("report.trackCSV"), systemImage: "point.3.connected.trianglepath.dotted") }
                 }
                 .font(.caption.weight(.semibold))
             } else {
@@ -249,7 +249,7 @@ struct TripReportView: View {
                 } label: {
                     HStack {
                         if isExporting { ProgressView() }
-                        Text(isExporting ? "Готовлю отчёт…" : "Подготовить PDF и CSV")
+                        Text(verbatim: isExporting ? L("report.preparing") : L("report.prepare"))
                             .font(.headline)
                     }
                     .frame(maxWidth: .infinity, minHeight: 48)
@@ -261,7 +261,7 @@ struct TripReportView: View {
                 Text(exportError).font(.caption).foregroundStyle(RVTheme.danger)
             }
             if !trip.cameraCSVFiles.isEmpty {
-                Text("CSV камеры этой поездки: \(trip.cameraCSVFiles.joined(separator: ", ")) — в Настройки → Эксперименты.")
+                Text(l: "report.cameraCSV", trip.cameraCSVFiles.joined(separator: ", "))
                     .font(.caption2)
                     .foregroundStyle(.secondary)
             }
@@ -276,7 +276,7 @@ struct TripReportView: View {
         do {
             exportFiles = try await TripReportExporter.export(trip)
         } catch {
-            exportError = "Не удалось подготовить файлы: \(error.localizedDescription)"
+            exportError = L("report.exportFailed", error.localizedDescription)
         }
     }
 }
@@ -298,7 +298,7 @@ struct TripEventRow: View {
                     Text(event.kind.localizedTitle)
                         .font(.subheadline.weight(.semibold))
                     if event.severity == .violation {
-                        RVBadge(text: "нарушение", color: RVTheme.danger)
+                        RVBadge(text: L("report.violation"), color: RVTheme.danger)
                     }
                     Spacer(minLength: 4)
                     Text(TripStyle.timeText(event.date))
@@ -324,7 +324,10 @@ struct TripEventRow: View {
 
     private var placeText: String {
         var parts: [String] = []
-        if let note = event.note, !note.isEmpty { parts.append(note) }
+        if let note = event.note, !note.isEmpty {
+            // Notes written by the GPS / motion detectors ("GPS", "GPS + <motion sensors>") are shown localized.
+            parts.append(note.hasPrefix("GPS +") ? L("trip.note.gpsSensors") : note)
+        }
         parts.append(TripStyle.coordinateText(event.coordinate))
         return parts.joined(separator: " · ")
     }
@@ -349,14 +352,14 @@ struct TripScoreRing: View {
                 Text("\(score)")
                     .font(.system(size: size * 0.34, weight: .heavy, design: .rounded))
                     .monospacedDigit()
-                Text("из 100")
+                Text(l: "report.of100")
                     .font(.system(size: size * 0.11, weight: .semibold))
                     .foregroundStyle(.secondary)
             }
         }
         .frame(width: size, height: size)
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel("Оценка \(score) из 100")
+        .accessibilityLabel(L("report.score.a11y", score))
     }
 }
 
@@ -399,18 +402,18 @@ struct TripStatsGrid: View {
 
     private var tiles: [Tile] {
         var result = [
-            Tile(title: "Расстояние", value: RVFormat.appDistance(stats.distanceMeters), symbol: "road.lanes", color: RVTheme.accent),
-            Tile(title: "Время в пути", value: RVFormat.appDuration(stats.duration), symbol: "clock", color: .purple),
-            Tile(title: "Средняя скорость", value: "\(RVFormat.speed(stats.averageSpeedKmh)) км/ч", symbol: "gauge.with.dots.needle.33percent", color: .teal),
-            Tile(title: "Макс. скорость", value: "\(RVFormat.speed(stats.maxSpeedKmh)) км/ч", symbol: "gauge.with.dots.needle.100percent", color: .orange),
-            Tile(title: "Выше лимита", value: RVFormat.appDuration(stats.timeOverLimit), symbol: "exclamationmark.triangle", color: RVTheme.danger),
-            Tile(title: "Событий на 100 км", value: RVFormat.decimal(stats.eventsPer100km, digits: 1), symbol: "chart.bar", color: RVTheme.caution),
+            Tile(title: L("routes.row.distance"), value: RVFormat.appDistance(stats.distanceMeters), symbol: "road.lanes", color: RVTheme.accent),
+            Tile(title: L("report.tile.duration"), value: RVFormat.appDuration(stats.duration), symbol: "clock", color: .purple),
+            Tile(title: L("routes.row.avgSpeed"), value: "\(RVFormat.speed(stats.averageSpeedKmh)) \(RVFormat.appKmh)", symbol: "gauge.with.dots.needle.33percent", color: .teal),
+            Tile(title: L("report.tile.maxSpeed"), value: "\(RVFormat.speed(stats.maxSpeedKmh)) \(RVFormat.appKmh)", symbol: "gauge.with.dots.needle.100percent", color: .orange),
+            Tile(title: L("report.tile.overLimit"), value: RVFormat.appDuration(stats.timeOverLimit), symbol: "exclamationmark.triangle", color: RVTheme.danger),
+            Tile(title: L("report.tile.eventsPer100"), value: RVFormat.appDecimal(stats.eventsPer100km, digits: 1), symbol: "chart.bar", color: RVTheme.caution),
         ]
         if let lead = stats.averageLeadDistanceMeters {
-            result.append(Tile(title: "≈ Дистанция, средняя", value: "≈ \(RVFormat.decimal(lead, digits: 0)) м",
+            result.append(Tile(title: L("report.tile.avgLead"), value: "≈ \(RVFormat.appDecimal(lead, digits: 0)) \(RVFormat.appMeters)",
                                symbol: "car.2", color: RVTheme.safe))
         }
-        result.append(Tile(title: "В движении", value: RVFormat.appDuration(stats.movingDuration), symbol: "car", color: .mint))
+        result.append(Tile(title: L("norms.moving"), value: RVFormat.appDuration(stats.movingDuration), symbol: "car", color: .mint))
         return result
     }
 }
@@ -425,7 +428,7 @@ struct TripReportSheet: View {
             TripReportView(trip: trip)
                 .toolbar {
                     ToolbarItem(placement: .topBarLeading) {
-                        Button("Готово") { dismiss() }
+                        Button(L("common.done")) { dismiss() }
                             .fontWeight(.semibold)
                     }
                 }

@@ -152,7 +152,7 @@ struct NavigationMapView: UIViewRepresentable {
             self.incident = incident
             self.coordinate = incident.coordinate.coordinate
             self.title = incident.kind.localizedName
-            self.subtitle = "Ваша отметка, \(RVFormat.clock(incident.date))"
+            self.subtitle = L("map.yourMarker", RVFormat.clock(incident.date))
         }
     }
 

@@ -276,7 +276,7 @@ final class RecognitionPipeline {
     func startRecording() {
         guard !isRecording else { return }
         let started = Date()
-        worker.startRecording(modelName: detectorStatus.modelName ?? "нет модели", startedAt: started)
+        worker.startRecording(modelName: detectorStatus.modelName ?? "no model", startedAt: started)
         recordingStartedAt = started
         recordingError = nil
     }

@@ -376,13 +376,15 @@ extension DrivingEventKind {
 
 /// CSV export of a trip (UTF-8, ',' separator, '.' decimals, ISO-8601 UTC timestamps).
 public enum TripExport {
-    public static func eventsCSV(_ trip: Trip) -> String {
+    /// `title` names an event kind in the CSV "title" column (default: the Russian `tripReportTitle`).
+    public static func eventsCSV(_ trip: Trip,
+                                 title: (DrivingEventKind) -> String = { $0.tripReportTitle }) -> String {
         var lines = ["timestamp,kind,title,severity,latitude,longitude,speed_kmh,value,limit,duration_s,camera_estimate,note"]
         for event in trip.sortedEvents {
             let fields: [String] = [
                 iso(event.date),
                 event.kind.rawValue,
-                escape(event.kind.tripReportTitle),
+                escape(title(event.kind)),
                 String(event.severity.rawValue),
                 number(event.coordinate?.latitude, digits: 6),
                 number(event.coordinate?.longitude, digits: 6),
