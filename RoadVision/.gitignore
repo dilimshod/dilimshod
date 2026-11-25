@@ -1,0 +1,16 @@
+# Swift / Xcode
+.build/
+.swiftpm/
+DerivedData/
+xcuserdata/
+*.xcuserstate
+*.moved-aside
+# Python tooling / model export
+__pycache__/
+*.pyc
+.venv/
+venv/
+runs/
+datasets/
+*.pt
+*.onnx

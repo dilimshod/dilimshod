@@ -1,0 +1,161 @@
+import Foundation
+import Observation
+
+/// User preferences, persisted in UserDefaults. API keys are NOT stored here (see KeychainStore).
+@Observable
+final class AppSettings {
+    @ObservationIgnored private let defaults: UserDefaults
+
+    // MARK: Recognition
+    /// Minimum detector confidence (model score, not accuracy).
+    var detectionConfidence: Double { didSet { defaults.set(detectionConfidence, forKey: Keys.detectionConfidence) } }
+    /// IoU threshold for non-maximum suppression (used only when the model has no built-in NMS).
+    var nmsIoUThreshold: Double { didSet { defaults.set(nmsIoUThreshold, forKey: Keys.nmsIoUThreshold) } }
+    var makeRecognitionEnabled: Bool { didSet { defaults.set(makeRecognitionEnabled, forKey: Keys.makeRecognitionEnabled) } }
+    var showDistanceEstimates: Bool { didSet { defaults.set(showDistanceEstimates, forKey: Keys.showDistanceEstimates) } }
+    var showSpeedEstimates: Bool { didSet { defaults.set(showSpeedEstimates, forKey: Keys.showSpeedEstimates) } }
+    var trackPedestrians: Bool { didSet { defaults.set(trackPedestrians, forKey: Keys.trackPedestrians) } }
+    var detectTrafficLights: Bool { didSet { defaults.set(detectTrafficLights, forKey: Keys.detectTrafficLights) } }
+    /// Save per-frame detections and unique-vehicle summary to CSV for research.
+    var recordExperimentLog: Bool { didSet { defaults.set(recordExperimentLog, forKey: Keys.recordExperimentLog) } }
+
+    // MARK: Navigation
+    var voiceGuidanceEnabled: Bool { didSet { defaults.set(voiceGuidanceEnabled, forKey: Keys.voiceGuidanceEnabled) } }
+    var avoidTolls: Bool { didSet { defaults.set(avoidTolls, forKey: Keys.avoidTolls) } }
+    var avoidHighways: Bool { didSet { defaults.set(avoidHighways, forKey: Keys.avoidHighways) } }
+    /// Keep a small live camera window (with recognition) on top of the navigator.
+    var showCameraPiP: Bool { didSet { defaults.set(showCameraPiP, forKey: Keys.showCameraPiP) } }
+    var showTrafficOnMap: Bool { didSet { defaults.set(showTrafficOnMap, forKey: Keys.showTrafficOnMap) } }
+    /// Load road attributes (lanes, speed limits, signals, hazards) from OpenStreetMap via Overpass API.
+    var roadDataEnabled: Bool { didSet { defaults.set(roadDataEnabled, forKey: Keys.roadDataEnabled) } }
+    var overpassEndpoint: String { didSet { defaults.set(overpassEndpoint, forKey: Keys.overpassEndpoint) } }
+    var speedWarningEnabled: Bool { didSet { defaults.set(speedWarningEnabled, forKey: Keys.speedWarningEnabled) } }
+    /// km/h above the limit before the speed warning fires.
+    var speedWarningTolerance: Double { didSet { defaults.set(speedWarningTolerance, forKey: Keys.speedWarningTolerance) } }
+    /// Lifetime of user-reported incidents, minutes.
+    var incidentLifetimeMinutes: Double { didSet { defaults.set(incidentLifetimeMinutes, forKey: Keys.incidentLifetimeMinutes) } }
+    /// Routing engine: "auto" (Apple Maps, falls back to Valhalla/OSM on error), "apple" or "valhalla".
+    var routingEngine: String { didSet { defaults.set(routingEngine, forKey: Keys.routingEngine) } }
+    /// Valhalla server base URL (public FOSSGIS instance by default — light use only).
+    var valhallaEndpoint: String { didSet { defaults.set(valhallaEndpoint, forKey: Keys.valhallaEndpoint) } }
+    /// Load speed limits / lane counts / signals along the route from Valhalla trace_attributes.
+    var routeAttributesEnabled: Bool { didSet { defaults.set(routeAttributesEnabled, forKey: Keys.routeAttributesEnabled) } }
+    /// Optional raster traffic tile URL template with {z}/{x}/{y} (e.g. a provider you have a key for). Empty = off.
+    var trafficTileTemplate: String { didSet { defaults.set(trafficTileTemplate, forKey: Keys.trafficTileTemplate) } }
+
+    // MARK: Traffic signals (model assumptions when no learned data exists)
+    var signalCycleSeconds: Double { didSet { defaults.set(signalCycleSeconds, forKey: Keys.signalCycleSeconds) } }
+    var signalGreenRatio: Double { didSet { defaults.set(signalGreenRatio, forKey: Keys.signalGreenRatio) } }
+    var learnSignalTimings: Bool { didSet { defaults.set(learnSignalTimings, forKey: Keys.learnSignalTimings) } }
+
+    // MARK: AI assistant
+    /// Chat provider preset id (see ChatPresets) or "auto".
+    var aiProviderID: String { didSet { defaults.set(aiProviderID, forKey: Keys.aiProviderID) } }
+    /// Model override; empty = preset default.
+    var aiModel: String { didSet { defaults.set(aiModel, forKey: Keys.aiModel) } }
+    /// Base URL override for OpenAI-compatible providers (e.g. Ollama on a Mac in the same Wi-Fi).
+    var aiCustomBaseURL: String { didSet { defaults.set(aiCustomBaseURL, forKey: Keys.aiCustomBaseURL) } }
+    /// Speech recognition / synthesis locale, e.g. "ru-RU", "uz-UZ", "en-US".
+    var speechLocaleIdentifier: String { didSet { defaults.set(speechLocaleIdentifier, forKey: Keys.speechLocaleIdentifier) } }
+    var speakAssistantReplies: Bool { didSet { defaults.set(speakAssistantReplies, forKey: Keys.speakAssistantReplies) } }
+    var assistantIncludeDrivingContext: Bool { didSet { defaults.set(assistantIncludeDrivingContext, forKey: Keys.assistantIncludeDrivingContext) } }
+
+    init(defaults: UserDefaults = .standard) {
+        self.defaults = defaults
+        func double(_ key: String, _ fallback: Double) -> Double {
+            defaults.object(forKey: key) == nil ? fallback : defaults.double(forKey: key)
+        }
+        func bool(_ key: String, _ fallback: Bool) -> Bool {
+            defaults.object(forKey: key) == nil ? fallback : defaults.bool(forKey: key)
+        }
+        func string(_ key: String, _ fallback: String) -> String {
+            defaults.string(forKey: key) ?? fallback
+        }
+        detectionConfidence = double(Keys.detectionConfidence, 0.35)
+        nmsIoUThreshold = double(Keys.nmsIoUThreshold, 0.45)
+        makeRecognitionEnabled = bool(Keys.makeRecognitionEnabled, true)
+        showDistanceEstimates = bool(Keys.showDistanceEstimates, true)
+        showSpeedEstimates = bool(Keys.showSpeedEstimates, true)
+        trackPedestrians = bool(Keys.trackPedestrians, true)
+        detectTrafficLights = bool(Keys.detectTrafficLights, true)
+        recordExperimentLog = bool(Keys.recordExperimentLog, false)
+
+        voiceGuidanceEnabled = bool(Keys.voiceGuidanceEnabled, true)
+        avoidTolls = bool(Keys.avoidTolls, false)
+        avoidHighways = bool(Keys.avoidHighways, false)
+        showCameraPiP = bool(Keys.showCameraPiP, true)
+        showTrafficOnMap = bool(Keys.showTrafficOnMap, true)
+        roadDataEnabled = bool(Keys.roadDataEnabled, true)
+        overpassEndpoint = string(Keys.overpassEndpoint, AppSettings.defaultOverpassEndpoint)
+        speedWarningEnabled = bool(Keys.speedWarningEnabled, true)
+        speedWarningTolerance = double(Keys.speedWarningTolerance, 5)
+        incidentLifetimeMinutes = double(Keys.incidentLifetimeMinutes, 120)
+        routingEngine = string(Keys.routingEngine, "auto")
+        valhallaEndpoint = string(Keys.valhallaEndpoint, Valhalla.defaultEndpoint)
+        routeAttributesEnabled = bool(Keys.routeAttributesEnabled, true)
+        trafficTileTemplate = string(Keys.trafficTileTemplate, "")
+
+        signalCycleSeconds = double(Keys.signalCycleSeconds, 90)
+        signalGreenRatio = double(Keys.signalGreenRatio, 0.45)
+        learnSignalTimings = bool(Keys.learnSignalTimings, true)
+
+        aiProviderID = string(Keys.aiProviderID, "auto")
+        aiModel = string(Keys.aiModel, "")
+        aiCustomBaseURL = string(Keys.aiCustomBaseURL, "")
+        speechLocaleIdentifier = string(Keys.speechLocaleIdentifier, "ru-RU")
+        speakAssistantReplies = bool(Keys.speakAssistantReplies, true)
+        assistantIncludeDrivingContext = bool(Keys.assistantIncludeDrivingContext, true)
+    }
+
+    static let defaultOverpassEndpoint = "https://overpass-api.de/api/interpreter"
+
+    /// Public Overpass instances that can be chosen in Settings (and used as fallbacks).
+    static let overpassEndpoints = [
+        "https://overpass-api.de/api/interpreter",
+        "https://maps.mail.ru/osm/tools/overpass/api/interpreter",
+        "https://overpass.private.coffee/api/interpreter",
+    ]
+
+    var signalAssumptions: SignalTimingAssumptions {
+        SignalTimingAssumptions(cycleSeconds: signalCycleSeconds, greenRatio: signalGreenRatio)
+    }
+
+    /// Language code ("ru", "uz", "en") derived from the speech locale.
+    var languageCode: String {
+        String(speechLocaleIdentifier.prefix(while: { $0 != "-" && $0 != "_" })).lowercased()
+    }
+
+    private enum Keys {
+        static let detectionConfidence = "rv.detectionConfidence"
+        static let nmsIoUThreshold = "rv.nmsIoUThreshold"
+        static let makeRecognitionEnabled = "rv.makeRecognitionEnabled"
+        static let showDistanceEstimates = "rv.showDistanceEstimates"
+        static let showSpeedEstimates = "rv.showSpeedEstimates"
+        static let trackPedestrians = "rv.trackPedestrians"
+        static let detectTrafficLights = "rv.detectTrafficLights"
+        static let recordExperimentLog = "rv.recordExperimentLog"
+        static let voiceGuidanceEnabled = "rv.voiceGuidanceEnabled"
+        static let avoidTolls = "rv.avoidTolls"
+        static let avoidHighways = "rv.avoidHighways"
+        static let showCameraPiP = "rv.showCameraPiP"
+        static let showTrafficOnMap = "rv.showTrafficOnMap"
+        static let roadDataEnabled = "rv.roadDataEnabled"
+        static let overpassEndpoint = "rv.overpassEndpoint"
+        static let speedWarningEnabled = "rv.speedWarningEnabled"
+        static let speedWarningTolerance = "rv.speedWarningTolerance"
+        static let incidentLifetimeMinutes = "rv.incidentLifetimeMinutes"
+        static let routingEngine = "rv.routingEngine"
+        static let valhallaEndpoint = "rv.valhallaEndpoint"
+        static let routeAttributesEnabled = "rv.routeAttributesEnabled"
+        static let trafficTileTemplate = "rv.trafficTileTemplate"
+        static let signalCycleSeconds = "rv.signalCycleSeconds"
+        static let signalGreenRatio = "rv.signalGreenRatio"
+        static let learnSignalTimings = "rv.learnSignalTimings"
+        static let aiProviderID = "rv.aiProviderID"
+        static let aiModel = "rv.aiModel"
+        static let aiCustomBaseURL = "rv.aiCustomBaseURL"
+        static let speechLocaleIdentifier = "rv.speechLocaleIdentifier"
+        static let speakAssistantReplies = "rv.speakAssistantReplies"
+        static let assistantIncludeDrivingContext = "rv.assistantIncludeDrivingContext"
+    }
+}
