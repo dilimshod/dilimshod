@@ -54,7 +54,7 @@ struct RouteOptionsView: View {
                 .buttonBorderShape(.roundedRectangle(radius: RVTheme.Radius.control))
 
                 Button {
-                    nav.startNavigation()
+                    app.startDrive()
                 } label: {
                     Label("Поехали", systemImage: "location.north.line.fill")
                         .font(.title3.weight(.bold))

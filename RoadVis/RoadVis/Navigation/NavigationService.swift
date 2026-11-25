@@ -105,7 +105,13 @@ final class NavigationService {
 
     // MARK: Published state (contract)
 
-    private(set) var state: State = .idle
+    private(set) var state: State = .idle {
+        didSet {
+            if state != oldValue { onStateChange?(oldValue, state) }
+        }
+    }
+    /// Called on every state change (old, new) — the app uses it to stop trip recording on arrival / cancel.
+    @ObservationIgnored var onStateChange: ((State, State) -> Void)?
     private(set) var destination: MKMapItem?
     /// Name of the destination, nil when there is none.
     var destinationName: String? { destination.map { PlaceSearchService.displayName(for: $0) } }

@@ -16,6 +16,10 @@ enum AppMode: String {
 final class AppState {
     var mode: AppMode = .camera
     var showSettings = false
+    /// Trip report shown over everything (after a recording stops, or opened from the history).
+    var presentedTrip: Trip?
+    /// Trip history sheet (navigator idle screen).
+    var showTripHistory = false
 
     let settings: AppSettings
     let location: LocationService
@@ -26,6 +30,8 @@ final class AppState {
     let incidents: IncidentStore
     let navigation: NavigationService
     let recognition: RecognitionPipeline
+    let trips: TripStore
+    let tripRecorder: TripRecorder
 
     @ObservationIgnored private var started = false
     /// Last app-wide lifecycle state handled by `handleScenePhase` (dedupes per-scene / repeated notifications).
@@ -42,6 +48,9 @@ final class AppState {
         let navigation = NavigationService(location: location, speech: speech, roadInfo: roadInfo,
                                            signals: signals, incidents: incidents, settings: settings)
         let recognition = RecognitionPipeline(location: location, settings: settings, signals: signals)
+        let trips = TripStore()
+        let tripRecorder = TripRecorder(location: location, roadInfo: roadInfo, navigation: navigation,
+                                        recognition: recognition, settings: settings, store: trips)
 
         self.settings = settings
         self.location = location
@@ -52,9 +61,14 @@ final class AppState {
         self.incidents = incidents
         self.navigation = navigation
         self.recognition = recognition
+        self.trips = trips
+        self.tripRecorder = tripRecorder
 
         recognition.weatherProvider = { [weak weather] in weather?.current }
         recognition.speech = speech
+        navigation.onStateChange = { [weak self] old, new in
+            self?.navigationStateChanged(from: old, to: new)
+        }
     }
 
     /// Called once when the root view appears.
@@ -66,6 +80,7 @@ final class AppState {
         roadInfo.start()
         weather.start()
         signals.start()
+        trips.load()
         updateCameraForMode()
         // The first didBecomeActive notification can fire before the root view subscribes.
         if UIApplication.shared.applicationState != .background {
@@ -110,14 +125,55 @@ final class AppState {
             UIApplication.shared.isIdleTimerDisabled = false
             recognition.stop()
             signals.persistNow()
-            // Keep GPS only while actively navigating (background location mode).
-            if navigation.state != .navigating {
+            // Keep GPS only while actively navigating or recording a trip (background location mode).
+            if navigation.state != .navigating && !tripRecorder.isRecording {
                 location.stop()
             }
         case .inactive:
             break
         @unknown default:
             break
+        }
+    }
+
+    // MARK: - Drive & trips
+
+    /// «Поехали»: starts guidance on the selected route, collapses the navigator to the camera screen (guidance
+    /// continues by voice + the mini banner) and, when «Автозапись поездок» is on, starts a trip recording.
+    func startDrive() {
+        navigation.startNavigation()
+        guard navigation.state == .navigating else { return }
+        if settings.tripAutoRecord, !tripRecorder.isRecording {
+            tripRecorder.start(withNavigation: true)
+        }
+        switchTo(.camera)
+    }
+
+    /// Manual trip recording (Settings, trip history, navigator).
+    func startTripRecording() {
+        tripRecorder.start(withNavigation: navigation.state == .navigating)
+    }
+
+    /// Stops the recording and opens its report (nothing is shown when the trip had no track).
+    func stopTripRecording(arrived: Bool = false) {
+        Task {
+            guard let trip = await tripRecorder.stop(arrived: arrived) else { return }
+            showSettings = false
+            showTripHistory = false
+            presentedTrip = trip
+        }
+    }
+
+    /// Arrival or cancelled guidance ends a recording that «Поехали» started; a manual one keeps running.
+    private func navigationStateChanged(from old: NavigationService.State, to new: NavigationService.State) {
+        guard tripRecorder.isRecording else { return }
+        switch new {
+        case .arrived where tripRecorder.startedWithNavigation:
+            stopTripRecording(arrived: true)
+        case .idle where old == .navigating && tripRecorder.startedWithNavigation:
+            stopTripRecording(arrived: false)
+        default:
+            tripRecorder.keepBackgroundUpdatesIfNeeded()
         }
     }
 }

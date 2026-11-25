@@ -65,6 +65,20 @@ final class AppSettings {
     var signalGreenRatio: Double { didSet { defaults.set(signalGreenRatio, forKey: Keys.signalGreenRatio) } }
     var learnSignalTimings: Bool { didSet { defaults.set(learnSignalTimings, forKey: Keys.learnSignalTimings) } }
 
+    // MARK: Trips (recording + report)
+    /// Start a trip recording automatically when «Поехали» is pressed.
+    var tripAutoRecord: Bool { didSet { defaults.set(tripAutoRecord, forKey: Keys.tripAutoRecord) } }
+    /// Also record the camera research CSV (`RecognitionPipeline.startRecording()`) during a trip.
+    var tripRecordCameraCSV: Bool { didSet { defaults.set(tripRecordCameraCSV, forKey: Keys.tripRecordCameraCSV) } }
+    /// km/h above the limit that still counts as within the limit (trip report).
+    var tripSpeedToleranceKmh: Double { didSet { defaults.set(tripSpeedToleranceKmh, forKey: Keys.tripSpeedToleranceKmh) } }
+    /// Minimum duration of a speeding episode, seconds (≥ 5).
+    var tripSpeedingMinSeconds: Double { didSet { defaults.set(tripSpeedingMinSeconds, forKey: Keys.tripSpeedingMinSeconds) } }
+    /// Harsh braking threshold, m/s² (stored as a positive deceleration).
+    var tripHarshBrakingMps2: Double { didSet { defaults.set(tripHarshBrakingMps2, forKey: Keys.tripHarshBrakingMps2) } }
+    /// Harsh acceleration threshold, m/s².
+    var tripHarshAccelerationMps2: Double { didSet { defaults.set(tripHarshAccelerationMps2, forKey: Keys.tripHarshAccelerationMps2) } }
+
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
         func double(_ key: String, _ fallback: Double) -> Double {
@@ -111,6 +125,13 @@ final class AppSettings {
         signalCycleSeconds = double(Keys.signalCycleSeconds, 90)
         signalGreenRatio = double(Keys.signalGreenRatio, 0.45)
         learnSignalTimings = bool(Keys.learnSignalTimings, true)
+
+        tripAutoRecord = bool(Keys.tripAutoRecord, true)
+        tripRecordCameraCSV = bool(Keys.tripRecordCameraCSV, false)
+        tripSpeedToleranceKmh = double(Keys.tripSpeedToleranceKmh, 5)
+        tripSpeedingMinSeconds = max(5, double(Keys.tripSpeedingMinSeconds, 5))
+        tripHarshBrakingMps2 = double(Keys.tripHarshBrakingMps2, 3.5)
+        tripHarshAccelerationMps2 = double(Keys.tripHarshAccelerationMps2, 3.0)
     }
 
     static let defaultOverpassEndpoint = "https://overpass-api.de/api/interpreter"
@@ -127,6 +148,12 @@ final class AppSettings {
         FollowingDistancePolicy(timeGapDry: followingTimeGapDry, timeGapWet: followingTimeGapDry * 2,
                                 timeGapSnow: followingTimeGapDry * 3, timeGapIce: followingTimeGapDry * 5,
                                 stoppedGapMeters: stoppedGapMeters, reactionTimeSeconds: reactionTimeSeconds)
+    }
+
+    /// Thresholds for trip events (stored with every trip).
+    var tripThresholds: TripThresholds {
+        TripThresholds(speedToleranceKmh: tripSpeedToleranceKmh, speedingMinSeconds: tripSpeedingMinSeconds,
+                       harshBrakingMps2: -tripHarshBrakingMps2, harshAccelerationMps2: tripHarshAccelerationMps2)
     }
 
     var signalAssumptions: SignalTimingAssumptions {
@@ -167,5 +194,11 @@ final class AppSettings {
         static let signalCycleSeconds = "rv.signalCycleSeconds"
         static let signalGreenRatio = "rv.signalGreenRatio"
         static let learnSignalTimings = "rv.learnSignalTimings"
+        static let tripAutoRecord = "rv.tripAutoRecord"
+        static let tripRecordCameraCSV = "rv.tripRecordCameraCSV"
+        static let tripSpeedToleranceKmh = "rv.tripSpeedToleranceKmh"
+        static let tripSpeedingMinSeconds = "rv.tripSpeedingMinSeconds"
+        static let tripHarshBrakingMps2 = "rv.tripHarshBrakingMps2"
+        static let tripHarshAccelerationMps2 = "rv.tripHarshAccelerationMps2"
     }
 }
