@@ -119,6 +119,12 @@ final class TrafficSignalService {
         flushPendingSave()
     }
 
+    /// Writes pending learned data immediately (called when the app goes to the background,
+    /// so the last stops are not lost if the system terminates the app).
+    func persistNow() {
+        flushPendingSave()
+    }
+
     // MARK: Route
 
     /// Sets the signals of the active route (pass all route features; only `.trafficSignals` are kept).

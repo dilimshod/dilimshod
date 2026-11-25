@@ -107,6 +107,7 @@ final class AppState {
         case .background:
             UIApplication.shared.isIdleTimerDisabled = false
             recognition.stop()
+            signals.persistNow()
             // Keep GPS only while actively navigating (background location mode).
             if navigation.state != .navigating {
                 location.stop()
