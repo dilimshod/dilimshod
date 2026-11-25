@@ -124,7 +124,7 @@ final class RecognitionPipeline {
     @ObservationIgnored private var generation = 0
     @ObservationIgnored private var lastRecordSetting: Bool
     @ObservationIgnored private let warnings = DistanceWarningController()
-    @ObservationIgnored private let assist = DriverAssistSettings.shared
+    @ObservationIgnored private let assist: DriverAssistSettings
     @ObservationIgnored private var laneDeparture = LaneDepartureDetector()
     @ObservationIgnored private let eventMonitor = CameraDrivingEventMonitor()
     @ObservationIgnored private var lastLaneTimestamp: TimeInterval?
@@ -145,6 +145,7 @@ final class RecognitionPipeline {
         self.location = location
         self.settings = settings
         self.signals = signals
+        self.assist = DriverAssistSettings.shared
         let camera = CameraService()
         self.camera = camera
         self.worker = RecognitionWorker(camera: camera)

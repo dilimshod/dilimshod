@@ -1,13 +1,19 @@
 import SwiftUI
 
-/// Compact next-maneuver banner for the camera screen while guidance runs (voice continues): maneuver arrow,
-/// distance, instruction, remaining distance / arrival time; tap → back to the navigator. While a trip is being
-/// recorded a small red dot with the elapsed time and the number of events is shown (also without navigation,
-/// then with a stop button). Self-contained: reads `AppState`, renders nothing when there is nothing to show.
+/// Minimal next-maneuver banner for the camera screen while guidance runs (voice continues). Designed for the
+/// TOP-LEFT corner, directly below the speedometer row: white SF Symbol turn arrow + white distance ("350 м"),
+/// an optional small street / instruction line, and a thin white countdown bar for the last 300 m. No heavy plate —
+/// only a very light material and a soft shadow; ≈ 48 pt tall. Tap → back to the navigator.
+/// While a trip is recorded a tiny red dot with the elapsed time is shown (without navigation: a small chip with
+/// a stop button). Self-contained: reads `AppState`, renders nothing when there is nothing to show.
 ///
-/// Embedding (RecognitionView HUD, under the banners): `NavigationMiniBanner()`
+/// Embedding (RecognitionView HUD, leading column right under the `SpeedHUD()` / `RoadLine` row):
+/// `NavigationMiniBanner()`
 struct NavigationMiniBanner: View {
     @Environment(AppState.self) private var app
+
+    /// Countdown bar starts at this distance before the maneuver, metres.
+    static let countdownDistance: Double = 300
 
     var body: some View {
         let nav = app.navigation
@@ -16,11 +22,10 @@ struct NavigationMiniBanner: View {
             if nav.state == .navigating || nav.state == .arrived {
                 guidance(nav, recorder: recorder)
             } else if recorder.isRecording || recorder.isFinishing {
-                recordingChip(recorder, showsStop: true)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                recordingChip(recorder)
             }
         }
-        .frame(maxWidth: 460)
+        .frame(maxWidth: 260, alignment: .leading)
         .animation(RVTheme.snappy, value: nav.state)
         .animation(RVTheme.snappy, value: recorder.isRecording)
     }
@@ -31,25 +36,44 @@ struct NavigationMiniBanner: View {
         Button {
             app.switchTo(.navigator)
         } label: {
-            HStack(spacing: 10) {
-                Image(systemName: symbolName(nav))
-                    .font(.system(size: 22, weight: .bold))
-                    .foregroundStyle(nav.state == .arrived ? RVTheme.safe : .white)
-                    .frame(width: 40, height: 40)
-                    .background(.white.opacity(0.14), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-                VStack(alignment: .leading, spacing: 1) {
-                    primaryLine(nav)
-                    secondaryLine(nav, recorder: recorder)
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(alignment: .center, spacing: 8) {
+                    Image(systemName: symbolName(nav))
+                        .font(.system(size: 26, weight: .bold))
+                        .frame(width: 32, height: 32)
+                    VStack(alignment: .leading, spacing: 0) {
+                        primaryText(nav)
+                        if let detail = detailText(nav) {
+                            Text(detail)
+                                .font(RVTheme.font(11, weight: .medium))
+                                .opacity(0.85)
+                                .lineLimit(1)
+                        }
+                    }
+                    if recorder.isRecording || recorder.isFinishing {
+                        recordingDot(recorder)
+                    }
                 }
-                Spacer(minLength: 0)
-                Image(systemName: "map.fill")
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(.white.opacity(0.7))
+                if let fraction = countdownFraction(nav) {
+                    GeometryReader { proxy in
+                        ZStack(alignment: .leading) {
+                            Capsule().fill(Color.white.opacity(0.25))
+                            Capsule().fill(Color.white)
+                                .frame(width: proxy.size.width * fraction)
+                        }
+                    }
+                    .frame(height: 3)
+                    .animation(.linear(duration: 0.4), value: fraction)
+                }
             }
+            .foregroundStyle(.white)
             .padding(.horizontal, 10)
             .padding(.vertical, 6)
             .frame(minHeight: RVTheme.HUD.hit)
-            .rvGlass(cornerRadius: RVTheme.Radius.panel, tint: nav.progress?.isOffRoute == true ? RVTheme.caution : nil)
+            .background(.ultraThinMaterial.opacity(0.35),
+                        in: RoundedRectangle(cornerRadius: RVTheme.Radius.control, style: .continuous))
+            .shadow(color: RVTheme.textShadow, radius: 3, x: 0, y: 1)
+            .fixedSize(horizontal: true, vertical: false)
             .contentShape(Rectangle())
         }
         .buttonStyle(RVPressableButtonStyle())
@@ -64,56 +88,58 @@ struct NavigationMiniBanner: View {
     }
 
     @ViewBuilder
-    private func primaryLine(_ nav: NavigationService) -> some View {
+    private func primaryText(_ nav: NavigationService) -> some View {
         if nav.state == .arrived {
             Text("Вы прибыли")
+                .font(RVTheme.font(17, weight: .bold))
+        } else if nav.isRecalculating || nav.progress?.isOffRoute == true {
+            Text("Перестраиваю…")
                 .font(RVTheme.font(16, weight: .bold))
-        } else if nav.isRecalculating {
-            Text("Перестраиваю маршрут…")
-                .font(RVTheme.font(15, weight: .bold))
-        } else if let progress = nav.progress, progress.isOffRoute {
-            Text("Вы съехали с маршрута")
-                .font(RVTheme.font(15, weight: .bold))
-        } else if let progress = nav.progress {
-            HStack(alignment: .firstTextBaseline, spacing: 6) {
-                if let distance = progress.distanceToNextManeuver {
-                    Text(RVFormat.distance(distance))
-                        .rvNumeric(18, weight: .heavy)
-                        .contentTransition(.numericText())
-                }
-                Text(progress.nextInstruction ?? "Продолжайте движение")
-                    .font(RVTheme.font(14, weight: .semibold))
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.8)
-            }
+        } else if let distance = nav.progress?.distanceToNextManeuver {
+            Text(RVFormat.distance(distance))
+                .rvNumeric(20, weight: .heavy)
+                .contentTransition(.numericText())
         } else {
             Text("Ожидаю GPS…")
                 .font(RVTheme.font(15, weight: .bold))
         }
     }
 
-    @ViewBuilder
-    private func secondaryLine(_ nav: NavigationService, recorder: TripRecorder) -> some View {
-        HStack(spacing: 6) {
-            if nav.state == .navigating, let progress = nav.progress {
-                Text("\(RVFormat.distance(progress.remainingDistance)) · прибытие \(RVFormat.clock(Date().addingTimeInterval(progress.remainingTimeSeconds)))")
-                    .monospacedDigit()
-                    .lineLimit(1)
-            } else if let name = nav.destinationName {
-                Text(name).lineLimit(1)
-            }
-            if recorder.isRecording || recorder.isFinishing {
-                recordingChip(recorder, showsStop: false)
-            }
-        }
-        .font(RVTheme.font(11, weight: .medium))
-        .foregroundStyle(.white.opacity(0.8))
+    /// Small second line: the instruction (usually contains the street name).
+    private func detailText(_ nav: NavigationService) -> String? {
+        if nav.state == .arrived { return nav.destinationName }
+        guard let progress = nav.progress, !progress.isOffRoute, !nav.isRecalculating,
+              let instruction = progress.nextInstruction, !instruction.isEmpty else { return nil }
+        return instruction
+    }
+
+    /// 0…1 over the last 300 m before the maneuver; nil outside that window.
+    private func countdownFraction(_ nav: NavigationService) -> Double? {
+        guard nav.state == .navigating, let progress = nav.progress, !progress.isOffRoute,
+              let distance = progress.distanceToNextManeuver, distance <= Self.countdownDistance else { return nil }
+        return min(1, max(0, 1 - distance / Self.countdownDistance))
     }
 
     // MARK: - Recording
 
-    @ViewBuilder
-    private func recordingChip(_ recorder: TripRecorder, showsStop: Bool) -> some View {
+    private func recordingDot(_ recorder: TripRecorder) -> some View {
+        HStack(spacing: 4) {
+            Circle()
+                .fill(RVTheme.recording)
+                .frame(width: 7, height: 7)
+                .rvPulse(recorder.isRecording, minOpacity: 0.35, period: 1.4)
+            if let started = recorder.startedAt {
+                Text(started, style: .timer)
+                    .font(RVTheme.font(10, weight: .semibold))
+                    .monospacedDigit()
+                    .opacity(0.85)
+            }
+        }
+        .padding(.leading, 4)
+        .accessibilityLabel("Идёт запись поездки")
+    }
+
+    private func recordingChip(_ recorder: TripRecorder) -> some View {
         HStack(spacing: 5) {
             Circle()
                 .fill(RVTheme.recording)
@@ -129,13 +155,13 @@ struct NavigationMiniBanner: View {
                         .foregroundStyle(RVTheme.caution)
                 }
             }
-            if showsStop && recorder.isRecording {
+            if recorder.isRecording {
                 Button {
                     app.stopTripRecording()
                 } label: {
                     Image(systemName: "stop.fill")
                         .font(.system(size: 11, weight: .bold))
-                        .frame(width: 30, height: 30)
+                        .frame(width: 32, height: 32)
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
@@ -144,12 +170,12 @@ struct NavigationMiniBanner: View {
         }
         .font(RVTheme.font(11, weight: .semibold))
         .foregroundStyle(.white)
-        .padding(.leading, showsStop ? 10 : 0)
-        .padding(.trailing, showsStop ? 2 : 0)
-        .frame(minHeight: showsStop ? 32 : nil)
-        .modifier(RecordingChipBackground(isStandalone: showsStop))
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel("Идёт запись поездки")
+        .padding(.leading, 10)
+        .padding(.trailing, 2)
+        .frame(minHeight: 32)
+        .background(.ultraThinMaterial.opacity(0.35), in: Capsule(style: .continuous))
+        .shadow(color: RVTheme.textShadow, radius: 3, x: 0, y: 1)
+        .fixedSize()
     }
 
     private func accessibilityText(_ nav: NavigationService) -> String {
@@ -157,19 +183,5 @@ struct NavigationMiniBanner: View {
         guard let progress = nav.progress else { return "Навигация" }
         let distance = progress.distanceToNextManeuver.map { RVFormat.distance($0) + ", " } ?? ""
         return distance + (progress.nextInstruction ?? "Продолжайте движение")
-    }
-}
-
-/// Glass capsule only for the stand-alone chip (inside the banner the chip sits on the banner's glass).
-private struct RecordingChipBackground: ViewModifier {
-    let isStandalone: Bool
-
-    @ViewBuilder
-    func body(content: Content) -> some View {
-        if isStandalone {
-            content.rvGlassCapsule(tint: RVTheme.recording, shadow: false)
-        } else {
-            content
-        }
     }
 }

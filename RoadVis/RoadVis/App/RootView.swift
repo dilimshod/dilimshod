@@ -24,6 +24,10 @@ struct RootView: View {
         .sheet(isPresented: $app.showTripHistory) {
             TripHistorySheet()
         }
+        .sheet(isPresented: $app.showAbout) {
+            AboutHubView()
+                .preferredColorScheme(.dark)
+        }
         .sheet(item: $app.presentedTrip) { trip in
             TripReportSheet(trip: trip)
         }

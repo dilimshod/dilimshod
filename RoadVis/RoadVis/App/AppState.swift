@@ -20,6 +20,8 @@ final class AppState {
     var presentedTrip: Trip?
     /// Trip history sheet (navigator idle screen).
     var showTripHistory = false
+    /// About / offer / developers sheet (navigator idle screen).
+    var showAbout = false
 
     let settings: AppSettings
     let location: LocationService
@@ -66,6 +68,9 @@ final class AppState {
 
         recognition.weatherProvider = { [weak weather] in weather?.current }
         recognition.speech = speech
+        recognition.onDrivingEvent = { [weak tripRecorder] event in
+            tripRecorder?.ingest(event)
+        }
         navigation.onStateChange = { [weak self] old, new in
             self?.navigationStateChanged(from: old, to: new)
         }

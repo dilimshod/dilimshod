@@ -999,7 +999,11 @@ final class NavigationService {
         let stepIndex = current.nextStepIndex ?? (tracker?.steps.count ?? 0)
         if let prompt = voiceScheduler.prompt(stepIndex: stepIndex, distance: distance,
                                               instruction: instruction, speedKmh: speedKmh) {
-            speech.speak(prompt, priority: distance <= 150 ? .high : .normal)
+            // The closest threshold gets the distance back plus a caution (and slow-down) phrase.
+            let text = distance <= NavigationPhrases.closeDistance
+                ? NavigationPhrases.closeManeuver(instruction: instruction, distance: distance, speedKmh: speedKmh)
+                : prompt
+            speech.speak(text, priority: distance <= 150 ? .high : .normal)
         }
     }
 

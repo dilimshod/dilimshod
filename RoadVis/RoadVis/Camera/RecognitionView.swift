@@ -165,17 +165,16 @@ struct RecognitionView: View {
         }
     }
 
-    /// Speaks "Превышение скорости" at most once per 30 s while the limit (+ tolerance) is exceeded.
+    /// Speaks the over-limit reminder (app language) at most once per 30 s while the limit (+ tolerance) is exceeded.
     private func checkSpeedWarning(_ speed: Double?) {
         let settings = app.settings
-        guard settings.speedWarningEnabled,
-              SpeedometerView.isOverLimit(speedKmh: speed,
-                                          limitKmh: app.roadInfo.currentRoad?.speedLimit?.kmh,
+        guard settings.speedWarningEnabled, let limit = app.roadInfo.currentRoad?.speedLimit?.kmh,
+              SpeedometerView.isOverLimit(speedKmh: speed, limitKmh: limit,
                                           tolerance: settings.speedWarningTolerance) else { return }
         let now = Date()
         if let lastSpeedWarning, now.timeIntervalSince(lastSpeedWarning) < 30 { return }
         lastSpeedWarning = now
-        app.speech.speak("Превышение скорости", priority: .low)
+        app.speech.speak(coachText(.overSpeedLimit(limitKmh: limit), language: currentCoachLanguage()), priority: .low)
     }
 }
 
@@ -198,6 +197,9 @@ private struct LiveDetectionLayer: View {
             if following && settings.showEgoCorridor {
                 EgoCorridorOverlay(corridor: pipeline.egoCorridor, imageSize: pipeline.frameSize,
                                    tint: status == .unknown ? .white : RVTheme.statusColor(status))
+            }
+            if DriverAssistSettings.shared.showLaneOverlay, let lane = pipeline.laneEstimate {
+                LaneOverlay(estimate: lane, imageSize: pipeline.frameSize, departureSide: pipeline.laneDepartureSide)
             }
             DetectionOverlayView(tracks: pipeline.tracks, imageSize: pipeline.frameSize,
                                  showDistance: settings.showDistanceEstimates, showSpeed: settings.showSpeedEstimates,

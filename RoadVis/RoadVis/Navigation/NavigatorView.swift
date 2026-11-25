@@ -360,6 +360,16 @@ struct NavigatorView: View {
             .disabled(recorder.isFinishing)
             .accessibilityLabel(recorder.isRecording ? "Остановить запись поездки" : "Начать запись поездки")
             Spacer(minLength: 0)
+            Button {
+                app.showAbout = true
+            } label: {
+                Image(systemName: "info.circle")
+                    .font(.footnote.weight(.semibold))
+                    .frame(width: 44, height: 44)
+                    .background(.regularMaterial, in: Circle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("О приложении")
         }
     }
 

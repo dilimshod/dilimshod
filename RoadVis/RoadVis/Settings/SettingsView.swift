@@ -7,8 +7,10 @@ struct SettingsView: View {
     var body: some View {
         NavigationStack {
             Form {
+                LanguageSettingsSection()
                 SettingsRecognitionSection()
                 SettingsFollowingDistanceSection()
+                DriverAssistSettingsSection()
                 TripSettingsSection()
                 SettingsExperimentsSection()
                 SettingsNavigationSection()
@@ -494,6 +496,11 @@ private struct SettingsSignalSection: View {
 private struct SettingsAboutSection: View {
     var body: some View {
         Section {
+            NavigationLink {
+                AboutHubView(embedInNavigationStack: false)
+            } label: {
+                Label("О приложении, оферта, разработчики", systemImage: "info.circle")
+            }
             LabeledContent("Версия", value: versionText)
         } header: {
             Text("О приложении")

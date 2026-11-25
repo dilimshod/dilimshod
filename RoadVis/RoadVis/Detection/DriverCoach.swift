@@ -46,14 +46,14 @@ final class DriverCoach {
 
     init(recognition: RecognitionPipeline, location: LocationService, speech: SpeechService,
          roadInfo: RoadInfoService, navigation: NavigationService, settings: AppSettings,
-         assist: DriverAssistSettings = .shared) {
+         assist: DriverAssistSettings? = nil) {
         self.recognition = recognition
         self.location = location
         self.speech = speech
         self.roadInfo = roadInfo
         self.navigation = navigation
         self.settings = settings
-        self.assist = assist
+        self.assist = assist ?? DriverAssistSettings.shared
         navigationAnnouncesRouteFeatures = { [weak navigation, weak settings] in
             guard let navigation, let settings else { return false }
             return navigation.state == .navigating && settings.voiceGuidanceEnabled
