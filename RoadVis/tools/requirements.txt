@@ -1,0 +1,18 @@
+# Python tooling for RoadVis (model export / training). Not needed to build the iOS app.
+# Verified combination (Linux x86_64, Python 3.13, November 2026): ultralytics 8.4.218, coremltools 9.0,
+# torch 2.7.1 (CPU), torchvision 0.22.1, numpy 2.3.5. Use Python 3.10–3.13.
+#
+#   python3 -m venv .venv && source .venv/bin/activate
+#   pip install -r tools/requirements.txt
+#   (Linux without GPU: add  --extra-index-url https://download.pytorch.org/whl/cpu)
+
+ultralytics>=8.4,<9
+coremltools>=9.0,<10
+# coremltools 9.0 is tested with torch ≤ 2.7; newer torch prints a warning and may fail to convert.
+torch>=2.4,<2.8
+torchvision>=0.19,<0.23
+# numpy 2.4+ breaks coremltools 9.0 export (apple/coremltools#2633); Ultralytics enforces the same bound.
+numpy>=1.23,<=2.3.5
+pillow>=10
+# Only for tools/train_make_classifier.py (Hugging Face dataset download).
+datasets>=3.0
