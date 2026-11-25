@@ -8,10 +8,6 @@
 name: RoadVision iOS
 
 on:
-  push:
-    paths:
-      - "RoadVision/**"
-      - ".github/workflows/roadvision-ios.yml"
   pull_request:
     paths:
       - "RoadVision/**"
@@ -93,6 +89,16 @@ jobs:
             -configuration Debug \
             CODE_SIGNING_ALLOWED=NO \
             build | tee build.log
+
+      - name: Compiler errors summary
+        if: failure()
+        run: |
+          if [ -f build.log ]; then
+            echo "::group::Unique compiler errors"
+            grep -E "(error|fatal error): " build.log | sed -E 's#^/Users/runner/work/[^/]+/[^/]+/##' | sort -u | head -200 || true
+            echo "::endgroup::"
+            echo "ERROR COUNT: $(grep -cE '(error|fatal error): ' build.log || true)"
+          fi
 
       - name: Upload build log
         if: failure()
