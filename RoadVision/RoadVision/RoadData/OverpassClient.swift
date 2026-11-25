@@ -2,7 +2,7 @@ import Foundation
 
 /// Errors produced by `OverpassClient`. Descriptions are Russian fragments meant to follow a prefix such as
 /// "Нет связи с OpenStreetMap (Overpass): ".
-enum OverpassError: LocalizedError, Equatable {
+enum OverpassClientError: LocalizedError, Equatable {
     /// Every endpoint is cooling down after HTTP 429/406; the next attempt makes sense after `retryAfter` seconds.
     case rateLimited(retryAfter: TimeInterval)
     /// The servers rejected the query itself (HTTP 400). Retrying the same query elsewhere does not help.
@@ -87,7 +87,6 @@ actor OverpassClient {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.timeoutIntervalForRequest = Self.requestTimeout
         configuration.timeoutIntervalForResource = Self.requestTimeout + 15
-        configuration.waitsForConnectivity = false
         configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
         configuration.httpAdditionalHeaders = ["User-Agent": Self.userAgent]
         self.session = URLSession(configuration: configuration)
@@ -131,14 +130,14 @@ actor OverpassClient {
 
     private func fetchWithFallback(_ query: String) async throws -> [OSMElement] {
         let endpoints = orderedEndpoints()
-        guard !endpoints.isEmpty else { throw OverpassError.noValidEndpoint }
+        guard !endpoints.isEmpty else { throw OverpassClientError.noValidEndpoint }
 
         let now = Date()
         let available = endpoints.filter { (cooldownUntil[$0] ?? .distantPast) <= now }
         guard !available.isEmpty else {
             let soonest = endpoints.compactMap { cooldownUntil[$0] }.min()
             let wait = soonest.map { $0.timeIntervalSince(now) } ?? Self.rateLimitCooldown
-            throw OverpassError.rateLimited(retryAfter: max(1, wait))
+            throw OverpassClientError.rateLimited(retryAfter: max(1, wait))
         }
 
         let body = OverpassQuery.formBody(query)
@@ -173,13 +172,13 @@ actor OverpassClient {
             }
         }
         // A 400 from one server while no other server accepted the query means the query itself is invalid.
-        if let rejection, !emptyPartial { throw OverpassError.badQuery(rejection) }
+        if let rejection, !emptyPartial { throw OverpassClientError.badQuery(rejection) }
         if rateLimitedCount == available.count {
             let soonest = endpoints.compactMap { cooldownUntil[$0] }.min()
             let wait = soonest.map { $0.timeIntervalSinceNow } ?? Self.rateLimitCooldown
-            throw OverpassError.rateLimited(retryAfter: max(1, wait))
+            throw OverpassClientError.rateLimited(retryAfter: max(1, wait))
         }
-        throw OverpassError.allEndpointsFailed(reasons)
+        throw OverpassClientError.allEndpointsFailed(reasons)
     }
 
     /// One POST to one endpoint. Throws only for conditions where trying other endpoints is pointless
@@ -202,7 +201,7 @@ actor OverpassClient {
             case .cancelled:
                 throw CancellationError()
             case .notConnectedToInternet, .dataNotAllowed, .internationalRoamingOff:
-                throw OverpassError.offline
+                throw OverpassClientError.offline
             case .timedOut:
                 return .failed("истекло время ожидания")
             case .cannotFindHost, .dnsLookupFailed:

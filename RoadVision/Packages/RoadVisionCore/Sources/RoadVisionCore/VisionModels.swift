@@ -107,6 +107,20 @@ public enum VehicleKind: String, CaseIterable, Codable, Hashable, Sendable {
         case .trafficLight, .stopSign, .other: return nil
         }
     }
+
+    /// Typical rear-view width in metres, used for the lead-vehicle distance estimate.
+    /// Generic assumptions (passenger car ≈ 1.8 m, truck/bus ≈ 2.5 m), not measurements.
+    public var typicalWidthMeters: Double? {
+        switch self {
+        case .car: return 1.8
+        case .truck: return 2.5
+        case .bus: return 2.55
+        case .motorcycle: return 0.8
+        case .bicycle: return 0.6
+        case .person: return 0.5
+        case .trafficLight, .stopSign, .other: return nil
+        }
+    }
 }
 
 /// Normalized bounding box in image space: origin top-left, x to the right, y down, all values 0...1.

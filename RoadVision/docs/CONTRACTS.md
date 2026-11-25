@@ -597,3 +597,29 @@ struct AssistantView: View                         // chat sheet: bubbles, mic b
 struct AssistantButton: View                       // floating round button (sparkles/mic) → app.showAssistant = true
 struct SettingsView: View                          // all settings sections (see AppSettings) + data-source disclaimers
 ```
+
+---------------------------------------------------------------------------------------------------
+## 3. Following distance to the lead vehicle (camera mode, added after the first iteration)
+
+Core (`FollowingDistance.swift`, written & tested): `RoadSurfaceCondition` (.dry/.wet/.snow/.ice, `from(weatherCode:temperatureC:precipitationMm:)`,
+`frictionCoefficient`), `FollowingDistancePolicy` (time gaps per surface, `stoppedGapMeters`, `reactionTimeSeconds`,
+`stoppedSpeedKmh`, `collisionWarningSeconds`), `DistanceStatus`, `FollowingDistanceAssessment`,
+`FollowingDistanceCalculator.stoppingDistance/recommendedDistance/assess(distanceMeters:ownSpeedKmh:relativeSpeedKmh:policy:condition:)`,
+`EgoCorridor` (own-lane trapezoid, `contains(_:)`, `polygon`, `halfWidth(atY:)`), `LeadVehicle`, `LeadVehicleTracker`
+(`update(tracks:geometry:timestamp:) -> LeadVehicle?` — closest confirmed vehicle in the corridor, hysteresis, fused width+height
+distance, EMA smoothing, relative speed by regression), `VehicleKind.typicalWidthMeters`.
+Settings: `followingDistanceEnabled`, `followingTimeGapDry` (wet ×2, snow ×3, ice ×4), `stoppedGapMeters`, `reactionTimeSeconds`,
+`roadSurfaceMode` ("auto" | raw surface), `distanceWarningsEnabled`, `showEgoCorridor`, `corridorHorizon`, and
+`AppSettings.followingDistancePolicy`.
+
+App additions (RecognitionPipeline):
+```swift
+private(set) var leadVehicle: LeadVehicle?
+private(set) var followingAssessment: FollowingDistanceAssessment?
+private(set) var roadSurface: RoadSurfaceCondition          // auto from app weather or manual
+var weatherProvider: (@MainActor () -> WeatherSnapshot?)?   // set by AppState
+```
+UI: lead vehicle highlighted (animated corner brackets + glow, colour by status), animated dashed distance line from the
+bottom-centre ("own car") to the lead box bottom-centre with a floating label "≈ 18 м · 1,4 с", ego-lane corridor overlay,
+safe-distance HUD (current gap vs recommended in motion / when stopped, stopping distance, TTC), forward-collision warning
+(haptic + tone + voice, throttled), tappable boxes with a detail card.

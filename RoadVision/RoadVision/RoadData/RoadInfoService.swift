@@ -280,7 +280,7 @@ final class RoadInfoService {
     private func retryDelay(after error: Error) -> TimeInterval {
         let exponent = Double(min(consecutiveFailures - 1, 4))
         let backoff = min(120, Self.refreshInterval * pow(2, max(0, exponent)))
-        if case OverpassError.rateLimited(let retryAfter) = error {
+        if case OverpassClientError.rateLimited(let retryAfter) = error {
             return max(backoff, retryAfter)
         }
         return backoff
@@ -350,11 +350,11 @@ final class RoadInfoService {
                 if error is CancellationError || !isCurrentRouteLoad(generation) { return }
                 failedChunks += 1
                 lastFailure = error
-                if case OverpassError.offline = error {
+                if case OverpassClientError.offline = error {
                     failedChunks += plan.chunks.count - index - 1
                     break
                 }
-                if case OverpassError.noValidEndpoint = error {
+                if case OverpassClientError.noValidEndpoint = error {
                     failedChunks += plan.chunks.count - index - 1
                     break
                 }
@@ -378,7 +378,7 @@ final class RoadInfoService {
     private func runRouteQuery(_ query: String) async throws -> [OSMElement] {
         do {
             return try await client.run(query)
-        } catch OverpassError.rateLimited(let retryAfter) {
+        } catch OverpassClientError.rateLimited(let retryAfter) {
             try await Task.sleep(nanoseconds: UInt64(min(max(retryAfter, 1), 60) * 1_000_000_000))
             return try await client.run(query)
         }

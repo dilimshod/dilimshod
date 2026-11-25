@@ -19,6 +19,23 @@ final class AppSettings {
     /// Save per-frame detections and unique-vehicle summary to CSV for research.
     var recordExperimentLog: Bool { didSet { defaults.set(recordExperimentLog, forKey: Keys.recordExperimentLog) } }
 
+    // MARK: Following distance (lead vehicle)
+    var followingDistanceEnabled: Bool { didSet { defaults.set(followingDistanceEnabled, forKey: Keys.followingDistanceEnabled) } }
+    /// Recommended time gap on a dry road, seconds (wet/snow/ice are derived ×2/×3/×4).
+    var followingTimeGapDry: Double { didSet { defaults.set(followingTimeGapDry, forKey: Keys.followingTimeGapDry) } }
+    /// Recommended gap when standing in a queue / at a light, metres.
+    var stoppedGapMeters: Double { didSet { defaults.set(stoppedGapMeters, forKey: Keys.stoppedGapMeters) } }
+    /// Driver reaction time for the stopping-distance estimate, seconds.
+    var reactionTimeSeconds: Double { didSet { defaults.set(reactionTimeSeconds, forKey: Keys.reactionTimeSeconds) } }
+    /// "auto" (from weather) or a RoadSurfaceCondition raw value.
+    var roadSurfaceMode: String { didSet { defaults.set(roadSurfaceMode, forKey: Keys.roadSurfaceMode) } }
+    /// Haptic + sound + voice warnings for unsafe distance / forward collision.
+    var distanceWarningsEnabled: Bool { didSet { defaults.set(distanceWarningsEnabled, forKey: Keys.distanceWarningsEnabled) } }
+    /// Draw the own-lane corridor used to pick the lead vehicle.
+    var showEgoCorridor: Bool { didSet { defaults.set(showEgoCorridor, forKey: Keys.showEgoCorridor) } }
+    /// Horizon line for the lane corridor (fraction of the frame height) — depends on how the phone is mounted.
+    var corridorHorizon: Double { didSet { defaults.set(corridorHorizon, forKey: Keys.corridorHorizon) } }
+
     // MARK: Navigation
     var voiceGuidanceEnabled: Bool { didSet { defaults.set(voiceGuidanceEnabled, forKey: Keys.voiceGuidanceEnabled) } }
     var avoidTolls: Bool { didSet { defaults.set(avoidTolls, forKey: Keys.avoidTolls) } }
@@ -79,6 +96,14 @@ final class AppSettings {
         trackPedestrians = bool(Keys.trackPedestrians, true)
         detectTrafficLights = bool(Keys.detectTrafficLights, true)
         recordExperimentLog = bool(Keys.recordExperimentLog, false)
+        followingDistanceEnabled = bool(Keys.followingDistanceEnabled, true)
+        followingTimeGapDry = double(Keys.followingTimeGapDry, 2)
+        stoppedGapMeters = double(Keys.stoppedGapMeters, 2)
+        reactionTimeSeconds = double(Keys.reactionTimeSeconds, 1)
+        roadSurfaceMode = string(Keys.roadSurfaceMode, "auto")
+        distanceWarningsEnabled = bool(Keys.distanceWarningsEnabled, true)
+        showEgoCorridor = bool(Keys.showEgoCorridor, true)
+        corridorHorizon = double(Keys.corridorHorizon, 0.42)
 
         voiceGuidanceEnabled = bool(Keys.voiceGuidanceEnabled, true)
         avoidTolls = bool(Keys.avoidTolls, false)
@@ -116,6 +141,13 @@ final class AppSettings {
         "https://overpass.private.coffee/api/interpreter",
     ]
 
+    /// Following-distance policy from the settings (wet ×2, snow ×3, ice ×4 of the dry time gap).
+    var followingDistancePolicy: FollowingDistancePolicy {
+        FollowingDistancePolicy(timeGapDry: followingTimeGapDry, timeGapWet: followingTimeGapDry * 2,
+                                timeGapSnow: followingTimeGapDry * 3, timeGapIce: followingTimeGapDry * 4,
+                                stoppedGapMeters: stoppedGapMeters, reactionTimeSeconds: reactionTimeSeconds)
+    }
+
     var signalAssumptions: SignalTimingAssumptions {
         SignalTimingAssumptions(cycleSeconds: signalCycleSeconds, greenRatio: signalGreenRatio)
     }
@@ -134,6 +166,14 @@ final class AppSettings {
         static let trackPedestrians = "rv.trackPedestrians"
         static let detectTrafficLights = "rv.detectTrafficLights"
         static let recordExperimentLog = "rv.recordExperimentLog"
+        static let followingDistanceEnabled = "rv.followingDistanceEnabled"
+        static let followingTimeGapDry = "rv.followingTimeGapDry"
+        static let stoppedGapMeters = "rv.stoppedGapMeters"
+        static let reactionTimeSeconds = "rv.reactionTimeSeconds"
+        static let roadSurfaceMode = "rv.roadSurfaceMode"
+        static let distanceWarningsEnabled = "rv.distanceWarningsEnabled"
+        static let showEgoCorridor = "rv.showEgoCorridor"
+        static let corridorHorizon = "rv.corridorHorizon"
         static let voiceGuidanceEnabled = "rv.voiceGuidanceEnabled"
         static let avoidTolls = "rv.avoidTolls"
         static let avoidHighways = "rv.avoidHighways"

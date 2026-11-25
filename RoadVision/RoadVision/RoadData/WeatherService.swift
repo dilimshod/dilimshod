@@ -42,7 +42,6 @@ final class WeatherService {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.timeoutIntervalForRequest = Self.requestTimeout
         configuration.timeoutIntervalForResource = Self.requestTimeout + 10
-        configuration.waitsForConnectivity = false
         configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
         self.session = URLSession(configuration: configuration)
     }
@@ -80,8 +79,9 @@ final class WeatherService {
             return
         }
         guard let point = location.coordinate, point.isValid else { return }
-        let task = Task { [weak self] in
-            await self?.fetch(at: point)
+        let task = Task<Void, Never> { [weak self] in
+            guard let self else { return }
+            await self.fetch(at: point)
         }
         inFlight = task
         await task.value
