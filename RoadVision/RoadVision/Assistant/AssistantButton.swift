@@ -53,9 +53,14 @@ struct AssistantButton: View {
 /// Expanding, fading ring used to show that the microphone is open or a reply is being generated.
 struct AssistantPulseRing: View {
     var color: Color
-    var lineWidth: CGFloat = 3
+    var lineWidth: CGFloat
 
     @State private var expanded = false
+
+    init(color: Color, lineWidth: CGFloat = 3) {
+        self.color = color
+        self.lineWidth = lineWidth
+    }
 
     var body: some View {
         Circle()

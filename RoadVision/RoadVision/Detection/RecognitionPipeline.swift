@@ -66,6 +66,7 @@ final class RecognitionPipeline {
     @ObservationIgnored private let worker: RecognitionWorker
     @ObservationIgnored private var wantsRunning = false
     @ObservationIgnored private var isRequestingPermission = false
+    @ObservationIgnored private var isFinishingRecording = false
     @ObservationIgnored private var generation = 0
     @ObservationIgnored private var lastRecordSetting: Bool
 
@@ -205,7 +206,8 @@ final class RecognitionPipeline {
     /// Writes synchronously on the main actor — prefer `finishRecording()` for long sessions.
     @discardableResult
     func stopRecording() -> [URL] {
-        recordingStartedAt = nil
+        guard !isFinishingRecording else { return [] }
+        defer { recordingStartedAt = nil }
         guard let finished = worker.stopRecording() else { return [] }
         do {
             let urls = try Self.write(log: finished.log, uniqueCounts: finished.uniqueCounts, endedAt: Date())
@@ -218,9 +220,18 @@ final class RecognitionPipeline {
     }
 
     /// Same as `stopRecording()`, but builds and writes the CSV files off the main actor.
+    /// `isRecording` stays true until the files are on disk, so observers of it find the new files.
     func finishRecording() async -> [URL] {
-        recordingStartedAt = nil
-        guard let finished = worker.stopRecording() else { return [] }
+        guard !isFinishingRecording else { return [] }
+        guard let finished = worker.stopRecording() else {
+            recordingStartedAt = nil
+            return []
+        }
+        isFinishingRecording = true
+        defer {
+            isFinishingRecording = false
+            recordingStartedAt = nil
+        }
         let endedAt = Date()
         let log = finished.log
         let counts = finished.uniqueCounts

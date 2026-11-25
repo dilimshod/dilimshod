@@ -294,7 +294,7 @@ private struct SettingsNavigationSection: View {
             }
             if settings.valhallaEndpoint != Valhalla.defaultEndpoint {
                 Button("Вернуть сервер по умолчанию") {
-                    settings.valhallaEndpoint = Valhalla.defaultEndpoint
+                    app.settings.valhallaEndpoint = Valhalla.defaultEndpoint
                     valhallaDraft = Valhalla.defaultEndpoint
                     valhallaError = nil
                 }
@@ -833,6 +833,14 @@ private struct SettingsAPIKeyEditor: View {
 
     @State private var draft = ""
     @State private var saved = false
+
+    /// - Parameters:
+    ///   - preset: keyed provider whose key is edited.
+    ///   - onChange: called after the key was saved or deleted.
+    init(preset: ChatProviderPreset, onChange: @escaping () -> Void) {
+        self.preset = preset
+        self.onChange = onChange
+    }
 
     private var account: String { ChatBackendResolver.apiKeyAccount(for: preset.id) }
 
