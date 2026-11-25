@@ -3,14 +3,20 @@ import Foundation
 // Voice coaching for beginner drivers: decides WHAT to say and WHEN. No texts here — the app turns a `CoachMessage`
 // into a phrase of the current language (`coachText(_:language:)` in the app).
 //
-// Priorities (highest first): collision risk > red light ahead > lane departure > tailgating > signs > green light hint.
-// A global minimum gap between utterances (≈ 3 s) keeps the coach calm; a collision warning bypasses it. Every
+// Priorities (highest first): collision risk > pedestrian on the roadway > red light ahead > lane departure > tailgating >
+// signs > green light hint. A global minimum gap between utterances (≈ 3 s) keeps the coach calm; a collision warning
+// and a pedestrian danger warning bypass it. Every
 // category additionally has its own cooldown, and pending messages expire when they are no longer relevant.
 
 /// One thing the coach wants to say (parameters only; localized by the app).
 public enum CoachMessage: Hashable, Sendable {
     /// Forward-collision warning (closing fast on the lead vehicle).
     case collisionRisk
+    /// Pedestrian in front of the car in the own lane (or about to enter it): give way. `trackID` = pedestrian track
+    /// (per-track cooldown in `DriverCoachEngine`; not part of the phrase).
+    case pedestrianDanger(trackID: Int)
+    /// Pedestrian on the roadway outside the own lane, or approaching it: be careful.
+    case pedestrianCaution(trackID: Int)
     /// A red traffic light ahead while still driving.
     case redLightAhead
     /// Drifting over the lane marking on `side`.
@@ -33,6 +39,7 @@ public enum CoachMessage: Hashable, Sendable {
     public var category: CoachCategory {
         switch self {
         case .collisionRisk: return .collision
+        case .pedestrianDanger, .pedestrianCaution: return .pedestrian
         case .redLightAhead: return .redLight
         case .laneDeparture: return .laneDeparture
         case .keepDistance: return .tailgating
@@ -43,10 +50,27 @@ public enum CoachMessage: Hashable, Sendable {
 
     /// How urgent the utterance is (the app maps it to its speech priority: high interrupts).
     public var urgency: CoachUrgency {
+        if case .pedestrianCaution = self { return .normal }
         switch category {
-        case .collision, .redLight: return .high
+        case .collision, .pedestrian, .redLight: return .high
         case .laneDeparture, .tailgating, .sign: return .normal
         case .greenLight: return .low
+        }
+    }
+
+    /// Safety-critical messages that may interrupt the calm global gap between utterances.
+    public var bypassesGlobalGap: Bool {
+        switch self {
+        case .collisionRisk, .pedestrianDanger: return true
+        default: return false
+        }
+    }
+
+    /// Pedestrian track of a pedestrian message.
+    public var pedestrianTrackID: Int? {
+        switch self {
+        case .pedestrianDanger(let id), .pedestrianCaution(let id): return id
+        default: return nil
         }
     }
 
@@ -60,7 +84,7 @@ public enum CoachMessage: Hashable, Sendable {
 
 /// Priority order of coach messages (higher raw value = more important).
 public enum CoachCategory: Int, Hashable, Sendable, Comparable, CaseIterable {
-    case greenLight = 0, sign, tailgating, laneDeparture, redLight, collision
+    case greenLight = 0, sign, tailgating, laneDeparture, redLight, pedestrian, collision
 
     public static func < (lhs: CoachCategory, rhs: CoachCategory) -> Bool { lhs.rawValue < rhs.rawValue }
 }
@@ -75,7 +99,7 @@ public enum CoachUrgency: Int, Hashable, Sendable, Comparable {
 /// per-category cooldowns and expiry.
 public struct CoachRules: Sendable {
     public struct Config: Sendable {
-        /// Minimum time between two utterances, seconds (collision bypasses).
+        /// Minimum time between two utterances, seconds (collision and pedestrian danger bypass).
         public var minGap: TimeInterval
         /// Minimum time between two utterances of the same category.
         public var cooldowns: [CoachCategory: TimeInterval]
@@ -83,10 +107,12 @@ public struct CoachRules: Sendable {
         public var timeToLive: [CoachCategory: TimeInterval]
 
         public init(minGap: TimeInterval = 3,
-                    cooldowns: [CoachCategory: TimeInterval] = [.collision: 5, .redLight: 10, .laneDeparture: 6,
-                                                                .tailgating: 12, .sign: 2, .greenLight: 20],
-                    timeToLive: [CoachCategory: TimeInterval] = [.collision: 1.5, .redLight: 3, .laneDeparture: 2,
-                                                                 .tailgating: 3, .sign: 8, .greenLight: 3]) {
+                    cooldowns: [CoachCategory: TimeInterval] = [.collision: 5, .pedestrian: 2, .redLight: 10,
+                                                                .laneDeparture: 6, .tailgating: 12, .sign: 2,
+                                                                .greenLight: 20],
+                    timeToLive: [CoachCategory: TimeInterval] = [.collision: 1.5, .pedestrian: 1.5, .redLight: 3,
+                                                                 .laneDeparture: 2, .tailgating: 3, .sign: 8,
+                                                                 .greenLight: 3]) {
             self.minGap = minGap
             self.cooldowns = cooldowns
             self.timeToLive = timeToLive
@@ -126,7 +152,7 @@ public struct CoachRules: Sendable {
         let ready = pending.enumerated().filter { _, item in
             let category = item.message.category
             if let last = lastSpoken[category], now - last < (config.cooldowns[category] ?? 0) { return false }
-            return category == .collision || now - lastUtterance >= config.minGap
+            return item.message.bypassesGlobalGap || now - lastUtterance >= config.minGap
         }
         guard let best = ready.max(by: { a, b in
             a.element.message.category == b.element.message.category
@@ -301,12 +327,15 @@ public struct CoachToggles: Hashable, Sendable {
     public var laneDeparture: Bool
     public var signs: Bool
     public var trafficLights: Bool
+    public var pedestrians: Bool
 
-    public init(distance: Bool = true, laneDeparture: Bool = true, signs: Bool = true, trafficLights: Bool = true) {
+    public init(distance: Bool = true, laneDeparture: Bool = true, signs: Bool = true, trafficLights: Bool = true,
+                pedestrians: Bool = true) {
         self.distance = distance
         self.laneDeparture = laneDeparture
         self.signs = signs
         self.trafficLights = trafficLights
+        self.pedestrians = pedestrians
     }
 }
 
@@ -316,12 +345,18 @@ public final class DriverCoachEngine {
     public var collisionPersistence: TimeInterval = 0.2
     /// "Too close" (moving, < ½ recommended, no imminent collision) must hold this long, seconds.
     public var tooClosePersistence: TimeInterval = 1.0
+    /// The same pedestrian track is not warned again (at the same or a lower level) for this long, seconds.
+    public var pedestrianTrackCooldown: TimeInterval = 6
+    /// Caution warnings only above this own speed, km/h (danger warnings always).
+    public var pedestrianCautionMinSpeedKmh: Double = 3
 
     public var toggles: CoachToggles
     public private(set) var rules: CoachRules
     public private(set) var lights: TrafficLightCoach
     private var collisionSince: TimeInterval?
     private var tooCloseSince: TimeInterval?
+    /// Last spoken pedestrian warning per track.
+    private var pedestrianWarned: [Int: (level: PedestrianHazardLevel, time: TimeInterval)] = [:]
 
     public init(toggles: CoachToggles = CoachToggles(), rules: CoachRules = CoachRules(),
                 lights: TrafficLightCoach = TrafficLightCoach()) {
@@ -333,8 +368,27 @@ public final class DriverCoachEngine {
     public func reset() {
         collisionSince = nil
         tooCloseSince = nil
+        pedestrianWarned.removeAll()
         lights.reset()
         rules.reset()
+    }
+
+    /// Offers a warning for the most urgent pedestrian hazard of the frame (`hazards` sorted danger-first, as returned
+    /// by `PedestrianHazardDetector`). Danger is always offered; caution only above `pedestrianCautionMinSpeedKmh`.
+    /// A track already warned within `pedestrianTrackCooldown` is skipped unless the level rose (caution → danger).
+    public func updatePedestrians(_ hazards: [PedestrianHazard], speedKmh: Double?, now: TimeInterval) {
+        pedestrianWarned = pedestrianWarned.filter { now - $0.value.time < pedestrianTrackCooldown }
+        guard toggles.pedestrians else { return }
+        let moving = (speedKmh ?? 0) > pedestrianCautionMinSpeedKmh
+        let candidates = hazards.filter { $0.level == .danger || moving }
+        guard let top = candidates.max(by: { a, b in
+            a.level != b.level ? a.level < b.level
+                : (a.distanceMeters ?? .infinity) > (b.distanceMeters ?? .infinity)
+        }) else { return }
+        if let warned = pedestrianWarned[top.trackID], warned.level >= top.level { return }
+        let message: CoachMessage = top.level == .danger ? .pedestrianDanger(trackID: top.trackID)
+                                                         : .pedestrianCaution(trackID: top.trackID)
+        rules.offer(message, now: now)
     }
 
     /// Feeds one camera frame; offers the resulting messages to the rules.
@@ -400,6 +454,13 @@ public final class DriverCoachEngine {
     /// The message to speak now, if any.
     public func next(now: TimeInterval) -> CoachMessage? {
         guard let message = rules.next(now: now) else { return nil }
+        if let id = message.pedestrianTrackID {
+            if case .pedestrianDanger = message {
+                pedestrianWarned[id] = (.danger, now)
+            } else {
+                pedestrianWarned[id] = (.caution, now)
+            }
+        }
         if message == .collisionRisk {
             rules.markSpoken(.tailgating, now: now)   // no "keep distance" right after the collision warning
         }

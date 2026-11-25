@@ -156,6 +156,73 @@ public struct StopSignComplianceMonitor: Sendable {
     }
 }
 
+/// Detects "did not give way to a pedestrian": a `.danger` pedestrian hazard in the own lane within `maxDistance`
+/// metres while the own speed stays above `minSpeedKmh` for at least `minDuration` seconds (same track). Reported once
+/// per pedestrian track; `value` = closest distance (≈ m).
+public struct PedestrianYieldMonitor: Sendable {
+    public struct Config: Sendable {
+        public var minSpeedKmh: Double
+        public var maxDistance: Double
+        public var minDuration: TimeInterval
+
+        public init(minSpeedKmh: Double = 15, maxDistance: Double = 15, minDuration: TimeInterval = 0.4) {
+            self.minSpeedKmh = minSpeedKmh
+            self.maxDistance = maxDistance
+            self.minDuration = minDuration
+        }
+    }
+
+    public struct Violation: Hashable, Sendable {
+        public var trackID: Int
+        /// Closest distance to the pedestrian during the episode, metres (≈).
+        public var closestDistance: Double
+        /// Lowest own speed during the episode, km/h.
+        public var minSpeedKmh: Double
+        public var duration: TimeInterval
+    }
+
+    private struct Episode: Sendable {
+        var start: TimeInterval
+        var closest: Double
+        var minSpeed: Double
+    }
+
+    public var config: Config
+    private var episodes: [Int: Episode] = [:]
+    private var reported = Set<Int>()
+
+    public init(config: Config = Config()) {
+        self.config = config
+    }
+
+    public mutating func reset() {
+        episodes.removeAll()
+        reported.removeAll()
+    }
+
+    public mutating func update(hazards: [PedestrianHazard], speedKmh: Double?, timestamp: TimeInterval) -> [Violation] {
+        var result: [Violation] = []
+        var active = Set<Int>()
+        if let speed = speedKmh, speed > config.minSpeedKmh {
+            for h in hazards where h.level == .danger && h.inOwnLane {
+                guard let d = h.distanceMeters, d <= config.maxDistance else { continue }
+                active.insert(h.trackID)
+                var e = episodes[h.trackID] ?? Episode(start: timestamp, closest: d, minSpeed: speed)
+                e.closest = min(e.closest, d)
+                e.minSpeed = min(e.minSpeed, speed)
+                episodes[h.trackID] = e
+                if timestamp - e.start >= config.minDuration, reported.insert(h.trackID).inserted {
+                    result.append(Violation(trackID: h.trackID, closestDistance: e.closest, minSpeedKmh: e.minSpeed,
+                                            duration: timestamp - e.start))
+                }
+            }
+        }
+        for id in episodes.keys where !active.contains(id) { episodes[id] = nil }
+        if reported.count > 256 { reported = reported.intersection(active) }
+        return result
+    }
+}
+
 /// Inputs of one processed frame for the event monitor.
 public struct CameraEventInput: Sendable {
     public var timestamp: TimeInterval
@@ -173,11 +240,14 @@ public struct CameraEventInput: Sendable {
     public var laneOffset: Double?
     public var tracks: [TrackedObject]
     public var geometry: CameraGeometry?
+    /// Pedestrians on / about to enter the roadway (from `PedestrianHazardDetector`; empty when the feature is off).
+    public var pedestrianHazards: [PedestrianHazard]
 
     public init(timestamp: TimeInterval, date: Date = Date(), speedKmh: Double?, coordinate: GeoPoint? = nil,
                 assessment: FollowingDistanceAssessment? = nil, hasLead: Bool = false, collisionWarning: Bool = false,
                 collisionThresholdSeconds: Double = 2.5, laneDeparture: LaneSide? = nil, laneOffset: Double? = nil,
-                tracks: [TrackedObject] = [], geometry: CameraGeometry? = nil) {
+                tracks: [TrackedObject] = [], geometry: CameraGeometry? = nil,
+                pedestrianHazards: [PedestrianHazard] = []) {
         self.timestamp = timestamp
         self.date = date
         self.speedKmh = speedKmh
@@ -190,11 +260,12 @@ public struct CameraEventInput: Sendable {
         self.laneOffset = laneOffset
         self.tracks = tracks
         self.geometry = geometry
+        self.pedestrianHazards = pedestrianHazards
     }
 }
 
 /// Produces camera-based `DrivingEvent`s: tailgating (moving, gap < ½ recommended for ≥ 2 s), collision risk
-/// (forward-collision warning), lane departure, red-light running and STOP sign ignored. Repeats are collapsed with
+/// (forward-collision warning), lane departure, red-light running, STOP sign ignored and pedestrian not given way. Repeats are collapsed with
 /// `DrivingEventDebouncer`, so only NEW events are returned.
 public final class CameraDrivingEventMonitor {
     /// Tailgating: gap below this fraction of the recommended gap…
@@ -206,6 +277,7 @@ public final class CameraDrivingEventMonitor {
 
     public var redLight = RedLightRunningDetector()
     public var stopSign = StopSignComplianceMonitor()
+    public var pedestrians = PedestrianYieldMonitor()
     public private(set) var debouncer: DrivingEventDebouncer
     private var tailgatingSince: TimeInterval?
     private var tailgatingReported = false
@@ -223,6 +295,7 @@ public final class CameraDrivingEventMonitor {
         collisionActive = false
         redLight.reset()
         stopSign.reset()
+        pedestrians.reset()
     }
 
     /// New events of this frame.
@@ -278,6 +351,12 @@ public final class CameraDrivingEventMonitor {
            let v = stopSign.update(tracks: input.tracks, geometry: geometry, speedKmh: input.speedKmh,
                                    timestamp: input.timestamp) {
             events.append(make(.stopSignIgnored, value: v.minSpeedKmh, limit: stopSign.config.stopSpeedKmh,
+                               duration: v.duration))
+        }
+
+        for v in pedestrians.update(hazards: input.pedestrianHazards, speedKmh: input.speedKmh,
+                                    timestamp: input.timestamp) {
+            events.append(make(.pedestrianNotYielded, value: v.closestDistance, limit: pedestrians.config.maxDistance,
                                duration: v.duration))
         }
 

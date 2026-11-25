@@ -14,6 +14,8 @@ public enum DrivingEventKind: String, Codable, Hashable, Sendable, CaseIterable 
     case redLightRunning
     /// Did not stop at a STOP sign (camera/OSM, heuristic).
     case stopSignIgnored
+    /// Kept driving (> 15 km/h) while a pedestrian was in the own lane close ahead (camera, heuristic).
+    case pedestrianNotYielded
     /// Strong deceleration (GPS / motion sensors).
     case harshBraking
     /// Strong acceleration (GPS / motion sensors).
@@ -23,7 +25,7 @@ public enum DrivingEventKind: String, Codable, Hashable, Sendable, CaseIterable 
     public var defaultSeverity: DrivingEventSeverity {
         switch self {
         case .speeding, .tailgating, .laneDeparture, .harshBraking, .harshAcceleration: return .warning
-        case .collisionRisk, .redLightRunning, .stopSignIgnored: return .violation
+        case .collisionRisk, .redLightRunning, .stopSignIgnored, .pedestrianNotYielded: return .violation
         }
     }
 
@@ -36,6 +38,7 @@ public enum DrivingEventKind: String, Codable, Hashable, Sendable, CaseIterable 
         case .laneDeparture: return "road.lanes"
         case .redLightRunning: return "light.beacon.max.fill"
         case .stopSignIgnored: return "octagon.fill"
+        case .pedestrianNotYielded: return "figure.walk"
         case .harshBraking: return "arrow.down.circle.fill"
         case .harshAcceleration: return "arrow.up.circle.fill"
         }
@@ -105,7 +108,7 @@ public struct DrivingEventDebouncer: Sendable {
                 merged.severity = max(previous.severity, event.severity)
                 if let v = event.value {
                     // Keep the worst value: larger for "over" quantities, smaller for gaps / TTC.
-                    let smallerIsWorse: Set<DrivingEventKind> = [.tailgating, .collisionRisk]
+                    let smallerIsWorse: Set<DrivingEventKind> = [.tailgating, .collisionRisk, .pedestrianNotYielded]
                     if let old = merged.value {
                         merged.value = smallerIsWorse.contains(event.kind) ? min(old, v) : max(old, v)
                     } else {

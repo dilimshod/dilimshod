@@ -23,6 +23,17 @@ public struct PedestrianHazard: Hashable, Sendable {
     public var onRoadway: Bool
     /// Moving laterally towards the own lane.
     public var approaching: Bool
+
+    public init(trackID: Int, box: BBox, level: PedestrianHazardLevel, distanceMeters: Double?, inOwnLane: Bool,
+                onRoadway: Bool, approaching: Bool) {
+        self.trackID = trackID
+        self.box = box
+        self.level = level
+        self.distanceMeters = distanceMeters
+        self.inOwnLane = inOwnLane
+        self.onRoadway = onRoadway
+        self.approaching = approaching
+    }
 }
 
 /// Decides whether detected pedestrians are on the roadway / in front of the car.

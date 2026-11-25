@@ -263,7 +263,7 @@ public struct TripStats: Hashable, Sendable {
 ///     durationFactor: 1 + min(duration / 30 s, 2)  (a 60 s speeding episode weighs 3× a short one)
 ///   penaltyPerKm = Σ penalty / max(distance km, 1)
 ///   score = clamp(100 − 10 × penaltyPerKm, 0, 100), rounded
-/// Weights: red light 8, STOP sign 5, collision risk 5, speeding 3, tailgating 2, harsh braking 2,
+/// Weights: red light 8, pedestrian not yielded 8, STOP sign 5, collision risk 5, speeding 3, tailgating 2, harsh braking 2,
 /// harsh acceleration 1.5, lane departure 1.5.
 /// Example: 10 km with two harsh brakings → 4 points / 10 km = 0.4 per km → score 96.
 public enum TripScoring {
@@ -273,6 +273,7 @@ public enum TripScoring {
     public static func weight(_ kind: DrivingEventKind) -> Double {
         switch kind {
         case .redLightRunning: return 8
+        case .pedestrianNotYielded: return 8
         case .stopSignIgnored: return 5
         case .collisionRisk: return 5
         case .speeding: return 3
@@ -335,7 +336,7 @@ public enum TripScoring {
 
     /// One-line description of the formula (Russian, for the report).
     public static let formulaDescription =
-        "Балл = 100 − 10 × (штрафные очки на 1 км, не меньше 1 км). Очки события = вес вида × тяжесть (0,5 / 1 / 1,5) × (1 + длительность/30 с, макс. 3). Веса: красный свет 8, STOP 5, риск столкновения 5, превышение 3, дистанция 2, резкое торможение 2, резкий разгон 1,5, выезд из полосы 1,5."
+        "Балл = 100 − 10 × (штрафные очки на 1 км, не меньше 1 км). Очки события = вес вида × тяжесть (0,5 / 1 / 1,5) × (1 + длительность/30 с, макс. 3). Веса: красный свет 8, пешеход не пропущен 8, STOP 5, риск столкновения 5, превышение 3, дистанция 2, резкое торможение 2, резкий разгон 1,5, выезд из полосы 1,5."
 }
 
 extension DrivingEventKind {
@@ -348,6 +349,7 @@ extension DrivingEventKind {
         case .laneDeparture: return "Выезд из полосы"
         case .redLightRunning: return "Проезд на красный"
         case .stopSignIgnored: return "Без остановки у STOP"
+        case .pedestrianNotYielded: return "Пешеход не пропущен"
         case .harshBraking: return "Резкое торможение"
         case .harshAcceleration: return "Резкий разгон"
         }
@@ -356,7 +358,8 @@ extension DrivingEventKind {
     /// Whether the event comes from the camera (an estimate) rather than GPS / sensors.
     public var isCameraBased: Bool {
         switch self {
-        case .tailgating, .collisionRisk, .laneDeparture, .redLightRunning, .stopSignIgnored: return true
+        case .tailgating, .collisionRisk, .laneDeparture, .redLightRunning, .stopSignIgnored, .pedestrianNotYielded:
+            return true
         case .speeding, .harshBraking, .harshAcceleration: return false
         }
     }
@@ -365,7 +368,7 @@ extension DrivingEventKind {
     public var tripValueUnit: String {
         switch self {
         case .speeding: return "км/ч сверх"
-        case .tailgating: return "м"
+        case .tailgating, .pedestrianNotYielded: return "м"
         case .collisionRisk: return "с до столкн."
         case .laneDeparture: return ""
         case .redLightRunning, .stopSignIgnored: return "км/ч"
