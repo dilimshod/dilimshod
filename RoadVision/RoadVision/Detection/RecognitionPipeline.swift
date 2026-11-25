@@ -21,7 +21,8 @@ import Observation
 final class RecognitionPipeline {
     let camera: CameraService
 
-    /// Visible tracks (confirmed and tentative) for the overlay.
+    /// Visible tracks (confirmed and tentative) for the overlay. A confirmed track missed on the latest frame is kept
+    /// for `trackHoldSeconds` (with `missed ≥ 1`) so boxes do not flicker on single missed detections.
     private(set) var tracks: [TrackedObject] = []
     /// Currently visible confirmed objects by kind.
     private(set) var visibleCounts: [VehicleKind: Int] = [:]
@@ -106,6 +107,17 @@ final class RecognitionPipeline {
     @ObservationIgnored private var generation = 0
     @ObservationIgnored private var lastRecordSetting: Bool
     @ObservationIgnored private let warnings = DistanceWarningController()
+    /// Uptime of the last frame-driven following-distance refresh (location updates skip theirs while frames flow).
+    @ObservationIgnored private var lastFrameRefreshUptime: TimeInterval = -.infinity
+    /// Last frame each track was seen on (display hold), by track id.
+    @ObservationIgnored private var recentTracks: [Int: (track: TrackedObject, seen: TimeInterval)] = [:]
+    /// Uptime when the worker last reported a lead vehicle.
+    @ObservationIgnored private var lastLeadUptime: TimeInterval = -.infinity
+
+    /// How long a confirmed track missed by the detector stays on screen, seconds.
+    static let trackHoldSeconds: TimeInterval = 0.3
+    /// How long the lead vehicle (distance line, HUD number) survives frames without it, seconds.
+    static let leadHoldSeconds: TimeInterval = 0.5
 
     init(location: LocationService, settings: AppSettings, signals: TrafficSignalService) {
         self.location = location
@@ -141,9 +153,13 @@ final class RecognitionPipeline {
         pushSettings()
         pushLocation()
         location.addListener { [weak self] _ in
-            self?.pushLocation()
-            // Keeps the recommended gap current even without camera frames (no model, camera paused).
-            self?.refreshFollowingDistance(fromFrame: false)
+            guard let self else { return }
+            self.pushLocation()
+            // Keeps the recommended gap current without camera frames (no model, camera paused); while frames flow
+            // the next frame picks up the new speed, so observable updates stay ≤ 15 Hz.
+            if ProcessInfo.processInfo.systemUptime - self.lastFrameRefreshUptime > 0.5 {
+                self.refreshFollowingDistance(fromFrame: false)
+            }
         }
         observeSettings()
         refreshFollowingDistance(fromFrame: false)
@@ -311,8 +327,10 @@ final class RecognitionPipeline {
 
     private func apply(_ output: RecognitionWorker.Output) {
         guard output.generation == generation, wantsRunning else { return }
+        let now = ProcessInfo.processInfo.systemUptime
+        let displayed = displayTracks(from: output.tracks, now: now)
         // Avoid invalidating the overlay when nothing changed (e.g. an empty road).
-        if tracks != output.tracks { tracks = output.tracks }
+        if tracks != displayed { tracks = displayed }
         if visibleCounts != output.visibleCounts { visibleCounts = output.visibleCounts }
         if uniqueCounts != output.uniqueCounts { uniqueCounts = output.uniqueCounts }
         if abs(fps - output.fps) >= 0.5 { fps = output.fps }
@@ -323,9 +341,34 @@ final class RecognitionPipeline {
             signals.cameraLightColor = output.lightColor
         }
         processedFrames = output.processedFrames
-        let lead = settings.followingDistanceEnabled ? output.leadVehicle : nil
+        var lead = settings.followingDistanceEnabled ? output.leadVehicle : nil
+        if lead != nil {
+            lastLeadUptime = now
+        } else if settings.followingDistanceEnabled, let held = leadVehicle, now - lastLeadUptime < Self.leadHoldSeconds {
+            lead = held   // bridge a few frames without the lead (missed detection) instead of blinking the line/HUD
+        }
         if leadVehicle != lead { leadVehicle = lead }
         refreshFollowingDistance(fromFrame: true)
+    }
+
+    /// Current tracks plus confirmed tracks missed for at most `trackHoldSeconds` (marked `missed ≥ 1`).
+    private func displayTracks(from fresh: [TrackedObject], now: TimeInterval) -> [TrackedObject] {
+        var result = fresh
+        var freshIDs = Set<Int>()
+        for track in fresh {
+            freshIDs.insert(track.id)
+            recentTracks[track.id] = (track, now)
+        }
+        for (id, entry) in recentTracks where !freshIDs.contains(id) {
+            if entry.track.isConfirmed, now - entry.seen <= Self.trackHoldSeconds {
+                var held = entry.track
+                held.missed = max(1, held.missed)
+                result.append(held)
+            } else {
+                recentTracks[id] = nil
+            }
+        }
+        return result
     }
 
     private func applyModelStatuses(_ statuses: RecognitionWorker.ModelStatuses) {
@@ -342,6 +385,8 @@ final class RecognitionPipeline {
     }
 
     private func clearVisibleState() {
+        recentTracks.removeAll()
+        lastLeadUptime = -.infinity
         if !tracks.isEmpty { tracks = [] }
         if !visibleCounts.isEmpty { visibleCounts = [:] }
         if fps != 0 { fps = 0 }
@@ -380,6 +425,7 @@ final class RecognitionPipeline {
         if isForwardCollisionWarning != collision { isForwardCollisionWarning = collision }
 
         if fromFrame {
+            lastFrameRefreshUptime = ProcessInfo.processInfo.systemUptime
             warnings.evaluate(assessment, leadID: lead?.trackID, policy: policy,
                               enabled: settings.distanceWarningsEnabled)
         }

@@ -449,7 +449,7 @@ enum ModelStatus: Equatable, Sendable {                // Detection/VehicleDetec
 @Observable @MainActor final class RecognitionPipeline {
     init(location: LocationService, settings: AppSettings, signals: TrafficSignalService)
     let camera: CameraService
-    private(set) var tracks: [TrackedObject]           // visible tracks for overlay
+    private(set) var tracks: [TrackedObject]           // visible tracks for overlay (+ confirmed tracks missed ≤ trackHoldSeconds = 0.3 s, missed ≥ 1)
     private(set) var visibleCounts: [VehicleKind: Int] // currently visible confirmed objects by kind
     private(set) var uniqueCounts: [VehicleKind: Int]  // unique confirmed objects since reset
     var totalUniqueVehicles: Int { get }
@@ -487,9 +487,13 @@ final class CameraService: NSObject, @unchecked Sendable {     // not MainActor
 extension Notification.Name { static let cameraPreviewLayerDidChange: Notification.Name }   // object: AVCaptureSession
 struct CameraPreviewView: UIViewRepresentable { init(session: AVCaptureSession, videoGravity: AVLayerVideoGravity = .resizeAspectFill) }
 // CHANGED: imageSize (the pipeline's frameSize) is required to map boxes with aspect-fill geometry.
+// CHANGED (section 3): optional lead highlight + selection; draw-only (never takes touches, see TrackHitLayer).
 struct DetectionOverlayView: View {
-    init(tracks: [TrackedObject], imageSize: CGSize, showDistance: Bool, showSpeed: Bool, showLabels: Bool = true)
-    static func color(for kind: VehicleKind) -> Color
+    init(tracks: [TrackedObject], imageSize: CGSize, showDistance: Bool, showSpeed: Bool, showLabels: Bool = true,
+         lead: LeadVehicle? = nil, leadStatus: DistanceStatus = .unknown, selectedTrackID: Int? = nil)
+    static func color(for kind: VehicleKind) -> Color          // = RVTheme.kindColor
+    static func titleText(for:) -> String; static func primaryText(for:) -> String; static func makeText(for:) -> String?
+    static func confidencePercent(for:) -> Int; static func estimateText(for:showDistance:showSpeed:) -> String?
 }
 struct RecognitionView: View          // full-screen camera UI; has the corner map button (→ app.switchTo(.navigator))
 struct RecognitionStatusView: View { init(pipeline: RecognitionPipeline) }   // status sheet (models, fps, counters, disclaimers)
@@ -676,21 +680,88 @@ Core (`FollowingDistance.swift`, written & tested): `RoadSurfaceCondition` (.dry
 `EgoCorridor` (own-lane trapezoid, `contains(_:)`, `polygon`, `halfWidth(atY:)`), `LeadVehicle`, `LeadVehicleTracker`
 (`update(tracks:geometry:timestamp:) -> LeadVehicle?` — closest confirmed vehicle in the corridor, hysteresis, fused width+height
 distance, EMA smoothing, relative speed by regression), `VehicleKind.typicalWidthMeters`.
-Settings: `followingDistanceEnabled`, `followingTimeGapDry` (wet ×2, snow ×3, ice ×4), `stoppedGapMeters`, `reactionTimeSeconds`,
+`FollowingDistanceNorms.swift`: `rulesDocument`, `items` (status Норма / Рекомендация / Настройка приложения, source, url), `disclaimer`.
+Settings: `followingDistanceEnabled`, `followingTimeGapDry` (wet ×2, snow ×3, ice ×5), `stoppedGapMeters`, `reactionTimeSeconds`,
 `roadSurfaceMode` ("auto" | raw surface), `distanceWarningsEnabled`, `showEgoCorridor`, `corridorHorizon`, and
 `AppSettings.followingDistancePolicy`.
 
-App additions (RecognitionPipeline):
+Pipeline (Detection/). `RecognitionWorker` runs `LeadVehicleTracker` on its queue after tracking + `MonocularSpeedEstimator` every
+processed frame (corridor horizon = `settings.corridorHorizon` clamped 0.1…0.8, `CameraGeometry` from the camera FOV + buffer size),
+`Inputs.followingDistanceEnabled/corridorHorizon`, `Output.leadVehicle`. The main actor computes the assessment (frames ≤ 15 Hz;
+GPS updates refresh it only when no frame arrived for 0.5 s):
 ```swift
-private(set) var leadVehicle: LeadVehicle?
-private(set) var followingAssessment: FollowingDistanceAssessment?
-private(set) var roadSurface: RoadSurfaceCondition          // auto from app weather or manual
-var weatherProvider: (@MainActor () -> WeatherSnapshot?)?   // set by AppState
+// RecognitionPipeline additions (all nil / unchanged while settings.followingDistanceEnabled == false)
+private(set) var leadVehicle: LeadVehicle?                        // bridged for leadHoldSeconds = 0.5 s when a frame misses it
+private(set) var followingAssessment: FollowingDistanceAssessment?  // no lead → recommended gap for the current speed, status .unknown
+private(set) var roadSurface: RoadSurfaceCondition                 // "auto" → RoadSurfaceCondition.from(weather), else the manual value
+private(set) var roadSurfaceSource: RoadSurfaceSource              // .weather | .noWeather (auto, dry assumed) | .manual
+private(set) var isForwardCollisionWarning: Bool                   // moving, .danger, TTC < policy.collisionWarningSeconds (unthrottled, visual)
+var weatherProvider: (@MainActor () -> WeatherSnapshot?)?          // set by AppState: { [weak weather] in weather?.current }
+var speech: SpeechService?                                         // set by AppState (voice warnings)
+var egoCorridor: EgoCorridor { get }                               // corridor used by the worker (for drawing)
+var followingDistancePolicy: FollowingDistancePolicy { get }       // = settings.followingDistancePolicy
+enum RoadSurfaceSource: String, Sendable { case weather, noWeather, manual; var displayName: String }   // "авто", "авто · нет погоды", "вручную"
+
+@MainActor final class DistanceWarningController {                // Detection/DistanceWarningController.swift, owned by the pipeline
+    init(speech: SpeechService? = nil); weak var speech: SpeechService?
+    static func isForwardCollision(_:policy:) -> Bool; static func isTooClose(_:policy:) -> Bool
+    func evaluate(_ assessment: FollowingDistanceAssessment?, leadID: Int?, policy: FollowingDistancePolicy, enabled: Bool, now: Date = Date())
+    func reset()
+}
+// Rules (settings.distanceWarningsEnabled): moving + collision (held ≥ 0.2 s) → error haptic + system sound 1005 +
+// speak("Внимание! Опасное сближение", .high), ≤ every 5 s; moving + .danger without imminent TTC (held ≥ 1 s) → light haptic +
+// speak("Держите дистанцию", .normal), ≤ every 12 s; standing → only one soft haptic when the gap drops below stoppedGapMeters
+// (re-armed when it opens to > 1.3× + 0.3 m or another vehicle becomes the lead). No lead → nothing.
 ```
-UI: lead vehicle highlighted (animated corner brackets + glow, colour by status), animated dashed distance line from the
-bottom-centre ("own car") to the lead box bottom-centre with a floating label "≈ 18 м · 1,4 с", ego-lane corridor overlay,
-safe-distance HUD (current gap vs recommended in motion / when stopped, stopping distance, TTC), forward-collision warning
-(haptic + tone + voice, throttled), tappable boxes with a detail card.
+
+UI (Shared/, Detection/, Camera/):
+```swift
+enum RVTheme {                                     // Shared/RVTheme.swift — design tokens
+    static let safe, caution, danger, neutral, accent, recording: Color
+    static func statusColor(_: DistanceStatus) -> Color; static func statusGradient(_:) -> LinearGradient; static func statusSymbol(_:) -> String
+    static func kindColor(_: VehicleKind) -> Color; static func normColor(_: FollowingDistanceNorms.Status) -> Color
+    enum Radius { box, chip, control, panel, card }; enum Stroke { hairline, tentative, box, selected, lead }; enum Spacing { gutter, stack, tight }
+    static let glass: Material; static let glassEdge: LinearGradient; static let shadow: Color
+    static func font(_ size: CGFloat, weight: Font.Weight = .semibold) -> Font      // .rounded
+    static let trackMotion, springIn, snappy: Animation
+}
+extension View { func rvGlass(cornerRadius:tint:shadow:); func rvGlassCapsule(tint:shadow:); func rvNumeric(_:weight:); func rvPulse(_:minOpacity:period:) }
+struct RVBadge: View { init(text: String, color: Color, systemImage: String? = nil) }
+struct AspectFillMapping: Equatable {             // Shared/AspectFillMapping.swift — shared by every camera overlay
+    init(imageSize: CGSize, viewSize: CGSize); func rect(for: BBox) -> CGRect; func point(x: Double, y: Double) -> CGPoint
+    func normalizedPoint(_: CGPoint) -> (x: Double, y: Double)
+}
+extension RVFormat { static func gapMeters(_: Double?) -> String /* "1,6 м", "18 м", "125 м" */; static func gapSeconds(_: Double?) -> String
+                     static func normMeters(_: Double) -> String /* "2 м", "33 м" */; static func compactNumber(_: Double) -> String
+                     static func spokenQuantity(_:digits:one:few:many:) -> String }        // Shared/DistanceFormatting.swift
+enum FollowingDistanceText { gap(_:), recommended(_:), lineCaption(_:) /* "1,4 с · норма ≥ 33 м" | "норма ≥ 2 м" */,
+                             movingNorm(_:policy:) /* "≥ 2 с ≈ 33 м (сухо)" */, stoppedNorm(policy:) /* "≥ 2 м" */, compactNorms(_:policy:),
+                             stoppingDistance(_:), timeToCollision(_:), relativeMotion(relativeSpeedKmh:), accessibilitySummary(_:policy:hasLead:) }
+
+struct CornerBracketShape: Shape { var armFraction: CGFloat = 0.26; var cornerRadius: CGFloat = RVTheme.Radius.box }
+struct TrackHitLayer: View { init(tracks: [TrackedObject], imageSize: CGSize, selectedTrackID: Binding<Int?>) }  // below the HUD
+struct TrackDetailCard: View {                    // tap card: class, make + уверенность, ≈ distance, ≈ speed, age, lead badge, light colour
+    init(track: TrackedObject, lead: LeadVehicle?, assessment: FollowingDistanceAssessment?, onClose: @escaping () -> Void)
+    static let estimatedSize: CGSize; static func position(for rect: CGRect, in size: CGSize, safeArea: EdgeInsets) -> CGPoint
+}
+struct LeadDistanceOverlay: View {                // flowing dashed line + chevrons + ground marker + glass label (TimelineView + Canvas)
+    init(lead: LeadVehicle, assessment: FollowingDistanceAssessment?, imageSize: CGSize, labelInsets: EdgeInsets = …)
+}
+struct LeadLineGeometry; final class LeadLineSmoother; enum LeadLineRenderer   // helpers of LeadDistanceOverlay
+struct EgoCorridorOverlay: View { init(corridor: EgoCorridor, imageSize: CGSize, tint: Color = .white) }
+struct FollowingDistanceHUD: View {               // .full (portrait, above the record button, tap = expand rows) | .mini (landscape, leading column)
+    enum Style { case full, mini }
+    init(assessment:lead:policy:surfaceSource:isForwardCollisionWarning:style: = .full, onShowNorms:)
+    static let expandedKey: String                // "rv.distanceHUDExpanded" (@AppStorage)
+}
+struct GapProgressBar: View { init(fraction: Double?, color: Color) }   // 0…1.5× with zones and a tick at 1.0
+struct DistanceNormsView: View { init(showsDoneButton: Bool = false) }  // rulesDocument, items (+ Link), current thresholds, example table, disclaimer
+struct DistanceNormsSheet: View                   // NavigationStack + "Готово"; also pushed from Settings → «Дистанция» → «Требования к дистанции»
+```
+RecognitionView layers (all `.ignoresSafeArea()`, same mapping): corridor → boxes (lead = thick glowing status-coloured bracket, pulsing on
+caution/danger) → distance line → TrackHitLayer; then the HUD; then the detail card; then a red edge glow while
+`isForwardCollisionWarning && distanceWarningsEnabled`. CameraPiPView: lead bracket in status colour + "≈ 18 м" badge (bottom-left).
+Honesty: distances "≈ … (оценка)", detector scores "уверенность"; norms labelled Норма / Рекомендация / Настройка приложения.
 
 ---------------------------------------------------------------------------------------------------
 ## 4. Project, resources and models (added by the project-files slice)

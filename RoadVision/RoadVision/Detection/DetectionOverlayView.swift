@@ -168,7 +168,22 @@ private struct TrackBoxView: View {
     let showLabel: Bool
     let secondaryText: String?
 
-    @State private var appeared = false
+    /// False until the spring-in has run. Tracks that come back after a short gap (hits > 3) skip the spring-in.
+    @State private var appeared: Bool
+
+    init(track: TrackedObject, rect: CGRect, containerSize: CGSize, thin: Bool, isLead: Bool,
+         leadStatus: DistanceStatus, isSelected: Bool, showLabel: Bool, secondaryText: String?) {
+        self.track = track
+        self.rect = rect
+        self.containerSize = containerSize
+        self.thin = thin
+        self.isLead = isLead
+        self.leadStatus = leadStatus
+        self.isSelected = isSelected
+        self.showLabel = showLabel
+        self.secondaryText = secondaryText
+        _appeared = State(initialValue: track.hits > 3)
+    }
 
     private var color: Color {
         isLead && leadStatus != .unknown ? RVTheme.statusColor(leadStatus) : RVTheme.kindColor(track.kind)
@@ -219,10 +234,11 @@ private struct TrackBoxView: View {
             }
         }
         .scaleEffect(appeared ? 1 : 1.22)
-        .opacity(appeared ? 1 : 0)
+        .opacity(appeared ? (track.missed > 0 ? 0.6 : 1) : 0)   // held for a moment after a missed detection
         .position(x: rect.midX, y: rect.midY)
         .animation(RVTheme.trackMotion, value: rect)
         .onAppear {
+            guard !appeared else { return }
             withAnimation(RVTheme.springIn) {
                 appeared = true
             }

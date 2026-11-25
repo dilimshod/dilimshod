@@ -20,6 +20,25 @@ extension RVFormat {
         return s < 10 ? decimal(s, digits: 1) + " с" : "\(Int(s.rounded())) с"
     }
 
+    /// A recommended / threshold gap: like `gapMeters` but without a trailing ",0" ("2 м", "2,5 м", "33 м").
+    static func normMeters(_ meters: Double) -> String {
+        guard meters.isFinite else { return "—" }
+        return meters < 10 ? compactNumber(max(0, meters)) + " м" : gapMeters(meters)
+    }
+
+    /// Spoken quantity with the right Russian form: 12 → "12 метров", 1 → "1 метр", 1,6 → "1,6 метра".
+    static func spokenQuantity(_ value: Double, digits: Int = 1, one: String, few: String, many: String) -> String {
+        guard value.isFinite else { return "—" }
+        let v = max(0, value)
+        let factor = pow(10, Double(digits))
+        let rounded = (v * factor).rounded() / factor
+        if rounded == rounded.rounded() {
+            let n = Int(rounded)
+            return "\(n) " + plural(n, one, few, many)
+        }
+        return decimal(rounded, digits: digits) + " " + few   // fractions take the genitive singular: "1,6 метра"
+    }
+
     /// Number without a trailing ",0": 2 → "2", 1.5 → "1,5", 2.25 → "2,3".
     static func compactNumber(_ value: Double) -> String {
         guard value.isFinite else { return "—" }
@@ -39,7 +58,7 @@ enum FollowingDistanceText {
 
     /// Recommended gap, e.g. "≥ 33 м".
     static func recommended(_ assessment: FollowingDistanceAssessment) -> String {
-        "≥ " + RVFormat.gapMeters(assessment.recommendedDistanceMeters)
+        "≥ " + RVFormat.normMeters(assessment.recommendedDistanceMeters)
     }
 
     /// Caption under the distance on the animated line: "1,4 с · норма ≥ 33 м" (moving) or "норма ≥ 2 м" (standing).
@@ -56,14 +75,14 @@ enum FollowingDistanceText {
         let gap = policy.timeGap(for: assessment.condition)
         let surface = assessment.condition.displayName.lowercased()
         if !assessment.isStopped {
-            return "≥ \(RVFormat.compactNumber(gap)) с ≈ \(RVFormat.gapMeters(assessment.recommendedDistanceMeters)) (\(surface))"
+            return "≥ \(RVFormat.compactNumber(gap)) с ≈ \(RVFormat.normMeters(assessment.recommendedDistanceMeters)) (\(surface))"
         }
         return "≥ \(RVFormat.compactNumber(gap)) с (\(surface))"
     }
 
     /// Standing requirement: "≥ 2 м".
     static func stoppedNorm(policy: FollowingDistancePolicy) -> String {
-        "≥ \(RVFormat.compactNumber(policy.stoppedGapMeters)) м"
+        "≥ " + RVFormat.normMeters(policy.stoppedGapMeters)
     }
 
     /// One line with both requirements for the compact HUD.
@@ -96,20 +115,24 @@ enum FollowingDistanceText {
     /// Spoken/VoiceOver summary of the HUD.
     static func accessibilitySummary(_ assessment: FollowingDistanceAssessment, policy: FollowingDistancePolicy,
                                      hasLead: Bool) -> String {
+        func meters(_ value: Double) -> String {
+            RVFormat.spokenQuantity(value, digits: value < 10 ? 1 : 0, one: "метр", few: "метра", many: "метров")
+        }
         var parts: [String] = []
         if hasLead, let d = assessment.distanceMeters {
-            parts.append("До машины впереди примерно \(RVFormat.gapMeters(d).replacingOccurrences(of: " м", with: " метров")) (оценка)")
+            parts.append("До машины впереди примерно \(meters(d)) (оценка)")
             parts.append(assessment.status.displayName)
         } else {
             parts.append("Машина впереди не найдена")
         }
         if assessment.isStopped {
-            parts.append("При остановке рекомендуется не меньше \(RVFormat.compactNumber(policy.stoppedGapMeters)) метров")
+            parts.append("При остановке рекомендуется не меньше \(meters(policy.stoppedGapMeters))")
         } else {
-            parts.append("Рекомендуемая дистанция не меньше \(RVFormat.gapMeters(assessment.recommendedDistanceMeters).replacingOccurrences(of: " м", with: " метров"))")
+            parts.append("Рекомендуемая дистанция не меньше \(meters(assessment.recommendedDistanceMeters))")
         }
         if let ttc = assessment.timeToCollisionSeconds {
-            parts.append("До столкновения около \(RVFormat.gapSeconds(ttc).replacingOccurrences(of: " с", with: " секунд"))")
+            let seconds = RVFormat.spokenQuantity(ttc, digits: ttc < 10 ? 1 : 0, one: "секунда", few: "секунды", many: "секунд")
+            parts.append("До столкновения около \(seconds)")
         }
         return parts.joined(separator: ". ")
     }

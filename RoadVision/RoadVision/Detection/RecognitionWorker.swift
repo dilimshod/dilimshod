@@ -7,8 +7,8 @@ import Vision
 /// Frame-processing engine of `RecognitionPipeline`.
 ///
 /// Everything heavy (Vision/Core ML inference, tracking, distance/speed estimation, lead-vehicle selection,
-/// make classification, traffic-light colour sampling, research logging) runs on the private serial `recognition.processing` queue —
-/// never on the main actor.
+/// make classification, traffic-light colour sampling, research logging) runs on the private serial
+/// `recognition.processing` queue — never on the main actor.
 ///
 /// Threading contract
 /// - `detector`, `makeClassifier`, `tracker`, `estimator`, `leadTracker` and the frame statistics are confined to `queue`.

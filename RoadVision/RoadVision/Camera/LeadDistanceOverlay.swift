@@ -33,13 +33,13 @@ struct LeadDistanceOverlay: View {
             let color = RVTheme.statusColor(status)
             let danger = status == .danger
             let speed = flowSpeed
-            let smoother = smoother
+            let lineSmoother = smoother
 
             ZStack(alignment: .topLeading) {
                 TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: false)) { timeline in
                     let time = timeline.date.timeIntervalSinceReferenceDate
                     Canvas { context, _ in
-                        let eased = smoother.step(start: line.start, end: line.end, markerWidth: line.markerWidth,
+                        let eased = lineSmoother.step(start: line.start, end: line.end, markerWidth: line.markerWidth,
                                                   time: time)
                         LeadLineRenderer.draw(in: &context, start: eased.start, end: eased.end,
                                               markerWidth: eased.markerWidth, color: color, danger: danger,
@@ -102,7 +102,9 @@ final class LeadLineSmoother {
         let k = CGFloat(1 - exp(-dt / timeConstant))
 
         func ease(_ current: CGPoint?, _ target: CGPoint, snapDistance: CGFloat) -> CGPoint {
-            guard let current, hypot(current.x - target.x, current.y - target.y) < snapDistance else { return target }
+            guard let current else { return target }
+            let jx = current.x - target.x, jy = current.y - target.y
+            guard (jx * jx + jy * jy).squareRoot() < snapDistance else { return target }
             return CGPoint(x: current.x + (target.x - current.x) * k, y: current.y + (target.y - current.y) * k)
         }
         let newStart = ease(start, targetStart, snapDistance: 400)
@@ -126,7 +128,7 @@ enum LeadLineRenderer {
     static func draw(in context: inout GraphicsContext, start: CGPoint, end: CGPoint, markerWidth: CGFloat,
                      color: Color, danger: Bool, flowSpeed: Double, time: Double) {
         let dx = end.x - start.x, dy = end.y - start.y
-        let length = hypot(dx, dy)
+        let length = (dx * dx + dy * dy).squareRoot()
         guard length > 16 else {
             drawMarker(in: &context, at: end, width: markerWidth, color: color, danger: danger, time: time, pulse: 0)
             return

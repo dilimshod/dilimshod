@@ -183,6 +183,11 @@ private struct SettingsFollowingDistanceSection: View {
                 }
             }
             .disabled(!settings.followingDistanceEnabled)
+            NavigationLink {
+                DistanceNormsView()
+            } label: {
+                Label("Требования к дистанции", systemImage: "book.closed")
+            }
         } header: {
             Text("Дистанция")
         } footer: {

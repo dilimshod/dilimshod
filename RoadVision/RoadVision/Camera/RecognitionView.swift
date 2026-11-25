@@ -5,9 +5,15 @@ import UIKit
 ///
 /// Layout (safe-area aware HUD over an edge-to-edge camera picture):
 /// - top-left: speedometer + speed-limit sign, road chip (name, lanes, source "OSM");
+///   in landscape also the compact following-distance card;
 /// - top-right: settings, status line (к/с · мс · model) → status sheet, traffic-light indicator;
 /// - top-centre: unique counters by kind with "Всего ТС" and reset (below the top row in portrait);
+/// - bottom-centre (portrait): following-distance card above the bottom row;
 /// - bottom-left: AI assistant, bottom-centre: research recording, bottom-right corner: navigator button.
+///
+/// Camera layers (full screen, same aspect-fill mapping): own-lane corridor, corner-bracket boxes with the lead vehicle
+/// highlighted, the animated distance line to the lead, tap targets (tap a box → detail card), and a red edge glow
+/// during a forward-collision warning. The tap targets sit below the HUD, so every button keeps working.
 ///
 /// The camera itself is started/stopped by `AppState.updateCameraForMode()`, not by this view.
 struct RecognitionView: View {
@@ -15,6 +21,9 @@ struct RecognitionView: View {
     @Environment(\.verticalSizeClass) private var verticalSizeClass
 
     @State private var showStatus = false
+    @State private var showNorms = false
+    @State private var selectedTrackID: Int?
+    @AppStorage(FollowingDistanceHUD.expandedKey) private var distanceHUDExpanded = false
     @State private var lastSpeedWarning: Date?
     @State private var export: RecordingExport?
     @State private var isSavingRecording = false
@@ -32,11 +41,19 @@ struct RecognitionView: View {
             } else {
                 CameraPreviewView(session: pipeline.camera.session)
                     .ignoresSafeArea()
-                LiveDetectionLayer(pipeline: pipeline, settings: app.settings)
+                LiveDetectionLayer(pipeline: pipeline, settings: app.settings,
+                                   selectedTrackID: $selectedTrackID, labelInsets: leadLabelInsets)
                     .ignoresSafeArea()
             }
 
             hud(pipeline: pipeline)
+
+            if !pipeline.cameraPermissionDenied {
+                TrackDetailLayer(pipeline: pipeline, selectedTrackID: $selectedTrackID)
+                    .ignoresSafeArea()
+            }
+            CollisionWarningGlow(pipeline: pipeline, settings: app.settings)
+                .ignoresSafeArea()
         }
         .onChange(of: app.location.speedKmh) { _, speed in
             checkSpeedWarning(speed)
@@ -47,6 +64,21 @@ struct RecognitionView: View {
         .sheet(item: $export) { item in
             RecordingExportSheet(export: item)
         }
+        .sheet(isPresented: $showNorms) {
+            DistanceNormsSheet()
+        }
+    }
+
+    /// Area kept free for the floating distance label (full-screen coordinates, approximate HUD extents).
+    private var leadLabelInsets: EdgeInsets {
+        if isLandscape {
+            return EdgeInsets(top: 60, leading: 290, bottom: 120, trailing: 170)
+        }
+        return EdgeInsets(top: 300, leading: 16, bottom: distanceHUDExpanded ? 400 : 300, trailing: 16)
+    }
+
+    private var showsDistanceHUD: Bool {
+        app.settings.followingDistanceEnabled && !app.recognition.cameraPermissionDenied
     }
 
     // MARK: - HUD
@@ -57,6 +89,11 @@ struct RecognitionView: View {
                 VStack(alignment: .leading, spacing: 8) {
                     SpeedHUD()
                     RoadChip(road: app.roadInfo.currentRoad)
+                    if isLandscape && showsDistanceHUD {
+                        FollowingDistanceSlot(pipeline: pipeline, settings: app.settings, style: .mini) {
+                            showNorms = true
+                        }
+                    }
                 }
                 Spacer(minLength: 8)
                 if isLandscape {
@@ -85,6 +122,13 @@ struct RecognitionView: View {
                 .frame(maxWidth: 560)
 
             Spacer(minLength: 0)
+
+            if !isLandscape && showsDistanceHUD {
+                FollowingDistanceSlot(pipeline: pipeline, settings: app.settings, style: .full) {
+                    showNorms = true
+                }
+                .frame(maxWidth: 420)
+            }
 
             ZStack(alignment: .bottom) {
                 HStack(alignment: .bottom) {
@@ -140,14 +184,120 @@ struct RecognitionView: View {
 
 // MARK: - Camera layers
 
-/// Boxes for the current tracks (a separate view so only it re-renders with every processed frame).
+/// Everything drawn over the camera picture that follows the processed frames (a separate view so only it
+/// re-renders with every frame): lane corridor, boxes, distance line and the tap targets.
 private struct LiveDetectionLayer: View {
+    let pipeline: RecognitionPipeline
+    let settings: AppSettings
+    @Binding var selectedTrackID: Int?
+    let labelInsets: EdgeInsets
+
+    var body: some View {
+        let following = settings.followingDistanceEnabled
+        let lead = following ? pipeline.leadVehicle : nil
+        let assessment = following ? pipeline.followingAssessment : nil
+        let status: DistanceStatus = lead == nil ? .unknown : (assessment?.status ?? .unknown)
+        ZStack {
+            if following && settings.showEgoCorridor {
+                EgoCorridorOverlay(corridor: pipeline.egoCorridor, imageSize: pipeline.frameSize,
+                                   tint: status == .unknown ? .white : RVTheme.statusColor(status))
+            }
+            DetectionOverlayView(tracks: pipeline.tracks, imageSize: pipeline.frameSize,
+                                 showDistance: settings.showDistanceEstimates, showSpeed: settings.showSpeedEstimates,
+                                 lead: lead, leadStatus: status, selectedTrackID: selectedTrackID)
+            if let lead {
+                LeadDistanceOverlay(lead: lead, assessment: assessment, imageSize: pipeline.frameSize,
+                                    labelInsets: labelInsets)
+                    .transition(.opacity)
+            }
+            TrackHitLayer(tracks: pipeline.tracks, imageSize: pipeline.frameSize, selectedTrackID: $selectedTrackID)
+        }
+        .animation(.easeInOut(duration: 0.25), value: lead == nil)
+    }
+}
+
+/// Detail card of the tapped box, next to it (above the HUD so it is never hidden). It stays while the track
+/// flickers for a moment, closes 1.5 s after the object left the frame, or after 12 s.
+private struct TrackDetailLayer: View {
+    let pipeline: RecognitionPipeline
+    @Binding var selectedTrackID: Int?
+    @State private var cached: TrackedObject?
+
+    var body: some View {
+        let current = selectedTrackID.flatMap { id in pipeline.tracks.first { $0.id == id } }
+        let shown = current ?? (cached?.id == selectedTrackID ? cached : nil)
+        GeometryReader { proxy in
+            if let track = shown {
+                let mapping = AspectFillMapping(imageSize: pipeline.frameSize, viewSize: proxy.size)
+                let position = TrackDetailCard.position(for: mapping.rect(for: track.box), in: proxy.size,
+                                                        safeArea: proxy.safeAreaInsets)
+                let lead = pipeline.leadVehicle?.trackID == track.id ? pipeline.leadVehicle : nil
+                TrackDetailCard(track: track, lead: lead, assessment: lead == nil ? nil : pipeline.followingAssessment) {
+                    selectedTrackID = nil
+                }
+                .position(position)
+                .animation(.smooth(duration: 0.25), value: position)
+                .transition(.scale(scale: 0.9).combined(with: .opacity))
+            }
+        }
+        .animation(RVTheme.snappy, value: shown?.id)
+        .onChange(of: current) { _, newValue in
+            if let newValue { cached = newValue }
+        }
+        .task(id: selectedTrackID) {
+            guard let id = selectedTrackID else { return }
+            do { try await Task.sleep(for: .seconds(12)) } catch { return }
+            if selectedTrackID == id { selectedTrackID = nil }
+        }
+        .task(id: current == nil && selectedTrackID != nil) {
+            guard let id = selectedTrackID, current == nil else { return }
+            do { try await Task.sleep(for: .seconds(1.5)) } catch { return }
+            if selectedTrackID == id, !pipeline.tracks.contains(where: { $0.id == id }) {
+                selectedTrackID = nil
+            }
+        }
+    }
+}
+
+/// Pulsing red glow around the screen edges during a forward-collision warning (when warnings are enabled).
+private struct CollisionWarningGlow: View {
     let pipeline: RecognitionPipeline
     let settings: AppSettings
 
     var body: some View {
-        DetectionOverlayView(tracks: pipeline.tracks, imageSize: pipeline.frameSize,
-                             showDistance: settings.showDistanceEstimates, showSpeed: settings.showSpeedEstimates)
+        let active = pipeline.isForwardCollisionWarning && settings.distanceWarningsEnabled
+        ZStack {
+            if active {
+                Rectangle()
+                    .strokeBorder(RVTheme.danger, lineWidth: 28)
+                    .blur(radius: 24)
+                    .rvPulse(true, minOpacity: 0.3, period: 0.55)
+                    .transition(.opacity)
+            }
+        }
+        .animation(.easeInOut(duration: 0.2), value: active)
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
+    }
+}
+
+/// Following-distance card bound to the pipeline (separate view: it re-renders with every processed frame).
+private struct FollowingDistanceSlot: View {
+    let pipeline: RecognitionPipeline
+    let settings: AppSettings
+    let style: FollowingDistanceHUD.Style
+    let onShowNorms: () -> Void
+
+    var body: some View {
+        if let assessment = pipeline.followingAssessment {
+            FollowingDistanceHUD(assessment: assessment, lead: pipeline.leadVehicle,
+                                 policy: pipeline.followingDistancePolicy,
+                                 surfaceSource: pipeline.roadSurfaceSource,
+                                 isForwardCollisionWarning: pipeline.isForwardCollisionWarning
+                                    && settings.distanceWarningsEnabled,
+                                 style: style, onShowNorms: onShowNorms)
+                .transition(.move(edge: .bottom).combined(with: .opacity))
+        }
     }
 }
 
@@ -161,9 +311,9 @@ private struct CameraPermissionCard: View {
                 .font(.system(size: 44, weight: .semibold))
                 .foregroundStyle(.white.opacity(0.85))
             Text("Нет доступа к камере")
-                .font(.system(size: 22, weight: .bold, design: .rounded))
+                .font(RVTheme.font(22, weight: .bold))
             Text("Разрешите доступ к камере в Настройках, чтобы распознавать транспорт. Спидометр, навигатор и ассистент работают и без камеры.")
-                .font(.system(size: 16, weight: .regular, design: .rounded))
+                .font(RVTheme.font(16, weight: .regular))
                 .multilineTextAlignment(.center)
                 .foregroundStyle(.white.opacity(0.8))
             Button {
@@ -172,17 +322,17 @@ private struct CameraPermissionCard: View {
                 }
             } label: {
                 Label("Открыть настройки", systemImage: "gearshape.fill")
-                    .font(.system(size: 17, weight: .bold, design: .rounded))
+                    .font(RVTheme.font(17, weight: .bold))
                     .padding(.horizontal, 20)
                     .frame(minHeight: 52)
             }
             .buttonStyle(.borderedProminent)
-            .tint(.blue)
+            .tint(RVTheme.accent)
         }
         .foregroundStyle(.white)
         .padding(24)
         .frame(maxWidth: 420)
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+        .rvGlass(cornerRadius: 24)
         .padding(32)
     }
 }
@@ -209,27 +359,29 @@ private struct RoadChip: View {
         if let road {
             VStack(alignment: .leading, spacing: 3) {
                 Text(road.displayName)
-                    .font(.system(size: 15, weight: .bold, design: .rounded))
+                    .font(RVTheme.font(15, weight: .bold))
                     .lineLimit(1)
+                    .contentTransition(.opacity)
                 HStack(spacing: 6) {
                     Image(systemName: "road.lanes")
                     Text(Self.lanesText(road.laneInfo))
                         .monospacedDigit()
                         .lineLimit(1)
+                        .contentTransition(.numericText())
                     Text("OSM")
-                        .font(.system(size: 10, weight: .heavy, design: .rounded))
+                        .font(RVTheme.font(10, weight: .heavy))
                         .padding(.horizontal, 5)
                         .padding(.vertical, 1)
                         .background(Color.white.opacity(0.2), in: Capsule())
                 }
-                .font(.system(size: 13, weight: .semibold, design: .rounded))
+                .font(RVTheme.font(13, weight: .semibold))
                 .foregroundStyle(.white.opacity(0.9))
             }
             .foregroundStyle(.white)
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
             .frame(maxWidth: 210, alignment: .leading)
-            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .rvGlass(cornerRadius: 16)
             .accessibilityElement(children: .ignore)
             .accessibilityLabel(Self.accessibilityText(road))
         }
@@ -272,19 +424,22 @@ private struct StatusLineButton: View {
                 Circle()
                     .fill(dotColor)
                     .frame(width: 8, height: 8)
+                    .shadow(color: dotColor.opacity(0.8), radius: 3)
+                    .rvPulse(pipeline.detectorStatus == .loading, minOpacity: 0.3, period: 1.2)
                 // Full "к/с · мс · model" when it fits, otherwise without the model name.
                 ViewThatFits(in: .horizontal) {
                     Text(text)
                     Text(shortText)
                 }
-                .font(.system(size: 12, weight: .semibold, design: .rounded))
+                .font(RVTheme.font(12, weight: .semibold))
                 .monospacedDigit()
                 .lineLimit(1)
+                .contentTransition(.numericText())
             }
             .foregroundStyle(.white)
             .padding(.horizontal, 10)
             .frame(minHeight: 34)
-            .background(.ultraThinMaterial, in: Capsule())
+            .rvGlassCapsule(shadow: false)
             .frame(minHeight: 44)
             .contentShape(Rectangle())
         }
@@ -314,9 +469,9 @@ private struct StatusLineButton: View {
 
     private var dotColor: Color {
         switch pipeline.detectorStatus {
-        case .ready: return pipeline.isRunning && !pipeline.isCameraInterrupted ? .green : .yellow
-        case .loading: return .yellow
-        case .missing, .failed: return .red
+        case .ready: return pipeline.isRunning && !pipeline.isCameraInterrupted ? RVTheme.safe : RVTheme.caution
+        case .loading: return RVTheme.caution
+        case .missing, .failed: return RVTheme.danger
         }
     }
 }
@@ -329,8 +484,9 @@ private struct TrafficLightSlot: View {
         if let color = pipeline.currentLightColor {
             TrafficLightIndicatorView(color: color, lampSize: 18)
                 .padding(8)
-                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                .rvGlass(cornerRadius: RVTheme.Radius.control)
                 .transition(.scale.combined(with: .opacity))
+                .animation(RVTheme.snappy, value: color)
         }
     }
 }
@@ -354,23 +510,25 @@ private struct CountersPanel: View {
             }
             HStack(spacing: 10) {
                 Text("Всего ТС: \(pipeline.totalUniqueVehicles)")
-                    .font(.system(size: 15, weight: .bold, design: .rounded))
-                    .monospacedDigit()
+                    .rvNumeric(15, weight: .bold)
                     .contentTransition(.numericText())
+                    .animation(RVTheme.snappy, value: pipeline.totalUniqueVehicles)
                 if showPedestrians {
                     HStack(spacing: 3) {
                         Image(systemName: VehicleKind.person.symbolName)
-                            .foregroundStyle(DetectionOverlayView.color(for: .person))
+                            .foregroundStyle(RVTheme.kindColor(.person))
                         Text("\(pipeline.uniqueCounts[.person] ?? 0)")
                             .monospacedDigit()
+                            .contentTransition(.numericText())
                     }
-                    .font(.system(size: 14, weight: .semibold, design: .rounded))
+                    .font(RVTheme.font(14, weight: .semibold))
                     .accessibilityElement(children: .ignore)
                     .accessibilityLabel("Пешеходы: \(pipeline.uniqueCounts[.person] ?? 0)")
                 }
                 Button(action: reset) {
                     Image(systemName: "arrow.counterclockwise")
                         .font(.system(size: 15, weight: .bold))
+                        .symbolEffect(.bounce, value: resetCount)
                         .frame(width: 52, height: 40)
                         .contentShape(Rectangle())
                 }
@@ -381,7 +539,7 @@ private struct CountersPanel: View {
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 6)
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .rvGlass(cornerRadius: RVTheme.Radius.panel)
         .simultaneousGesture(
             LongPressGesture(minimumDuration: 0.8).onEnded { _ in reset() }
         )
@@ -405,11 +563,12 @@ private struct CounterChip: View {
         HStack(spacing: 4) {
             Image(systemName: kind.symbolName)
                 .font(.system(size: 14, weight: .bold))
-                .foregroundStyle(DetectionOverlayView.color(for: kind))
+                .foregroundStyle(RVTheme.kindColor(kind))
+                .symbolEffect(.bounce, value: count)
             Text("\(count)")
-                .font(.system(size: 16, weight: .heavy, design: .rounded))
-                .monospacedDigit()
+                .rvNumeric(16, weight: .heavy)
                 .contentTransition(.numericText())
+                .animation(RVTheme.snappy, value: count)
                 .foregroundStyle(count > 0 ? Color.white : Color.white.opacity(0.5))
         }
         .padding(.horizontal, 7)
@@ -482,14 +641,15 @@ private struct InfoBanner: View {
             Image(systemName: systemImage)
                 .font(.system(size: 20, weight: .semibold))
                 .foregroundStyle(tint)
+                .symbolEffect(.pulse, options: .repeating)
                 .padding(.top, 2)
             VStack(alignment: .leading, spacing: 3) {
                 Text(title)
-                    .font(.system(size: 15, weight: .bold, design: .rounded))
+                    .font(RVTheme.font(15, weight: .bold))
                     .fixedSize(horizontal: false, vertical: true)
                 if let message {
                     Text(message)
-                        .font(.system(size: 13, weight: .regular, design: .rounded))
+                        .font(RVTheme.font(13, weight: .regular))
                         .foregroundStyle(.white.opacity(0.8))
                         .fixedSize(horizontal: false, vertical: true)
                 }
@@ -510,11 +670,7 @@ private struct InfoBanner: View {
         .padding(.leading, 12)
         .padding(.trailing, onClose == nil ? 12 : 2)
         .padding(.vertical, 10)
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .strokeBorder(tint.opacity(0.5), lineWidth: 1)
-        )
+        .rvGlass(cornerRadius: 16, tint: tint.opacity(0.7))
         .transition(.move(edge: .top).combined(with: .opacity))
     }
 }
@@ -534,18 +690,22 @@ private struct RecordButton: View {
             HStack(spacing: 10) {
                 ZStack {
                     Circle()
-                        .strokeBorder(Color.white, lineWidth: 3)
+                        .strokeBorder(isRecording ? RVTheme.recording : Color.white, lineWidth: 3)
                         .frame(width: 30, height: 30)
+                        .rvPulse(isRecording, minOpacity: 0.35, period: 1.4)
                     if isRecording {
                         RoundedRectangle(cornerRadius: 3, style: .continuous)
-                            .fill(Color.red)
+                            .fill(RVTheme.recording)
                             .frame(width: 13, height: 13)
+                            .transition(.scale.combined(with: .opacity))
                     } else {
                         Circle()
-                            .fill(Color.red)
+                            .fill(RVTheme.recording)
                             .frame(width: 20, height: 20)
+                            .transition(.scale.combined(with: .opacity))
                     }
                 }
+                .animation(RVTheme.snappy, value: isRecording)
                 if isSaving {
                     ProgressView()
                         .tint(.white)
@@ -558,15 +718,17 @@ private struct RecordButton: View {
                     Text("Запись")
                 }
             }
-            .font(.system(size: 17, weight: .bold, design: .rounded))
-            .monospacedDigit()
+            .rvNumeric(17, weight: .bold)
+            .contentTransition(.numericText())
             .foregroundStyle(.white)
             .padding(.horizontal, 16)
             .frame(minHeight: 56)
-            .background(.ultraThinMaterial, in: Capsule())
-            .overlay(
-                Capsule().strokeBorder(isRecording ? Color.red : Color.white.opacity(0.2), lineWidth: isRecording ? 2 : 1)
-            )
+            .rvGlassCapsule(tint: isRecording ? RVTheme.recording : nil)
+            .overlay {
+                if isRecording {
+                    Capsule().strokeBorder(RVTheme.recording, lineWidth: 2)
+                }
+            }
         }
         .buttonStyle(RVPressableButtonStyle())
         .disabled(!isEnabled || isSaving)
@@ -596,11 +758,11 @@ private struct NavigatorCornerButton: View {
                     .font(.system(size: 28, weight: .semibold))
                     .foregroundStyle(.white)
                     .frame(width: 72, height: 72)
-                    .background(Circle().fill(Color(red: 0.1, green: 0.48, blue: 1.0).gradient))
+                    .background(Circle().fill(RVTheme.accent.gradient))
                     .overlay(Circle().strokeBorder(Color.white.opacity(0.35), lineWidth: 1.5))
                     .shadow(color: .black.opacity(0.45), radius: 8, x: 0, y: 3)
                 Text("Навигатор")
-                    .font(.system(size: 13, weight: .bold, design: .rounded))
+                    .font(RVTheme.font(13, weight: .bold))
                     .foregroundStyle(.white)
                     .shadow(color: .black.opacity(0.8), radius: 2)
             }
@@ -646,7 +808,7 @@ private struct RecordingExportSheet: View {
                     Section {
                         ShareLink(items: export.urls) {
                             Label("Поделиться файлами", systemImage: "square.and.arrow.up")
-                                .font(.system(size: 17, weight: .semibold, design: .rounded))
+                                .font(RVTheme.font(17, weight: .semibold))
                                 .frame(maxWidth: .infinity, minHeight: 44)
                         }
                     }
@@ -657,7 +819,7 @@ private struct RecordingExportSheet: View {
                     Text("Проценты — уверенность модели, а не точность. Расстояния и скорости — оценка по одной камере (≈).")
                         .foregroundStyle(.secondary)
                 }
-                .font(.system(size: 14, design: .rounded))
+                .font(RVTheme.font(14, weight: .regular))
             }
             .navigationTitle(export.urls.isEmpty ? "Запись не сохранена" : "Запись сохранена")
             .navigationBarTitleDisplayMode(.inline)

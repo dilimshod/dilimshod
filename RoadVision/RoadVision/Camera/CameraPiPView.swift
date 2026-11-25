@@ -1,7 +1,8 @@
 import SwiftUI
 
 /// Small live camera window with recognition boxes, used on top of the navigator.
-/// Tapping it switches back to the full-screen camera.
+/// Shows the traffic-light colour, the number of visible vehicles and — when a lead vehicle is tracked — a badge with
+/// the ≈ gap to it in the status colour. Tapping it switches back to the full-screen camera.
 struct CameraPiPView: View {
     let pipeline: RecognitionPipeline
     @Environment(AppState.self) private var app
@@ -42,6 +43,15 @@ struct CameraPiPView: View {
                     .padding(6)
             }
         }
+        .overlay(alignment: .bottomLeading) {
+            if isLive, let lead = pipeline.leadVehicle {
+                LeadDistanceBadge(distanceMeters: lead.distanceMeters,
+                                  status: pipeline.followingAssessment?.status ?? .unknown)
+                    .padding(6)
+                    .transition(.scale(scale: 0.8).combined(with: .opacity))
+            }
+        }
+        .animation(RVTheme.snappy, value: pipeline.leadVehicle == nil)
         .overlay(alignment: .topTrailing) {
             if pipeline.isRecording {
                 Circle()
@@ -87,17 +97,53 @@ struct CameraPiPView: View {
         if let color = pipeline.currentLightColor {
             text += ", светофор: \(color.displayName.lowercased())"
         }
+        if let lead = pipeline.leadVehicle {
+            let d = lead.distanceMeters
+            text += ", до машины впереди примерно "
+                + RVFormat.spokenQuantity(d, digits: d < 10 ? 1 : 0, one: "метр", few: "метра", many: "метров") + " (оценка)"
+            if let status = pipeline.followingAssessment?.status, status != .unknown {
+                text += ", \(status.displayName.lowercased())"
+            }
+        }
         return text
     }
 }
 
 /// Boxes only (no labels) — a separate view so only it re-renders with every processed frame.
+/// The lead vehicle's bracket is drawn in its status colour.
 private struct PiPDetectionLayer: View {
     let pipeline: RecognitionPipeline
 
     var body: some View {
+        let lead = pipeline.leadVehicle
         DetectionOverlayView(tracks: pipeline.tracks, imageSize: pipeline.frameSize,
-                             showDistance: false, showSpeed: false, showLabels: false)
+                             showDistance: false, showSpeed: false, showLabels: false,
+                             lead: lead,
+                             leadStatus: lead == nil ? .unknown : (pipeline.followingAssessment?.status ?? .unknown))
+    }
+}
+
+/// "≈ 18 м" capsule in the status colour of the gap to the lead vehicle.
+private struct LeadDistanceBadge: View {
+    let distanceMeters: Double
+    let status: DistanceStatus
+
+    var body: some View {
+        let color = RVTheme.statusColor(status)
+        HStack(spacing: 3) {
+            Image(systemName: "car.rear.fill")
+                .font(.system(size: 9, weight: .bold))
+            Text(FollowingDistanceText.gap(distanceMeters))
+                .rvNumeric(12, weight: .heavy)
+                .contentTransition(.numericText())
+        }
+        .foregroundStyle(status == .unknown ? Color.white : Color.black)
+        .padding(.horizontal, 7)
+        .padding(.vertical, 3)
+        .background(status == .unknown ? Color.black.opacity(0.6) : color, in: Capsule())
+        .overlay(Capsule().strokeBorder(Color.white.opacity(0.35), lineWidth: 0.5))
+        .rvPulse(status == .danger, minOpacity: 0.55, period: 0.7)
+        .animation(RVTheme.snappy, value: FollowingDistanceText.gap(distanceMeters))
     }
 }
 
