@@ -8,9 +8,9 @@ struct AssistantButton: View {
 
     private let size: CGFloat
 
-    /// - Parameter size: diameter in points (≥ 52 for use while driving).
+    /// - Parameter size: diameter in points (≥ 44, the minimum tap target).
     init(size: CGFloat = 60) {
-        self.size = max(52, size)
+        self.size = max(44, size)
     }
 
     var body: some View {

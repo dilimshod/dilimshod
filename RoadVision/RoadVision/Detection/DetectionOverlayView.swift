@@ -5,11 +5,13 @@ import SwiftUI
 /// Boxes are normalized to the processed camera buffer (`imageSize`, upright). The preview layer shows that buffer
 /// with `.resizeAspectFill`, so the same geometry is used here (`AspectFillMapping`).
 ///
-/// Style: rounded corner brackets (2–3 pt) with a faint outline and fill, moving smoothly between processed frames
-/// and springing in when a track appears; frosted-glass labels ("Легковой · Chevrolet  74%" + "≈ 23 м · ≈ 54 км/ч").
-/// The lead vehicle (own lane, following distance) gets a thicker glowing bracket in the status colour that pulses
-/// gently when the gap is short. Tentative tracks are faint and dashed without a label. Percentages are detector
-/// *confidence* ("уверенность"); distances/speeds are rough monocular estimates ("≈").
+/// Style (minimal dashcam HUD): thin rounded corner brackets (1.5 pt) with a barely visible fill, moving smoothly
+/// between processed frames and springing in when a track appears; a tiny single-line frosted capsule above the box
+/// (class symbol + class, make only when the classifier is confident). The lead vehicle (own lane, following distance)
+/// gets a slightly thicker softly glowing bracket in the status colour that pulses gently when the gap is short — its
+/// distance is shown by `LeadDistanceOverlay`, not here. Tentative tracks are faint dashed brackets without a label.
+/// Estimates ("≈ 23 м · ≈ 54 км/ч", when enabled) are added to the same line only on large (near) boxes, so far-away
+/// traffic stays uncluttered; the tap-to-open detail card always has them. Percentages are detector *confidence*.
 ///
 /// This view never takes touches; `TrackHitLayer` provides the tappable areas.
 struct DetectionOverlayView: View {
@@ -52,9 +54,8 @@ struct DetectionOverlayView: View {
                                  leadStatus: leadStatus,
                                  isSelected: selectedTrackID == track.id,
                                  showLabel: showLabels && track.isConfirmed,
-                                 secondaryText: showLabels
-                                    ? Self.estimateText(for: track, showDistance: showDistance && !isLead,
-                                                        showSpeed: showSpeed)
+                                 secondaryText: showLabels && !isLead && Self.showsInlineEstimate(for: mapping.rect(for: track.box))
+                                    ? Self.estimateText(for: track, showDistance: showDistance, showSpeed: showSpeed)
                                     : nil)
                 }
             }
@@ -65,6 +66,28 @@ struct DetectionOverlayView: View {
     }
 
     // MARK: - Styling and text (also used by other camera views)
+
+    /// Boxes at least this wide (points) — i.e. near vehicles — get their enabled estimates on the label line.
+    static let inlineEstimateMinWidth: CGFloat = 120
+
+    static func showsInlineEstimate(for rect: CGRect) -> Bool {
+        rect.width >= inlineEstimateMinWidth
+    }
+
+    /// Make shown on the compact box label: only when the classifier is confident (≥ 0.6).
+    static func confidentMakeText(for track: TrackedObject) -> String? {
+        guard let make = track.make, let confidence = track.makeConfidence, confidence >= 0.6 else { return nil }
+        return make
+    }
+
+    /// Single-line label text: "Легковой · Chevrolet" (confident make only); traffic lights: "Светофор · Красный".
+    static func compactTitleText(for track: TrackedObject) -> String {
+        if track.kind == .trafficLight { return titleText(for: track) }
+        if let make = confidentMakeText(for: track) {
+            return track.kind.displayName + " · " + make
+        }
+        return track.kind.displayName
+    }
 
     /// Box/label colour per object class (see `RVTheme.kindColor`).
     static func color(for kind: VehicleKind) -> Color {
@@ -190,7 +213,7 @@ private struct TrackBoxView: View {
     }
 
     private var lineWidth: CGFloat {
-        if thin { return isLead ? 2.5 : RVTheme.Stroke.tentative }
+        if thin { return isLead ? 2 : RVTheme.Stroke.tentative }
         if isLead { return RVTheme.Stroke.lead }
         if isSelected { return RVTheme.Stroke.selected }
         return track.isConfirmed ? RVTheme.Stroke.box : RVTheme.Stroke.tentative
@@ -205,31 +228,35 @@ private struct TrackBoxView: View {
         let radius = thin ? 4 : RVTheme.Radius.box
         let shape = RoundedRectangle(cornerRadius: radius, style: .continuous)
         // The label goes inside the box when there is no room above it, right-aligned near the right edge.
-        let labelInside = rect.minY < 46
+        let labelInside = rect.minY < 28
         let alignTrailing = rect.midX > containerSize.width * 0.62
 
         ZStack {
-            shape.fill(color.opacity(thin || !confirmed ? 0 : (isLead ? 0.12 : 0.06)))
-            shape.stroke(color.opacity(confirmed ? (isLead ? 0.45 : 0.25) : 0.15), lineWidth: 1)
-            CornerBracketShape(cornerRadius: radius)
-                .stroke(color.opacity(confirmed ? 1 : 0.5),
+            if confirmed && !thin {
+                shape.fill(color.opacity(isLead ? 0.07 : 0.03))
+                shape.stroke(color.opacity(isLead ? 0.3 : 0.12), lineWidth: 0.5)
+            }
+            CornerBracketShape(armFraction: confirmed ? 0.22 : 0.16, cornerRadius: radius)
+                .stroke(color.opacity(confirmed ? 0.95 : 0.4),
                         style: StrokeStyle(lineWidth: lineWidth, lineCap: .round, lineJoin: .round,
-                                           dash: confirmed ? [] : [5, 4]))
-                .shadow(color: isLead ? color.opacity(0.9) : .black.opacity(confirmed ? 0.45 : 0),
-                        radius: isLead ? (thin ? 4 : 9) : 2)
+                                           dash: confirmed ? [] : [3, 4]))
+                .shadow(color: isLead ? color.opacity(0.7) : .black.opacity(confirmed ? 0.35 : 0),
+                        radius: isLead ? (thin ? 3 : 5) : 1.5)
                 .rvPulse(pulses, minOpacity: 0.55, period: leadStatus == .danger ? 0.7 : 1.3)
             if isSelected && !thin {
-                shape.stroke(Color.white.opacity(0.9), lineWidth: 1.5)
-                    .padding(-4)
+                shape.stroke(Color.white.opacity(0.85), lineWidth: 1)
+                    .padding(-3)
             }
         }
         .frame(width: max(rect.width, 6), height: max(rect.height, 6))
         .overlay(alignment: alignTrailing ? .topTrailing : .topLeading) {
             if showLabel {
+                // Fixed-width slot: the chip hugs its text and truncates beyond the maximum width.
                 TrackLabelChip(track: track, color: color, isLead: isLead, secondaryText: secondaryText)
-                    .fixedSize()
+                    .frame(width: RVTheme.HUD.maxLabelWidth, alignment: alignTrailing ? .trailing : .leading)
+                    .fixedSize(horizontal: false, vertical: true)
                     .alignmentGuide(.top) { dimensions in
-                        labelInside ? -6 : dimensions[.bottom] + 6
+                        labelInside ? -4 : dimensions[.bottom] + 4
                     }
             }
         }
@@ -246,7 +273,8 @@ private struct TrackBoxView: View {
     }
 }
 
-/// Frosted-glass label above a box.
+/// Tiny single-line frosted capsule above a box: class symbol, class (+ confident make), lead marker and — on near
+/// boxes only — the enabled estimates. Truncates instead of growing.
 private struct TrackLabelChip: View {
     let track: TrackedObject
     let color: Color
@@ -254,48 +282,36 @@ private struct TrackLabelChip: View {
     let secondaryText: String?
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 1) {
-            HStack(spacing: 5) {
-                if track.kind == .trafficLight {
-                    TrafficLightDotView(color: track.lightColor ?? .unknown, size: 11)
-                } else {
-                    Image(systemName: track.kind.symbolName)
-                        .font(.system(size: 11, weight: .bold))
-                        .foregroundStyle(color)
-                }
-                Text(DetectionOverlayView.titleText(for: track))
-                    .font(RVTheme.font(13, weight: .bold))
-                if track.kind != .trafficLight {
-                    Text("\(DetectionOverlayView.confidencePercent(for: track))%")
-                        .font(RVTheme.font(11, weight: .semibold))
-                        .foregroundStyle(.white.opacity(0.7))
-                }
-                if isLead {
-                    Text("ВПЕРЕДИ")
-                        .font(RVTheme.font(9, weight: .heavy))
-                        .foregroundStyle(Color.black)
-                        .padding(.horizontal, 5)
-                        .padding(.vertical, 1)
-                        .background(color, in: Capsule())
-                }
+        HStack(spacing: 4) {
+            if track.kind == .trafficLight {
+                TrafficLightDotView(color: track.lightColor ?? .unknown, size: 8)
+            } else {
+                Image(systemName: isLead ? "car.rear.fill" : track.kind.symbolName)
+                    .font(.system(size: 9, weight: .bold))
+                    .foregroundStyle(color)
             }
+            Text(DetectionOverlayView.compactTitleText(for: track))
+                .layoutPriority(1)
             if let secondaryText {
                 Text(secondaryText)
-                    .font(RVTheme.font(12, weight: .semibold))
-                    .foregroundStyle(.white.opacity(0.88))
+                    .foregroundStyle(.white.opacity(0.75))
             }
         }
+        .font(RVTheme.font(11, weight: .semibold))
         .monospacedDigit()
         .lineLimit(1)
+        .truncationMode(.tail)
         .foregroundStyle(.white)
-        .padding(.horizontal, 9)
-        .padding(.vertical, 4)
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 11, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 11, style: .continuous)
-                .strokeBorder(color.opacity(0.7), lineWidth: 1)
-        )
-        .shadow(color: .black.opacity(0.35), radius: 3, x: 0, y: 1)
+        .rvTextShadow()
+        .padding(.horizontal, 6)
+        .padding(.vertical, 2.5)
+        .background {
+            ZStack {
+                Capsule(style: .continuous).fill(.ultraThinMaterial).opacity(0.6)
+                Capsule(style: .continuous).fill(Color.black.opacity(0.18))
+            }
+        }
+        .overlay(Capsule(style: .continuous).strokeBorder(color.opacity(isLead ? 0.7 : 0.35), lineWidth: 0.5))
     }
 }
 

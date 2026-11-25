@@ -102,7 +102,7 @@ final class AppSettings {
         reactionTimeSeconds = double(Keys.reactionTimeSeconds, 1)
         roadSurfaceMode = string(Keys.roadSurfaceMode, "auto")
         distanceWarningsEnabled = bool(Keys.distanceWarningsEnabled, true)
-        showEgoCorridor = bool(Keys.showEgoCorridor, true)
+        showEgoCorridor = bool(Keys.showEgoCorridor, false)
         corridorHorizon = double(Keys.corridorHorizon, 0.42)
 
         voiceGuidanceEnabled = bool(Keys.voiceGuidanceEnabled, true)
