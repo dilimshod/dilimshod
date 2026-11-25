@@ -36,7 +36,11 @@ struct TrafficLightIndicatorView: View {
             .padding(lampSize * 0.3)
             .background(
                 RoundedRectangle(cornerRadius: lampSize * 0.6, style: .continuous)
-                    .fill(Color.black.opacity(0.75))
+                    .fill(Color.black.opacity(0.6))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: lampSize * 0.6, style: .continuous)
+                    .strokeBorder(Color.white.opacity(0.18), lineWidth: 0.5)
             )
             .overlay {
                 if color == .unknown {
@@ -51,6 +55,7 @@ struct TrafficLightIndicatorView: View {
                     .foregroundStyle(color == .unknown ? Color.white.opacity(0.7) : Self.displayColor(for: color))
                     .lineLimit(1)
                     .fixedSize()
+                    .shadow(color: .black.opacity(0.6), radius: 2, x: 0, y: 1)
             }
         }
         .accessibilityElement(children: .ignore)
@@ -63,7 +68,7 @@ struct TrafficLightIndicatorView: View {
         return Circle()
             .fill(isOn ? base : base.opacity(0.18))
             .frame(width: lampSize, height: lampSize)
-            .shadow(color: isOn ? base.opacity(0.9) : .clear, radius: isOn ? lampSize * 0.45 : 0)
+            .shadow(color: isOn ? base.opacity(0.8) : .clear, radius: isOn ? lampSize * 0.35 : 0)
     }
 }
 

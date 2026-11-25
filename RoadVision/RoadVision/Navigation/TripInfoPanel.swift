@@ -1,26 +1,20 @@
 import SwiftUI
 
-/// Bottom panel during guidance (collapsible): arrival time, remaining time & distance, live congestion estimate,
+/// Bottom panel during guidance (collapsible, collapsed by default to one line): arrival time, remaining time & distance, live congestion estimate,
 /// traffic signals ahead with estimated waits, the next signal, upcoming hazards, reported incidents, weather and
 /// the "Завершить" button. Every estimated value is labelled "≈ … (оценка)".
 struct TripInfoPanel: View {
     @Environment(AppState.self) private var app
-    @State private var isExpanded = true
+    @AppStorage("rv.tripPanelExpanded") private var isExpanded = false
 
     var body: some View {
         let nav = app.navigation
-        VStack(alignment: .leading, spacing: 10) {
-            Capsule()
-                .fill(Color.white.opacity(0.35))
-                .frame(width: 38, height: 5)
-                .frame(maxWidth: .infinity)
-                .accessibilityHidden(true)
-
+        VStack(alignment: .leading, spacing: 6) {
             header(nav)
 
             if isExpanded, let progress = nav.progress {
                 ScrollView(.vertical, showsIndicators: false) {
-                    VStack(alignment: .leading, spacing: 10) {
+                    VStack(alignment: .leading, spacing: 8) {
                         congestionSection(nav)
                         signalSection(nav, progress: progress)
                         hazardSection(nav, progress: progress)
@@ -29,56 +23,54 @@ struct TripInfoPanel: View {
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                .frame(maxHeight: 250)
+                .frame(maxHeight: 220)
                 .fixedSize(horizontal: false, vertical: true)
+                .font(.footnote)
                 .transition(.opacity.combined(with: .move(edge: .bottom)))
             }
         }
-        .padding(14)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 26, style: .continuous))
-        .shadow(color: .black.opacity(0.3), radius: 12, y: 4)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+        .shadow(color: .black.opacity(0.2), radius: 6, y: 2)
         .animation(.easeInOut(duration: 0.25), value: isExpanded)
     }
 
     // MARK: Header
 
     private func header(_ nav: NavigationService) -> some View {
-        HStack(alignment: .center, spacing: 14) {
+        HStack(alignment: .center, spacing: 10) {
             Button {
-                isExpanded.toggle()
+                withAnimation(.easeInOut(duration: 0.25)) { isExpanded.toggle() }
             } label: {
-                HStack(alignment: .center, spacing: 14) {
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
                     if let progress = nav.progress {
-                        VStack(alignment: .leading, spacing: 0) {
-                            Text(RVFormat.clock(Date().addingTimeInterval(progress.remainingTimeSeconds)))
-                                .font(.system(size: 30, weight: .bold, design: .rounded))
-                                .monospacedDigit()
-                            Text("прибытие")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(RVFormat.duration(progress.remainingTimeSeconds))
-                                .font(.headline)
-                                .monospacedDigit()
-                            Text(RVFormat.distance(progress.remainingDistance))
-                                .font(.subheadline)
-                                .monospacedDigit()
-                                .foregroundStyle(.secondary)
-                        }
+                        Text(RVFormat.clock(Date().addingTimeInterval(progress.remainingTimeSeconds)))
+                            .font(.system(size: 20, weight: .bold, design: .rounded))
+                            .monospacedDigit()
+                        Text(RVFormat.duration(progress.remainingTimeSeconds))
+                            .font(.subheadline.weight(.semibold))
+                            .monospacedDigit()
+                        Text(RVFormat.distance(progress.remainingDistance))
+                            .font(.subheadline)
+                            .monospacedDigit()
+                            .foregroundStyle(.secondary)
                     } else {
-                        HStack(spacing: 8) {
+                        HStack(spacing: 6) {
                             ProgressView()
+                                .controlSize(.small)
                             Text("Ожидание GPS…")
-                                .font(.headline)
+                                .font(.subheadline.weight(.semibold))
                         }
                     }
                     Spacer(minLength: 0)
                     Image(systemName: isExpanded ? "chevron.down" : "chevron.up")
-                        .font(.subheadline.weight(.bold))
+                        .font(.caption.weight(.bold))
                         .foregroundStyle(.secondary)
                 }
-                .frame(minHeight: 52)
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
+                .frame(minHeight: 44)
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
@@ -89,13 +81,14 @@ struct TripInfoPanel: View {
                 nav.stopNavigation()
             } label: {
                 Text("Завершить")
-                    .font(.headline)
-                    .padding(.horizontal, 14)
-                    .frame(minHeight: 52)
+                    .font(.subheadline.weight(.semibold))
+                    .padding(.horizontal, 4)
+                    .frame(minHeight: 32)
             }
             .buttonStyle(.borderedProminent)
             .tint(.red)
             .buttonBorderShape(.capsule)
+            .frame(minHeight: 44)
         }
     }
 
@@ -117,18 +110,18 @@ struct TripInfoPanel: View {
                         .fill(color(for: level))
                         .frame(width: 12, height: 12)
                     Text("\(level.displayName) · по вашей скорости (оценка)")
-                        .font(.subheadline.weight(.semibold))
+                        .font(.footnote.weight(.semibold))
                 }
             } else if nav.isWaitingAtSignal {
                 Label("Стоим у светофора — оценка загруженности приостановлена", systemImage: "pause.circle")
-                    .font(.subheadline)
+                    .font(.footnote)
             } else {
                 Label("Загруженность: недостаточно данных для оценки", systemImage: "speedometer")
-                    .font(.subheadline)
+                    .font(.footnote)
                     .foregroundStyle(.secondary)
             }
             Text(trafficNote(nav))
-                .font(.caption)
+                .font(.caption2)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
@@ -162,7 +155,7 @@ struct TripInfoPanel: View {
                         Image(systemName: "light.beacon.max")
                             .foregroundStyle(.orange)
                     }
-                    .font(.subheadline.weight(.semibold))
+                    .font(.footnote.weight(.semibold))
                 }
                 nextSignalRow(nav, along: along)
             }
@@ -205,10 +198,10 @@ struct TripInfoPanel: View {
                 Text("ожидание \(waitText)")
                     .monospacedDigit()
             }
-            .font(.subheadline)
+            .font(.footnote)
             HStack(spacing: 6) {
                 Text("Источник: \(sourceText) · вероятность остановки ≈ \(Int((stopProbability * 100).rounded()))%")
-                    .font(.caption)
+                    .font(.caption2)
                     .foregroundStyle(.secondary)
                 if let color = app.recognition.currentLightColor, color != .unknown, distance < 150 {
                     HStack(spacing: 4) {
@@ -217,7 +210,7 @@ struct TripInfoPanel: View {
                             .frame(width: 10, height: 10)
                         Text("камера: \(color.displayName.lowercased())")
                     }
-                    .font(.caption.weight(.semibold))
+                    .font(.caption2.weight(.semibold))
                 }
             }
         }
@@ -233,15 +226,15 @@ struct TripInfoPanel: View {
                 ForEach(hazards) { feature in
                     HStack(spacing: 10) {
                         Image(systemName: feature.kind.symbolName)
-                            .font(.headline)
-                            .foregroundStyle(hazardColor(feature.kind))
-                            .frame(width: 26)
-                        Text(feature.name.map { "\(feature.kind.displayName) · \($0)" } ?? feature.kind.displayName)
                             .font(.subheadline)
+                            .foregroundStyle(hazardColor(feature.kind))
+                            .frame(width: 22)
+                        Text(feature.name.map { "\(feature.kind.displayName) · \($0)" } ?? feature.kind.displayName)
+                            .font(.footnote)
                             .lineLimit(1)
                         Spacer(minLength: 4)
                         Text(RVFormat.distance(max(0, feature.distanceAlongRoute - progress.distanceAlong)))
-                            .font(.subheadline.weight(.semibold))
+                            .font(.footnote.weight(.semibold))
                             .monospacedDigit()
                     }
                 }
@@ -257,19 +250,19 @@ struct TripInfoPanel: View {
                 ForEach(ahead) { item in
                     HStack(spacing: 10) {
                         Image(systemName: item.incident.kind.symbolName)
-                            .font(.headline)
+                            .font(.subheadline)
                             .foregroundStyle(.red)
-                            .frame(width: 26)
+                            .frame(width: 22)
                         VStack(alignment: .leading, spacing: 0) {
                             Text(item.incident.kind.displayName)
-                                .font(.subheadline.weight(.semibold))
+                                .font(.footnote.weight(.semibold))
                             Text("ваша отметка, \(RVFormat.clock(item.incident.date))")
-                                .font(.caption)
+                                .font(.caption2)
                                 .foregroundStyle(.secondary)
                         }
                         Spacer(minLength: 4)
                         Text(RVFormat.distance(max(0, item.distanceAlongRoute - progress.distanceAlong)))
-                            .font(.subheadline.weight(.semibold))
+                            .font(.footnote.weight(.semibold))
                             .monospacedDigit()
                     }
                 }
@@ -284,11 +277,11 @@ struct TripInfoPanel: View {
         if let weather = app.weather.current {
             VStack(alignment: .leading, spacing: 2) {
                 Label(weather.summary, systemImage: weather.symbolName)
-                    .font(.subheadline)
+                    .font(.footnote)
                     .symbolRenderingMode(.multicolor)
                 if let warning = weather.roadWarnings.first {
                     Label(warning, systemImage: "exclamationmark.triangle.fill")
-                        .font(.caption.weight(.semibold))
+                        .font(.caption2.weight(.semibold))
                         .foregroundStyle(.orange)
                 }
             }

@@ -3,13 +3,13 @@ import UIKit
 
 /// Full-screen camera with live vehicle recognition.
 ///
-/// Layout (safe-area aware HUD over an edge-to-edge camera picture):
-/// - top-left: speedometer + speed-limit sign, road chip (name, lanes, source "OSM");
-///   in landscape also the compact following-distance card;
-/// - top-right: settings, status line (к/с · мс · model) → status sheet, traffic-light indicator;
-/// - top-centre: unique counters by kind with "Всего ТС" and reset (below the top row in portrait);
-/// - bottom-centre (portrait): following-distance card above the bottom row;
-/// - bottom-left: AI assistant, bottom-centre: research recording, bottom-right corner: navigator button.
+/// Layout (minimal dashcam HUD, safe-area aware, the camera picture stays mostly free; portrait and landscape):
+/// - top-left: small speedometer + limit sign with one road line next to it (lanes · name · OSM), below it the slim
+///   following-distance pill (tap → details);
+/// - top-right edge: settings, status dot (→ status sheet with к/с · мс · model), counters button with the total
+///   (tap → per-kind counters with reset), traffic-light indicator;
+/// - compact banners under the top row (model problems hide themselves after a few seconds);
+/// - bottom row (44 pt translucent buttons): AI assistant, research recording, navigator.
 ///
 /// Camera layers (full screen, same aspect-fill mapping): own-lane corridor, corner-bracket boxes with the lead vehicle
 /// highlighted, the animated distance line to the lead, tap targets (tap a box → detail card), and a red edge glow
@@ -28,6 +28,7 @@ struct RecognitionView: View {
     @State private var export: RecordingExport?
     @State private var isSavingRecording = false
     @State private var hideModelBanner = false
+    @AppStorage("rv.countersExpanded") private var countersExpanded = false
 
     private var isLandscape: Bool { verticalSizeClass == .compact }
 
@@ -72,9 +73,10 @@ struct RecognitionView: View {
     /// Area kept free for the floating distance label (full-screen coordinates, approximate HUD extents).
     private var leadLabelInsets: EdgeInsets {
         if isLandscape {
-            return EdgeInsets(top: 60, leading: 290, bottom: 120, trailing: 170)
+            return EdgeInsets(top: 70, leading: distanceHUDExpanded ? 270 : 200, bottom: 70, trailing: 80)
         }
-        return EdgeInsets(top: 300, leading: 16, bottom: distanceHUDExpanded ? 400 : 300, trailing: 16)
+        return EdgeInsets(top: (distanceHUDExpanded ? 330 : 150) + (countersExpanded ? 50 : 0),
+                          leading: 16, bottom: 90, trailing: 16)
     }
 
     private var showsDistanceHUD: Bool {
@@ -84,55 +86,52 @@ struct RecognitionView: View {
     // MARK: - HUD
 
     private func hud(pipeline: RecognitionPipeline) -> some View {
-        VStack(spacing: 10) {
-            HStack(alignment: .top, spacing: 10) {
-                VStack(alignment: .leading, spacing: 8) {
-                    SpeedHUD()
-                    RoadChip(road: app.roadInfo.currentRoad)
-                    if isLandscape && showsDistanceHUD {
-                        FollowingDistanceSlot(pipeline: pipeline, settings: app.settings, style: .mini) {
+        VStack(spacing: 6) {
+            HStack(alignment: .top, spacing: 8) {
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack(alignment: .center, spacing: 8) {
+                        SpeedHUD()
+                        RoadLine(road: app.roadInfo.currentRoad)
+                    }
+                    if showsDistanceHUD {
+                        FollowingDistanceSlot(pipeline: pipeline, settings: app.settings,
+                                              style: isLandscape ? .mini : .full) {
                             showNorms = true
                         }
                     }
                 }
                 Spacer(minLength: 8)
-                if isLandscape {
-                    CountersPanel(pipeline: pipeline, showPedestrians: app.settings.trackPedestrians)
-                    Spacer(minLength: 8)
-                }
-                VStack(alignment: .trailing, spacing: 8) {
-                    GlassIconButton(systemName: "gearshape.fill", label: "Настройки") {
+                VStack(alignment: .trailing, spacing: 0) {
+                    GlassIconButton(systemName: "gearshape.fill", label: "Настройки", size: RVTheme.HUD.button) {
                         app.showSettings = true
                     }
-                    StatusLineButton(pipeline: pipeline) {
+                    StatusDotButton(pipeline: pipeline) {
                         showStatus = true
+                    }
+                    CountersButton(total: pipeline.totalUniqueVehicles, isExpanded: countersExpanded) {
+                        withAnimation(RVTheme.snappy) { countersExpanded.toggle() }
                     }
                     TrafficLightSlot(pipeline: pipeline)
                 }
-                // The road chip truncates first; buttons and the status line keep their size.
+                // The road line truncates first; the edge buttons keep their size.
                 .layoutPriority(1)
             }
 
-            if !isLandscape {
+            // Per-kind counters only on demand (counters button), right-aligned under the top row.
+            if countersExpanded {
                 CountersPanel(pipeline: pipeline, showPedestrians: app.settings.trackPedestrians)
-                    .frame(maxWidth: .infinity)
+                    .frame(maxWidth: .infinity, alignment: .trailing)
+                    .transition(.opacity.combined(with: .scale(scale: 0.92, anchor: .topTrailing)))
             }
 
             BannerStack(pipeline: pipeline, hideModelBanner: $hideModelBanner)
-                .frame(maxWidth: 560)
+                .frame(maxWidth: 420)
 
             Spacer(minLength: 0)
 
-            if !isLandscape && showsDistanceHUD {
-                FollowingDistanceSlot(pipeline: pipeline, settings: app.settings, style: .full) {
-                    showNorms = true
-                }
-                .frame(maxWidth: 420)
-            }
-
             ZStack(alignment: .bottom) {
                 HStack(alignment: .bottom) {
-                    AssistantButton()
+                    AssistantButton(size: RVTheme.HUD.hit)
                     Spacer()
                     NavigatorCornerButton {
                         app.switchTo(.navigator)
@@ -144,12 +143,11 @@ struct RecognitionView: View {
                              isEnabled: pipeline.isRecording || pipeline.detectorStatus.isReady) {
                     toggleRecording(pipeline)
                 }
-                .padding(.bottom, 8)
             }
         }
-        .padding(.horizontal, 16)
-        .padding(.top, 8)
-        .padding(.bottom, 8)
+        .padding(.horizontal, RVTheme.HUD.gutter)
+        .padding(.top, 4)
+        .padding(.bottom, 6)
     }
 
     // MARK: - Actions
@@ -281,7 +279,7 @@ private struct CollisionWarningGlow: View {
     }
 }
 
-/// Following-distance card bound to the pipeline (separate view: it re-renders with every processed frame).
+/// Following-distance pill / card bound to the pipeline (separate view: it re-renders with every processed frame).
 private struct FollowingDistanceSlot: View {
     let pipeline: RecognitionPipeline
     let settings: AppSettings
@@ -296,7 +294,7 @@ private struct FollowingDistanceSlot: View {
                                  isForwardCollisionWarning: pipeline.isForwardCollisionWarning
                                     && settings.distanceWarningsEnabled,
                                  style: style, onShowNorms: onShowNorms)
-                .transition(.move(edge: .bottom).combined(with: .opacity))
+                .transition(.opacity)
         }
     }
 }
@@ -351,40 +349,58 @@ private struct SpeedHUD: View {
     }
 }
 
-/// Current road from OpenStreetMap: name and lane count.
-private struct RoadChip: View {
+/// Current road from OpenStreetMap in one small line next to the speedometer: lanes · name · OSM.
+private struct RoadLine: View {
     let road: RoadSegmentInfo?
 
     var body: some View {
         if let road {
-            VStack(alignment: .leading, spacing: 3) {
-                Text(road.displayName)
-                    .font(RVTheme.font(15, weight: .bold))
-                    .lineLimit(1)
-                    .contentTransition(.opacity)
-                HStack(spacing: 6) {
+            HStack(spacing: 4) {
+                if let lanes = Self.shortLanesText(road.laneInfo) {
                     Image(systemName: "road.lanes")
-                    Text(Self.lanesText(road.laneInfo))
+                        .font(.system(size: 10, weight: .bold))
+                    Text(lanes)
                         .monospacedDigit()
-                        .lineLimit(1)
                         .contentTransition(.numericText())
-                    Text("OSM")
-                        .font(RVTheme.font(10, weight: .heavy))
-                        .padding(.horizontal, 5)
-                        .padding(.vertical, 1)
-                        .background(Color.white.opacity(0.2), in: Capsule())
+                    Text("·")
+                        .foregroundStyle(.white.opacity(0.6))
                 }
-                .font(RVTheme.font(13, weight: .semibold))
-                .foregroundStyle(.white.opacity(0.9))
+                Text(road.displayName)
+                    .truncationMode(.tail)
+                    .contentTransition(.opacity)
+                Text("OSM")
+                    .font(RVTheme.font(7, weight: .heavy))
+                    .foregroundStyle(.white.opacity(0.6))
+                    .baselineOffset(5)
             }
+            .font(RVTheme.font(12, weight: .semibold))
+            .lineLimit(1)
             .foregroundStyle(.white)
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
-            .frame(maxWidth: 210, alignment: .leading)
-            .rvGlass(cornerRadius: 16)
+            .rvTextShadow()
+            .padding(.horizontal, 9)
+            .frame(height: 26)
+            .background {
+                Capsule(style: .continuous).fill(.ultraThinMaterial).opacity(0.5)
+            }
+            .frame(maxWidth: 200, alignment: .leading)
             .accessibilityElement(children: .ignore)
             .accessibilityLabel(Self.accessibilityText(road))
         }
+    }
+
+    /// "3/6" (our direction / total), "≈2" when inferred from the road class; nil without data.
+    static func shortLanesText(_ info: LaneInfo) -> String? {
+        let approx = info.isEstimated ? "≈" : ""
+        if let inDirection = info.lanesInDirection {
+            if let total = info.totalLanes, !info.isOneway, total != inDirection {
+                return "\(approx)\(inDirection)/\(total)"
+            }
+            return "\(approx)\(inDirection)"
+        }
+        if let total = info.totalLanes {
+            return "\(approx)\(total)"
+        }
+        return nil
     }
 
     /// "Полос: 3 из 6" (our direction of total), "≈" when the count is inferred from the road class.
@@ -413,34 +429,28 @@ private struct RoadChip: View {
 
 // MARK: - Top-right
 
-/// "15 к/с · 32 мс · yolo11n" — opens the status sheet.
-private struct StatusLineButton: View {
+/// Small status dot (green = running, amber = loading/paused, red = no model) — opens the status sheet, where
+/// к/с · мс · model are shown. Nothing numeric on the camera picture itself.
+private struct StatusDotButton: View {
     let pipeline: RecognitionPipeline
     let action: () -> Void
 
     var body: some View {
         Button(action: action) {
-            HStack(spacing: 6) {
+            ZStack {
+                Circle()
+                    .fill(.ultraThinMaterial)
+                    .opacity(RVTheme.HUD.materialOpacity)
+                Circle()
+                    .strokeBorder(Color.white.opacity(0.18), lineWidth: 0.75)
                 Circle()
                     .fill(dotColor)
-                    .frame(width: 8, height: 8)
+                    .frame(width: 9, height: 9)
                     .shadow(color: dotColor.opacity(0.8), radius: 3)
                     .rvPulse(pipeline.detectorStatus == .loading, minOpacity: 0.3, period: 1.2)
-                // Full "к/с · мс · model" when it fits, otherwise without the model name.
-                ViewThatFits(in: .horizontal) {
-                    Text(text)
-                    Text(shortText)
-                }
-                .font(RVTheme.font(12, weight: .semibold))
-                .monospacedDigit()
-                .lineLimit(1)
-                .contentTransition(.numericText())
             }
-            .foregroundStyle(.white)
-            .padding(.horizontal, 10)
-            .frame(minHeight: 34)
-            .rvGlassCapsule(shadow: false)
-            .frame(minHeight: 44)
+            .frame(width: 28, height: 28)
+            .frame(width: RVTheme.HUD.hit, height: RVTheme.HUD.hit)
             .contentShape(Rectangle())
         }
         .buttonStyle(RVPressableButtonStyle())
@@ -462,11 +472,6 @@ private struct StatusLineButton: View {
         }
     }
 
-    private var shortText: String {
-        guard case .ready = pipeline.detectorStatus, pipeline.isRunning else { return text }
-        return "\(Int(pipeline.fps.rounded())) к/с · \(Int(pipeline.inferenceMs.rounded())) мс"
-    }
-
     private var dotColor: Color {
         switch pipeline.detectorStatus {
         case .ready: return pipeline.isRunning && !pipeline.isCameraInterrupted ? RVTheme.safe : RVTheme.caution
@@ -482,18 +487,58 @@ private struct TrafficLightSlot: View {
 
     var body: some View {
         if let color = pipeline.currentLightColor {
-            TrafficLightIndicatorView(color: color, lampSize: 18)
-                .padding(8)
-                .rvGlass(cornerRadius: RVTheme.Radius.control)
+            TrafficLightIndicatorView(color: color, lampSize: 9, showsCaption: false)
+                .frame(width: RVTheme.HUD.hit)
+                .padding(.top, 4)
                 .transition(.scale.combined(with: .opacity))
                 .animation(RVTheme.snappy, value: color)
         }
     }
 }
 
+/// Small capsule with the total of unique vehicles; tap shows / hides the per-kind counters.
+private struct CountersButton: View {
+    let total: Int
+    let isExpanded: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 3) {
+                Image(systemName: "car.2.fill")
+                    .font(.system(size: 9, weight: .bold))
+                    .foregroundStyle(.white.opacity(0.8))
+                Text("\(total)")
+                    .rvNumeric(12, weight: .bold)
+                    .contentTransition(.numericText())
+                    .animation(RVTheme.snappy, value: total)
+            }
+            .lineLimit(1)
+            .foregroundStyle(.white)
+            .padding(.horizontal, 7)
+            .frame(minWidth: 28, minHeight: 24)
+            .background {
+                ZStack {
+                    Capsule(style: .continuous).fill(.ultraThinMaterial).opacity(RVTheme.HUD.materialOpacity)
+                    if isExpanded {
+                        Capsule(style: .continuous).fill(Color.white.opacity(0.18))
+                    }
+                }
+            }
+            .overlay(Capsule(style: .continuous).strokeBorder(Color.white.opacity(0.18), lineWidth: 0.75))
+            .frame(minWidth: RVTheme.HUD.hit, minHeight: RVTheme.HUD.hit)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(RVPressableButtonStyle())
+        .accessibilityLabel("Всего ТС: \(total)")
+        .accessibilityHint(isExpanded ? "Скрыть счётчики" : "Показать счётчики по типам")
+    }
+}
+
 // MARK: - Counters
 
 /// Unique vehicles counted since the last reset (each tracked object once, when its track is confirmed).
+/// Compact single row; shown only on demand (`CountersButton`).
 private struct CountersPanel: View {
     let pipeline: RecognitionPipeline
     let showPedestrians: Bool
@@ -502,44 +547,35 @@ private struct CountersPanel: View {
     private static let vehicleKinds: [VehicleKind] = [.car, .bus, .truck, .motorcycle, .bicycle]
 
     var body: some View {
-        VStack(spacing: 4) {
-            HStack(spacing: 4) {
-                ForEach(Self.vehicleKinds, id: \.self) { kind in
-                    CounterChip(kind: kind, count: pipeline.uniqueCounts[kind] ?? 0)
-                }
+        HStack(spacing: 2) {
+            ForEach(Self.vehicleKinds, id: \.self) { kind in
+                CounterChip(kind: kind, count: pipeline.uniqueCounts[kind] ?? 0)
             }
-            HStack(spacing: 10) {
-                Text("Всего ТС: \(pipeline.totalUniqueVehicles)")
-                    .rvNumeric(15, weight: .bold)
-                    .contentTransition(.numericText())
-                    .animation(RVTheme.snappy, value: pipeline.totalUniqueVehicles)
-                if showPedestrians {
-                    HStack(spacing: 3) {
-                        Image(systemName: VehicleKind.person.symbolName)
-                            .foregroundStyle(RVTheme.kindColor(.person))
-                        Text("\(pipeline.uniqueCounts[.person] ?? 0)")
-                            .monospacedDigit()
-                            .contentTransition(.numericText())
-                    }
-                    .font(RVTheme.font(14, weight: .semibold))
-                    .accessibilityElement(children: .ignore)
+            if showPedestrians {
+                CounterChip(kind: .person, count: pipeline.uniqueCounts[.person] ?? 0)
                     .accessibilityLabel("Пешеходы: \(pipeline.uniqueCounts[.person] ?? 0)")
-                }
-                Button(action: reset) {
-                    Image(systemName: "arrow.counterclockwise")
-                        .font(.system(size: 15, weight: .bold))
-                        .symbolEffect(.bounce, value: resetCount)
-                        .frame(width: 52, height: 40)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(RVPressableButtonStyle())
-                .accessibilityLabel("Сбросить счётчики")
             }
-            .foregroundStyle(.white)
+            Text("Σ \(pipeline.totalUniqueVehicles)")
+                .rvNumeric(12, weight: .bold)
+                .contentTransition(.numericText())
+                .animation(RVTheme.snappy, value: pipeline.totalUniqueVehicles)
+                .padding(.leading, 2)
+                .accessibilityLabel("Всего ТС: \(pipeline.totalUniqueVehicles)")
+            Button(action: reset) {
+                Image(systemName: "arrow.counterclockwise")
+                    .font(.system(size: 11, weight: .bold))
+                    .symbolEffect(.bounce, value: resetCount)
+                    .frame(width: 36, height: 32)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(RVPressableButtonStyle())
+            .accessibilityLabel("Сбросить счётчики")
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 6)
-        .rvGlass(cornerRadius: RVTheme.Radius.panel)
+        .foregroundStyle(.white)
+        .rvTextShadow()
+        .padding(.leading, 6)
+        .frame(minHeight: RVTheme.HUD.pill)
+        .rvGlassCapsule(shadow: false)
         .simultaneousGesture(
             LongPressGesture(minimumDuration: 0.8).onEnded { _ in reset() }
         )
@@ -554,26 +590,25 @@ private struct CountersPanel: View {
     }
 }
 
-/// Icon + count for one vehicle class.
+/// Icon + count for one class.
 private struct CounterChip: View {
     let kind: VehicleKind
     let count: Int
 
     var body: some View {
-        HStack(spacing: 4) {
+        HStack(spacing: 2) {
             Image(systemName: kind.symbolName)
-                .font(.system(size: 14, weight: .bold))
+                .font(.system(size: 10, weight: .bold))
                 .foregroundStyle(RVTheme.kindColor(kind))
                 .symbolEffect(.bounce, value: count)
             Text("\(count)")
-                .rvNumeric(16, weight: .heavy)
+                .rvNumeric(12, weight: .bold)
                 .contentTransition(.numericText())
                 .animation(RVTheme.snappy, value: count)
                 .foregroundStyle(count > 0 ? Color.white : Color.white.opacity(0.5))
         }
-        .padding(.horizontal, 7)
-        .frame(minWidth: 52, minHeight: 32)
-        .background(Color.black.opacity(0.25), in: Capsule())
+        .padding(.horizontal, 4)
+        .frame(minWidth: 32, minHeight: 24)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("\(kind.displayName): \(count)")
     }
@@ -581,19 +616,31 @@ private struct CounterChip: View {
 
 // MARK: - Banners
 
-/// Model / camera problems. The navigator, speedometer and assistant keep working in every case.
+/// Model / camera problems (compact). The model banners hide themselves after a few seconds (the red status dot and
+/// the status sheet keep the information); camera banners stay while the problem lasts. The navigator,
+/// speedometer and assistant keep working in every case.
 private struct BannerStack: View {
     let pipeline: RecognitionPipeline
     @Binding var hideModelBanner: Bool
 
+    /// Seconds a model banner stays on screen.
+    static let modelBannerDuration: Double = 8
+
+    private var modelProblem: Bool {
+        switch pipeline.detectorStatus {
+        case .missing, .failed: return true
+        case .loading, .ready: return false
+        }
+    }
+
     var body: some View {
-        VStack(spacing: 8) {
+        VStack(spacing: 6) {
             if !hideModelBanner {
                 switch pipeline.detectorStatus {
                 case .missing:
                     InfoBanner(systemImage: "exclamationmark.triangle.fill", tint: .orange,
-                               title: "Модель YOLO не найдена. Экспортируйте yolo11n в CoreML (см. README → «Модель распознавания») и добавьте в проект",
-                               message: "Спидометр, навигатор и ассистент работают без неё.") {
+                               title: "Модель YOLO не найдена",
+                               message: "Экспортируйте yolo11n в CoreML (README → «Модель распознавания»). Спидометр, навигатор и ассистент работают без неё.") {
                         hideModelBanner = true
                     }
                 case .failed(let message):
@@ -612,15 +659,20 @@ private struct BannerStack: View {
             } else if pipeline.isCameraInterrupted {
                 InfoBanner(systemImage: "pause.circle.fill", tint: .yellow,
                            title: "Камера приостановлена системой",
-                           message: "Камера используется другим приложением или недоступна в этом режиме.",
+                           message: "Используется другим приложением или недоступна в этом режиме.",
                            onClose: nil)
             }
         }
         .animation(.easeInOut(duration: 0.25), value: hideModelBanner)
+        .task(id: modelProblem && !hideModelBanner) {
+            guard modelProblem, !hideModelBanner else { return }
+            do { try await Task.sleep(for: .seconds(Self.modelBannerDuration)) } catch { return }
+            hideModelBanner = true
+        }
     }
 }
 
-/// Glass banner with an icon, a title, an optional message and an optional close button.
+/// Compact glass banner with an icon, a title, an optional message (≤ 3 lines) and an optional close button.
 private struct InfoBanner: View {
     let systemImage: String
     let tint: Color
@@ -637,40 +689,42 @@ private struct InfoBanner: View {
     }
 
     var body: some View {
-        HStack(alignment: .top, spacing: 10) {
+        HStack(alignment: .top, spacing: 8) {
             Image(systemName: systemImage)
-                .font(.system(size: 20, weight: .semibold))
+                .font(.system(size: 14, weight: .semibold))
                 .foregroundStyle(tint)
                 .symbolEffect(.pulse, options: .repeating)
-                .padding(.top, 2)
-            VStack(alignment: .leading, spacing: 3) {
+                .padding(.top, 1)
+            VStack(alignment: .leading, spacing: 1) {
                 Text(title)
-                    .font(RVTheme.font(15, weight: .bold))
-                    .fixedSize(horizontal: false, vertical: true)
+                    .font(RVTheme.font(13, weight: .bold))
+                    .lineLimit(2)
                 if let message {
                     Text(message)
-                        .font(RVTheme.font(13, weight: .regular))
+                        .font(RVTheme.font(11, weight: .regular))
                         .foregroundStyle(.white.opacity(0.8))
-                        .fixedSize(horizontal: false, vertical: true)
+                        .lineLimit(3)
                 }
             }
+            .fixedSize(horizontal: false, vertical: true)
             Spacer(minLength: 0)
             if let onClose {
                 Button(action: onClose) {
                     Image(systemName: "xmark")
-                        .font(.system(size: 14, weight: .bold))
-                        .frame(width: 44, height: 44)
+                        .font(.system(size: 11, weight: .bold))
+                        .frame(width: 36, height: 36)
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(RVPressableButtonStyle())
+                .padding(.vertical, -8)
                 .accessibilityLabel("Скрыть")
             }
         }
         .foregroundStyle(.white)
-        .padding(.leading, 12)
-        .padding(.trailing, onClose == nil ? 12 : 2)
-        .padding(.vertical, 10)
-        .rvGlass(cornerRadius: 16, tint: tint.opacity(0.7))
+        .padding(.leading, 10)
+        .padding(.trailing, onClose == nil ? 10 : 0)
+        .padding(.vertical, 7)
+        .rvGlass(cornerRadius: RVTheme.Radius.control, tint: tint.opacity(0.7), shadow: false)
         .transition(.move(edge: .top).combined(with: .opacity))
     }
 }
@@ -687,27 +741,28 @@ private struct RecordButton: View {
 
     var body: some View {
         Button(action: action) {
-            HStack(spacing: 10) {
+            HStack(spacing: 7) {
                 ZStack {
                     Circle()
-                        .strokeBorder(isRecording ? RVTheme.recording : Color.white, lineWidth: 3)
-                        .frame(width: 30, height: 30)
+                        .strokeBorder(isRecording ? RVTheme.recording : Color.white, lineWidth: 2)
+                        .frame(width: 22, height: 22)
                         .rvPulse(isRecording, minOpacity: 0.35, period: 1.4)
                     if isRecording {
-                        RoundedRectangle(cornerRadius: 3, style: .continuous)
+                        RoundedRectangle(cornerRadius: 2, style: .continuous)
                             .fill(RVTheme.recording)
-                            .frame(width: 13, height: 13)
+                            .frame(width: 9, height: 9)
                             .transition(.scale.combined(with: .opacity))
                     } else {
                         Circle()
                             .fill(RVTheme.recording)
-                            .frame(width: 20, height: 20)
+                            .frame(width: 14, height: 14)
                             .transition(.scale.combined(with: .opacity))
                     }
                 }
                 .animation(RVTheme.snappy, value: isRecording)
                 if isSaving {
                     ProgressView()
+                        .controlSize(.small)
                         .tint(.white)
                         .accessibilityLabel("Сохранение")
                 } else if isRecording, let startedAt {
@@ -718,15 +773,17 @@ private struct RecordButton: View {
                     Text("Запись")
                 }
             }
-            .rvNumeric(17, weight: .bold)
+            .rvNumeric(14, weight: .semibold)
             .contentTransition(.numericText())
             .foregroundStyle(.white)
-            .padding(.horizontal, 16)
-            .frame(minHeight: 56)
-            .rvGlassCapsule(tint: isRecording ? RVTheme.recording : nil)
+            .rvTextShadow()
+            .padding(.leading, 11)
+            .padding(.trailing, 14)
+            .frame(height: RVTheme.HUD.hit)
+            .rvGlassCapsule(tint: isRecording ? RVTheme.recording : nil, shadow: false)
             .overlay {
                 if isRecording {
-                    Capsule().strokeBorder(RVTheme.recording, lineWidth: 2)
+                    Capsule().strokeBorder(RVTheme.recording, lineWidth: 1.5)
                 }
             }
         }
@@ -747,26 +804,20 @@ private struct RecordButton: View {
     }
 }
 
-/// Large round button in the bottom-right corner that switches to the navigator.
+/// Round accent button in the bottom-right corner that switches to the navigator (48 pt, translucent).
 private struct NavigatorCornerButton: View {
     let action: () -> Void
 
     var body: some View {
         Button(action: action) {
-            VStack(spacing: 4) {
-                Image(systemName: "map.fill")
-                    .font(.system(size: 28, weight: .semibold))
-                    .foregroundStyle(.white)
-                    .frame(width: 72, height: 72)
-                    .background(Circle().fill(RVTheme.accent.gradient))
-                    .overlay(Circle().strokeBorder(Color.white.opacity(0.35), lineWidth: 1.5))
-                    .shadow(color: .black.opacity(0.45), radius: 8, x: 0, y: 3)
-                Text("Навигатор")
-                    .font(RVTheme.font(13, weight: .bold))
-                    .foregroundStyle(.white)
-                    .shadow(color: .black.opacity(0.8), radius: 2)
-            }
-            .contentShape(Rectangle())
+            Image(systemName: "map.fill")
+                .font(.system(size: 19, weight: .semibold))
+                .foregroundStyle(.white)
+                .frame(width: 48, height: 48)
+                .background(Circle().fill(RVTheme.accent.gradient).opacity(0.85))
+                .overlay(Circle().strokeBorder(Color.white.opacity(0.3), lineWidth: 1))
+                .shadow(color: .black.opacity(0.3), radius: 5, x: 0, y: 2)
+                .contentShape(Circle())
         }
         .buttonStyle(RVPressableButtonStyle())
         .accessibilityLabel("Навигатор")

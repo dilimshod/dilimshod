@@ -22,13 +22,13 @@ struct LaneGuidanceView: View {
 
     var body: some View {
         if !lanes.isEmpty {
-            HStack(spacing: lanes.count > 6 ? 3 : 5) {
+            HStack(spacing: lanes.count > 6 ? 2 : 4) {
                 ForEach(Array(lanes.enumerated()), id: \.offset) { index, lane in
                     LaneCellView(lane: lane, isRecommended: isRecommended(index), width: cellWidth)
                 }
             }
-            .padding(8)
-            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .padding(5)
+            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
             .accessibilityElement(children: .ignore)
             .accessibilityLabel(accessibilityText)
         }
@@ -36,9 +36,9 @@ struct LaneGuidanceView: View {
 
     private var cellWidth: CGFloat {
         switch lanes.count {
-        case ...4: return 46
-        case 5...6: return 40
-        default: return 32
+        case ...4: return 34
+        case 5...6: return 30
+        default: return 24
         }
     }
 
@@ -62,10 +62,10 @@ private struct LaneCellView: View {
     var body: some View {
         let symbols = arrowSymbols
         ZStack {
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
+            RoundedRectangle(cornerRadius: 6, style: .continuous)
                 .fill(isRecommended ? Color.blue : Color.white.opacity(0.08))
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .strokeBorder(isRecommended ? Color.white.opacity(0.9) : Color.white.opacity(0.2), lineWidth: 1.5)
+            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                .strokeBorder(isRecommended ? Color.white.opacity(0.9) : Color.white.opacity(0.2), lineWidth: 1)
             HStack(spacing: symbols.count > 1 ? -4 : 0) {
                 ForEach(Array(symbols.enumerated()), id: \.offset) { _, name in
                     Image(systemName: name)
@@ -74,7 +74,7 @@ private struct LaneCellView: View {
             }
             .foregroundStyle(isRecommended ? Color.white : Color.white.opacity(0.35))
         }
-        .frame(width: width, height: 54)
+        .frame(width: width, height: 38)
     }
 
     /// Arrows of the first two turns; a lane without arrows is drawn as "straight".

@@ -1,12 +1,14 @@
 import SwiftUI
 
-/// Glass card with the gap to the vehicle ahead and the distance requirements.
+/// Gap to the vehicle ahead and the distance requirements — compact by default.
 ///
-/// `.full` (portrait, above the record button): status line with the road-surface chip and an info button,
-/// big "≈ 18 м" (numeric transition), the recommended gap, a progress bar of distance vs recommended (0…1.5×, tick at
-/// 1.0) and either a one-line summary of both norms or — tap to expand — the rows
+/// Collapsed (both styles): one slim pill at a screen edge (≤ 44 pt incl. tap area): status dot, "≈ 18 м", the
+/// headway "1,4 с" while moving, a timer when a collision is possible and a small chevron. Tap expands it (the state
+/// is remembered).
+/// Expanded `.full` (portrait): status line with the road-surface chip and an info button (→ norms sheet), the gap and
+/// the recommended gap, a progress bar of distance vs recommended (0…1.5×, tick at 1.0) and the rows
 /// "В движении: ≥ 2 с ≈ 33 м (сухо)", "При остановке: ≥ 2 м", "Остановочный путь ≈ 37 м", "До столкновения ≈ 2,1 с".
-/// `.mini` (landscape, leading column): number, status, norm and the bar; tap opens the norms sheet.
+/// Expanded `.mini` (landscape): number, status, norm and the bar in a narrow card.
 ///
 /// All distances are single-camera estimates ("≈ … оценка"); the numbers are recommendations, not legal norms.
 struct FollowingDistanceHUD: View {
@@ -32,87 +34,135 @@ struct FollowingDistanceHUD: View {
 
     var body: some View {
         Group {
-            switch style {
-            case .full: fullCard
-            case .mini: miniCard
+            if expanded {
+                switch style {
+                case .full: fullCard
+                case .mini: miniCard
+                }
+            } else {
+                pill
             }
         }
         .animation(RVTheme.snappy, value: gapText)
         .animation(RVTheme.snappy, value: status)
+        .sensoryFeedback(.selection, trigger: expanded)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(FollowingDistanceText.accessibilitySummary(assessment, policy: policy, hasLead: hasLead))
         .accessibilityAddTraits(.isButton)
-        .accessibilityHint(accessibilityHintText)
-        .accessibilityAction {
-            if style == .full {
-                withAnimation(RVTheme.snappy) { expanded.toggle() }
-            } else {
-                onShowNorms()
-            }
-        }
+        .accessibilityHint(expanded ? "Свернуть" : "Показать подробности")
+        .accessibilityAction { toggle() }
         .accessibilityAction(named: Text("Требования к дистанции")) { onShowNorms() }
     }
 
-    private var accessibilityHintText: String {
-        guard style == .full else { return "Открыть требования к дистанции" }
-        return expanded ? "Скрыть подробности" : "Показать подробности"
+    private func toggle() {
+        withAnimation(RVTheme.snappy) { expanded.toggle() }
     }
 
-    // MARK: - Full card
+    // MARK: - Collapsed pill
+
+    private var pill: some View {
+        HStack(spacing: 6) {
+            Circle()
+                .fill(isForwardCollisionWarning ? RVTheme.danger : color)
+                .frame(width: 8, height: 8)
+                .shadow(color: color.opacity(hasLead ? 0.8 : 0), radius: 3)
+                .rvPulse(status == .danger || isForwardCollisionWarning, minOpacity: 0.3, period: 0.7)
+            Image(systemName: "car.rear.fill")
+                .font(.system(size: 10, weight: .bold))
+                .foregroundStyle(.white.opacity(0.7))
+            Text(gapText)
+                .rvNumeric(15, weight: .bold)
+                .foregroundStyle(hasLead ? Color.white : .white.opacity(0.55))
+                .contentTransition(.numericText())
+            if hasLead, !assessment.isStopped, let headway = assessment.timeHeadwaySeconds {
+                Text(RVFormat.gapSeconds(headway))
+                    .rvNumeric(12, weight: .semibold)
+                    .foregroundStyle(.white.opacity(0.72))
+                    .contentTransition(.numericText())
+            }
+            if hasLead, let ttc = FollowingDistanceText.timeToCollision(assessment) {
+                Label(ttc, systemImage: "timer")
+                    .rvNumeric(12, weight: .bold)
+                    .foregroundStyle(RVTheme.danger)
+            }
+            Image(systemName: "chevron.down")
+                .font(.system(size: 9, weight: .bold))
+                .foregroundStyle(.white.opacity(0.5))
+        }
+        .lineLimit(1)
+        .foregroundStyle(.white)
+        .rvTextShadow()
+        .padding(.horizontal, 11)
+        .frame(height: RVTheme.HUD.pill)
+        .rvGlassCapsule(tint: hasLead ? color : nil, shadow: false)
+        .overlay {
+            if isForwardCollisionWarning {
+                Capsule(style: .continuous)
+                    .strokeBorder(RVTheme.danger, lineWidth: 2)
+                    .rvPulse(true, minOpacity: 0.2, period: 0.6)
+            }
+        }
+        .frame(minHeight: RVTheme.HUD.hit)
+        .contentShape(Rectangle())
+        .onTapGesture(perform: toggle)
+        .simultaneousGesture(LongPressGesture(minimumDuration: 0.6).onEnded { _ in onShowNorms() })
+    }
+
+    // MARK: - Expanded full card
 
     private var fullCard: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 8) {
             header
-            HStack(alignment: .center, spacing: 12) {
-                gapBlock(size: 38)
+            HStack(alignment: .center, spacing: 10) {
+                gapBlock(size: 26)
                 Spacer(minLength: 8)
-                normBlock(size: 22)
+                normBlock(size: 16)
             }
             GapProgressBar(fraction: hasLead ? assessment.fractionOfRecommended : nil, color: color)
-            if expanded {
-                detailRows
-                    .transition(.opacity.combined(with: .move(edge: .top)))
-            } else {
-                compactFooter
-                    .transition(.opacity)
-            }
+            detailRows
+                .transition(.opacity)
         }
         .foregroundStyle(.white)
-        .padding(14)
-        .rvGlass(cornerRadius: RVTheme.Radius.card, tint: hasLead ? color : nil)
-        .overlay { collisionBorder }
-        .contentShape(RoundedRectangle(cornerRadius: RVTheme.Radius.card, style: .continuous))
-        .onTapGesture {
-            withAnimation(RVTheme.snappy) { expanded.toggle() }
-        }
-        .sensoryFeedback(.selection, trigger: expanded)
+        .padding(12)
+        .frame(maxWidth: 340, alignment: .leading)
+        .rvGlass(cornerRadius: RVTheme.Radius.panel, tint: hasLead ? color : nil)
+        .overlay { collisionBorder(cornerRadius: RVTheme.Radius.panel) }
+        .contentShape(RoundedRectangle(cornerRadius: RVTheme.Radius.panel, style: .continuous))
+        .onTapGesture(perform: toggle)
+        .transition(.opacity.combined(with: .scale(scale: 0.95, anchor: .topLeading)))
     }
 
     private var header: some View {
-        HStack(spacing: 8) {
-            statusIcon(size: 16)
+        HStack(spacing: 6) {
+            statusIcon(size: 13)
             Text(headerTitle)
-                .font(RVTheme.font(15, weight: .bold))
+                .font(RVTheme.font(13, weight: .bold))
                 .foregroundStyle(isForwardCollisionWarning ? RVTheme.danger : .white)
                 .lineLimit(1)
                 .minimumScaleFactor(0.8)
-            Spacer(minLength: 6)
+            Spacer(minLength: 4)
             ViewThatFits(in: .horizontal) {
                 SurfaceChip(condition: assessment.condition, source: surfaceSource, detail: .full)
                 SurfaceChip(condition: assessment.condition, source: surfaceSource, detail: .condition)
                 SurfaceChip(condition: assessment.condition, source: surfaceSource, detail: .icon)
             }
-            Button(action: onShowNorms) {
-                Image(systemName: "info.circle")
-                    .font(.system(size: 19, weight: .semibold))
-                    .foregroundStyle(.white.opacity(0.9))
-                    .frame(width: 44, height: 36)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(RVPressableButtonStyle())
-            .padding(.trailing, -10)
-            .accessibilityLabel("Требования к дистанции")
+            infoButton
+            Image(systemName: "chevron.up")
+                .font(.system(size: 10, weight: .bold))
+                .foregroundStyle(.white.opacity(0.5))
         }
+    }
+
+    private var infoButton: some View {
+        Button(action: onShowNorms) {
+            Image(systemName: "info.circle")
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(.white.opacity(0.85))
+                .frame(width: 36, height: 32)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(RVPressableButtonStyle())
+        .accessibilityLabel("Требования к дистанции")
     }
 
     private var headerTitle: String {
@@ -126,7 +176,7 @@ struct FollowingDistanceHUD: View {
             .foregroundStyle(color)
             .symbolEffect(.pulse, options: .repeating, isActive: status == .danger)
             .contentTransition(.symbolEffect(.replace))
-            .frame(width: size + 6)
+            .frame(width: size + 4)
     }
 
     private func gapBlock(size: CGFloat) -> some View {
@@ -138,7 +188,7 @@ struct FollowingDistanceHUD: View {
                 .lineLimit(1)
                 .minimumScaleFactor(0.6)
             Text(gapCaption)
-                .rvNumeric(12, weight: .semibold)
+                .rvNumeric(11, weight: .semibold)
                 .foregroundStyle(.white.opacity(0.72))
                 .lineLimit(1)
                 .minimumScaleFactor(0.8)
@@ -157,7 +207,7 @@ struct FollowingDistanceHUD: View {
     private func normBlock(size: CGFloat) -> some View {
         VStack(alignment: .trailing, spacing: 0) {
             Text(assessment.isStopped ? "норма стоя" : "норма")
-                .font(RVTheme.font(11, weight: .semibold))
+                .font(RVTheme.font(10, weight: .semibold))
                 .foregroundStyle(.white.opacity(0.7))
             Text(FollowingDistanceText.recommended(assessment))
                 .rvNumeric(size, weight: .bold)
@@ -165,34 +215,14 @@ struct FollowingDistanceHUD: View {
                 .lineLimit(1)
             if !assessment.isStopped, let gap = assessment.recommendedTimeGapSeconds {
                 Text("\(RVFormat.compactNumber(gap)) с · \(assessment.condition.displayName.lowercased())")
-                    .rvNumeric(11, weight: .semibold)
+                    .rvNumeric(10, weight: .semibold)
                     .foregroundStyle(.white.opacity(0.7))
             }
         }
     }
 
-    private var compactFooter: some View {
-        HStack(spacing: 6) {
-            Text(FollowingDistanceText.compactNorms(assessment, policy: policy))
-                .rvNumeric(13, weight: .semibold)
-                .foregroundStyle(.white.opacity(0.85))
-                .lineLimit(1)
-                .minimumScaleFactor(0.75)
-            Spacer(minLength: 4)
-            if hasLead, let ttc = FollowingDistanceText.timeToCollision(assessment) {
-                Label(ttc, systemImage: "timer")
-                    .rvNumeric(13, weight: .bold)
-                    .foregroundStyle(RVTheme.danger)
-                    .lineLimit(1)
-            }
-            Image(systemName: "chevron.down")
-                .font(.system(size: 12, weight: .bold))
-                .foregroundStyle(.white.opacity(0.55))
-        }
-    }
-
     private var detailRows: some View {
-        VStack(alignment: .leading, spacing: 7) {
+        VStack(alignment: .leading, spacing: 5) {
             NormRow(symbol: "speedometer", title: "В движении:",
                     value: FollowingDistanceText.movingNorm(assessment, policy: policy),
                     isActive: !assessment.isStopped, tint: hasLead && !assessment.isStopped ? color : .white)
@@ -208,68 +238,57 @@ struct FollowingDistanceHUD: View {
             }
             if assessment.ownSpeedKmh == nil {
                 Text("Нет скорости GPS — показана норма для стоящего автомобиля.")
-                    .font(RVTheme.font(11, weight: .medium))
+                    .font(RVTheme.font(10, weight: .medium))
                     .foregroundStyle(RVTheme.caution)
             }
-            HStack(alignment: .firstTextBaseline, spacing: 6) {
-                Text("Оценка по одной камере, не заменяет внимание водителя.")
-                    .font(RVTheme.font(11, weight: .medium))
-                    .foregroundStyle(.white.opacity(0.55))
-                Spacer(minLength: 4)
-                Image(systemName: "chevron.up")
-                    .font(.system(size: 12, weight: .bold))
-                    .foregroundStyle(.white.opacity(0.55))
-            }
+            Text("Оценка по одной камере, не заменяет внимание водителя.")
+                .font(RVTheme.font(10, weight: .medium))
+                .foregroundStyle(.white.opacity(0.55))
         }
     }
 
     @ViewBuilder
-    private var collisionBorder: some View {
+    private func collisionBorder(cornerRadius: CGFloat) -> some View {
         if isForwardCollisionWarning {
-            RoundedRectangle(cornerRadius: RVTheme.Radius.card, style: .continuous)
-                .strokeBorder(RVTheme.danger, lineWidth: 3)
+            RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                .strokeBorder(RVTheme.danger, lineWidth: 2)
                 .rvPulse(true, minOpacity: 0.2, period: 0.6)
         }
     }
 
-    // MARK: - Mini card
+    // MARK: - Expanded mini card (landscape)
 
     private var miniCard: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(alignment: .center, spacing: 10) {
-                statusIcon(size: 18)
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .center, spacing: 8) {
+                statusIcon(size: 14)
                 VStack(alignment: .leading, spacing: 0) {
                     Text(gapText)
-                        .rvNumeric(28, weight: .heavy)
+                        .rvNumeric(20, weight: .heavy)
                         .foregroundStyle(hasLead ? color : .white.opacity(0.55))
                         .contentTransition(.numericText())
                         .lineLimit(1)
                         .minimumScaleFactor(0.6)
                     Text(isForwardCollisionWarning ? "Опасное сближение!" : (hasLead ? status.displayName : "нет машины впереди"))
-                        .font(RVTheme.font(11, weight: .semibold))
+                        .font(RVTheme.font(10, weight: .semibold))
                         .foregroundStyle(isForwardCollisionWarning ? RVTheme.danger : .white.opacity(0.75))
                         .lineLimit(1)
                         .minimumScaleFactor(0.8)
                 }
-                Spacer(minLength: 6)
-                normBlock(size: 17)
+                Spacer(minLength: 4)
+                normBlock(size: 14)
+                infoButton
             }
             GapProgressBar(fraction: hasLead ? assessment.fractionOfRecommended : nil, color: color)
         }
         .foregroundStyle(.white)
-        .padding(12)
-        // Shrinks a little on narrow landscape screens so it never pushes into the counters panel.
-        .frame(minWidth: 190, idealWidth: 250, maxWidth: 250, alignment: .leading)
-        .rvGlass(cornerRadius: RVTheme.Radius.panel, tint: hasLead ? color : nil)
-        .overlay {
-            if isForwardCollisionWarning {
-                RoundedRectangle(cornerRadius: RVTheme.Radius.panel, style: .continuous)
-                    .strokeBorder(RVTheme.danger, lineWidth: 3)
-                    .rvPulse(true, minOpacity: 0.2, period: 0.6)
-            }
-        }
-        .contentShape(RoundedRectangle(cornerRadius: RVTheme.Radius.panel, style: .continuous))
-        .onTapGesture(perform: onShowNorms)
+        .padding(10)
+        .frame(minWidth: 180, idealWidth: 230, maxWidth: 230, alignment: .leading)
+        .rvGlass(cornerRadius: RVTheme.Radius.control, tint: hasLead ? color : nil)
+        .overlay { collisionBorder(cornerRadius: RVTheme.Radius.control) }
+        .contentShape(RoundedRectangle(cornerRadius: RVTheme.Radius.control, style: .continuous))
+        .onTapGesture(perform: toggle)
+        .transition(.opacity.combined(with: .scale(scale: 0.95, anchor: .topLeading)))
     }
 }
 
@@ -295,23 +314,23 @@ struct GapProgressBar: View {
                     RVTheme.caution.opacity(0.22).frame(width: zone)
                     RVTheme.safe.opacity(0.22)
                 }
-                .frame(height: 8)
+                .frame(height: 5)
                 .clipShape(Capsule())
                 if fraction != nil {
                     Capsule()
                         .fill(LinearGradient(colors: [color.opacity(0.7), color], startPoint: .leading, endPoint: .trailing))
-                        .frame(width: max(8, width * filled), height: 8)
-                        .shadow(color: color.opacity(0.6), radius: 4)
+                        .frame(width: max(5, width * filled), height: 5)
+                        .shadow(color: color.opacity(0.5), radius: 3)
                 }
                 Capsule()
                     .fill(Color.white)
-                    .frame(width: 2.5, height: 15)
-                    .offset(x: tick - 1.25)
+                    .frame(width: 2, height: 10)
+                    .offset(x: tick - 1)
                     .shadow(color: .black.opacity(0.4), radius: 1)
             }
             .frame(width: width, height: proxy.size.height)
         }
-        .frame(height: 15)
+        .frame(height: 10)
         .animation(.smooth(duration: 0.3), value: fraction)
         .accessibilityHidden(true)
     }
@@ -337,11 +356,11 @@ private struct SurfaceChip: View {
                     .foregroundStyle(.white.opacity(0.65))
             }
         }
-        .font(RVTheme.font(11, weight: .semibold))
+        .font(RVTheme.font(10, weight: .semibold))
         .lineLimit(1)
         .fixedSize()
-        .padding(.horizontal, 8)
-        .padding(.vertical, 4)
+        .padding(.horizontal, 6)
+        .padding(.vertical, 3)
         .background(Color.white.opacity(0.12), in: Capsule())
         .accessibilityLabel("Покрытие: \(condition.displayName), \(source.displayName)")
     }
@@ -356,16 +375,16 @@ private struct NormRow: View {
     let tint: Color
 
     var body: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: 6) {
             Image(systemName: symbol)
-                .font(.system(size: 12, weight: .bold))
+                .font(.system(size: 10, weight: .bold))
                 .foregroundStyle(tint)
-                .frame(width: 18)
+                .frame(width: 14)
             Text(title)
-                .font(RVTheme.font(13, weight: isActive ? .bold : .medium))
+                .font(RVTheme.font(11, weight: isActive ? .bold : .medium))
             Spacer(minLength: 6)
             Text(value)
-                .rvNumeric(13, weight: .bold)
+                .rvNumeric(11, weight: .bold)
                 .foregroundStyle(tint)
                 .lineLimit(1)
                 .minimumScaleFactor(0.75)

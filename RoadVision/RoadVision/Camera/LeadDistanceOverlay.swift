@@ -2,8 +2,9 @@ import SwiftUI
 
 /// Animated distance line from the own car (bottom-centre of the camera picture) to the lead vehicle (bottom-centre of
 /// its box): flowing dashes and chevrons that move toward the lead (faster while the gap closes), a gradient in the
-/// status colour, a ground marker with a "sonar" ring under the lead car, and a floating glass label at the midpoint
-/// ("≈ 18 м" + "1,4 с · норма ≥ 33 м"; standing: "≈ 1,6 м" + "норма ≥ 2 м"). Pulses when the gap is dangerous.
+/// status colour, a ground marker with a "sonar" ring under the lead car, and a small single-line label placed BESIDE
+/// the line below the car ("≈ 18 м · 1,4 с"; standing: "≈ 1,6 м"), so the car itself stays visible.
+/// Pulses when the gap is dangerous. Thin strokes: the camera picture stays readable.
 ///
 /// Uses the same aspect-fill mapping as `DetectionOverlayView`; put it in the same full-screen layer
 /// (`.ignoresSafeArea()`). The endpoints are eased between processed frames (≤ 15 Hz) so the line glides.
@@ -74,14 +75,30 @@ struct LeadLineGeometry: Equatable {
         markerWidth = mapping.rect(for: box).width * 0.9
     }
 
-    /// Midpoint of the line, kept inside the area between the insets (falls back to the midpoint when it cannot).
+    /// Approximate half size of the compact label, points.
+    static let labelHalfSize = CGSize(width: 54, height: 13)
+
+    /// A point on the line between the own car and the lead (60 % of the way, i.e. below the car), shifted sideways
+    /// so the label sits next to the line instead of on top of it or the car; kept inside the insets.
     func labelPosition(viewSize: CGSize, insets: EdgeInsets) -> CGPoint {
-        let mid = CGPoint(x: (start.x + end.x) / 2, y: (start.y + end.y) / 2)
-        let halfWidth: CGFloat = 80, halfHeight: CGFloat = 28
-        let minX = insets.leading + halfWidth, maxX = viewSize.width - insets.trailing - halfWidth
-        let minY = insets.top + halfHeight, maxY = viewSize.height - insets.bottom - halfHeight
-        let x = minX <= maxX ? min(max(mid.x, minX), maxX) : mid.x
-        let y = minY <= maxY ? min(max(mid.y, minY), maxY) : mid.y
+        let t: CGFloat = 0.6
+        let anchor = CGPoint(x: start.x + (end.x - start.x) * t, y: start.y + (end.y - start.y) * t)
+        let half = Self.labelHalfSize
+        let gap: CGFloat = 12
+        // Right of the line by default; left when the line leans right (more room on the left).
+        let side: CGFloat = end.x > start.x + 20 ? -1 : 1
+        var x = anchor.x + side * (half.width + gap)
+        var y = anchor.y
+        let minX = insets.leading + half.width, maxX = viewSize.width - insets.trailing - half.width
+        let minY = insets.top + half.height, maxY = viewSize.height - insets.bottom - half.height
+        if minX <= maxX {
+            if x < minX || x > maxX {
+                // No room on this side → try the other side, then clamp.
+                let other = anchor.x - side * (half.width + gap)
+                x = (minX...maxX).contains(other) ? other : min(max(x, minX), maxX)
+            }
+        }
+        if minY <= maxY { y = min(max(y, minY), maxY) }
         return CGPoint(x: x, y: y)
     }
 }
@@ -121,9 +138,9 @@ final class LeadLineSmoother {
 
 /// Draws the line, chevrons and the ground marker into a Canvas.
 enum LeadLineRenderer {
-    static let dashLength: CGFloat = 16
-    static let dashGap: CGFloat = 11
-    static let chevronSpacing: CGFloat = 58
+    static let dashLength: CGFloat = 12
+    static let dashGap: CGFloat = 10
+    static let chevronSpacing: CGFloat = 64
 
     static func draw(in context: inout GraphicsContext, start: CGPoint, end: CGPoint, markerWidth: CGFloat,
                      color: Color, danger: Bool, flowSpeed: Double, time: Double) {
@@ -143,18 +160,18 @@ enum LeadLineRenderer {
 
         // Soft glow under the dashes.
         let glow = Gradient(stops: [.init(color: color.opacity(0), location: 0),
-                                    .init(color: color.opacity(0.22 + 0.25 * Double(pulse)), location: 1)])
+                                    .init(color: color.opacity(0.14 + 0.2 * Double(pulse)), location: 1)])
         context.stroke(line, with: .linearGradient(glow, startPoint: start, endPoint: end),
-                       style: StrokeStyle(lineWidth: 14 + 8 * pulse, lineCap: .round))
+                       style: StrokeStyle(lineWidth: 8 + 6 * pulse, lineCap: .round))
 
         // Dashes flowing toward the lead: a decreasing dash phase moves the pattern toward the path end.
         let period = dashLength + dashGap
         let travelled = CGFloat((time * flowSpeed).truncatingRemainder(dividingBy: Double(period)))
-        let dashes = Gradient(stops: [.init(color: color.opacity(0.08), location: 0),
-                                      .init(color: color.opacity(0.9), location: 0.4),
-                                      .init(color: color, location: 1)])
+        let dashes = Gradient(stops: [.init(color: color.opacity(0.05), location: 0),
+                                      .init(color: color.opacity(0.7), location: 0.4),
+                                      .init(color: color.opacity(0.95), location: 1)])
         context.stroke(line, with: .linearGradient(dashes, startPoint: start, endPoint: end),
-                       style: StrokeStyle(lineWidth: 4.5 + 1.5 * pulse, lineCap: .round,
+                       style: StrokeStyle(lineWidth: 2.5 + 1 * pulse, lineCap: .round,
                                           dash: [dashLength, dashGap], dashPhase: period - travelled))
 
         // Chevrons ">" pointing at the lead, moving with the flow, bigger near the own car (perspective).
@@ -165,14 +182,14 @@ enum LeadLineRenderer {
             guard d > 28, d < length - 34 else { continue }
             let t = d / length
             let center = CGPoint(x: start.x + dx * t, y: start.y + dy * t)
-            let size: CGFloat = 6 + 4 * (1 - t)
+            let size: CGFloat = 4 + 3 * (1 - t)
             var chevron = Path()
             chevron.move(to: CGPoint(x: center.x - ux * size + nx * size, y: center.y - uy * size + ny * size))
             chevron.addLine(to: center)
             chevron.addLine(to: CGPoint(x: center.x - ux * size - nx * size, y: center.y - uy * size - ny * size))
             let fade = min(1, min((d - 28) / 50, (length - 34 - d) / 50))
-            context.stroke(chevron, with: .color(color.opacity(Double(0.9 * fade))),
-                           style: StrokeStyle(lineWidth: 2.5, lineCap: .round, lineJoin: .round))
+            context.stroke(chevron, with: .color(color.opacity(Double(0.75 * fade))),
+                           style: StrokeStyle(lineWidth: 1.8, lineCap: .round, lineJoin: .round))
         }
 
         drawMarker(in: &context, at: end, width: markerWidth, color: color, danger: danger, time: time, pulse: pulse)
@@ -181,22 +198,22 @@ enum LeadLineRenderer {
     /// Flat ellipse "on the road" under the lead car plus an expanding ring.
     private static func drawMarker(in context: inout GraphicsContext, at point: CGPoint, width: CGFloat,
                                    color: Color, danger: Bool, time: Double, pulse: CGFloat) {
-        let w = max(36, width)
-        let h = w * 0.2
+        let w = max(30, width)
+        let h = w * 0.18
         let rect = CGRect(x: point.x - w / 2, y: point.y - h / 2, width: w, height: h)
-        context.fill(Path(ellipseIn: rect), with: .color(color.opacity(0.2 + 0.18 * Double(pulse))))
-        context.stroke(Path(ellipseIn: rect), with: .color(color.opacity(0.95)), lineWidth: 2.5)
+        context.fill(Path(ellipseIn: rect), with: .color(color.opacity(0.12 + 0.15 * Double(pulse))))
+        context.stroke(Path(ellipseIn: rect), with: .color(color.opacity(0.85)), lineWidth: 1.5)
 
         let phase = CGFloat((time * (danger ? 1.4 : 0.7)).truncatingRemainder(dividingBy: 1))
         let scale = 1 + 0.6 * phase
         let ring = CGRect(x: point.x - w * scale / 2, y: point.y - h * scale / 2, width: w * scale, height: h * scale)
-        context.stroke(Path(ellipseIn: ring), with: .color(color.opacity(Double(0.6 * (1 - phase)))), lineWidth: 2)
+        context.stroke(Path(ellipseIn: ring), with: .color(color.opacity(Double(0.45 * (1 - phase)))), lineWidth: 1.2)
     }
 }
 
 // MARK: - Label
 
-/// Floating glass label at the middle of the line.
+/// Small single-line label next to the line: status symbol, "≈ 18 м · 1,4 с" (~13 pt).
 private struct LeadDistanceLabel: View {
     let lead: LeadVehicle
     let assessment: FollowingDistanceAssessment?
@@ -205,28 +222,35 @@ private struct LeadDistanceLabel: View {
         let status = assessment?.status ?? .unknown
         let color = RVTheme.statusColor(status)
         let gap = FollowingDistanceText.gap(lead.distanceMeters)
-        VStack(spacing: 1) {
-            HStack(spacing: 6) {
-                Image(systemName: RVTheme.statusSymbol(status))
-                    .font(.system(size: 15, weight: .bold))
-                    .foregroundStyle(color)
-                    .symbolEffect(.pulse, options: .repeating, isActive: status == .danger)
-                Text(gap)
-                    .rvNumeric(24, weight: .heavy)
-                    .contentTransition(.numericText())
-            }
-            if let assessment {
-                Text(FollowingDistanceText.lineCaption(assessment))
-                    .rvNumeric(12, weight: .semibold)
-                    .foregroundStyle(.white.opacity(0.85))
-                    .contentTransition(.numericText())
-            }
+        HStack(spacing: 4) {
+            Image(systemName: RVTheme.statusSymbol(status))
+                .font(.system(size: 10, weight: .bold))
+                .foregroundStyle(color)
+                .symbolEffect(.pulse, options: .repeating, isActive: status == .danger)
+            Text(Self.text(gap: gap, assessment: assessment))
+                .rvNumeric(13, weight: .bold)
+                .contentTransition(.numericText())
         }
         .lineLimit(1)
         .foregroundStyle(.white)
-        .padding(.horizontal, 12)
-        .padding(.vertical, 6)
-        .rvGlass(cornerRadius: 16, tint: color)
+        .rvTextShadow()
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
+        .background {
+            ZStack {
+                Capsule(style: .continuous).fill(.ultraThinMaterial).opacity(0.65)
+                Capsule(style: .continuous).fill(color.opacity(0.12))
+            }
+        }
+        .overlay(Capsule(style: .continuous).strokeBorder(color.opacity(0.55), lineWidth: 0.75))
         .animation(RVTheme.snappy, value: gap)
+    }
+
+    /// "≈ 18 м · 1,4 с" while moving, "≈ 1,6 м" when standing / without a headway.
+    static func text(gap: String, assessment: FollowingDistanceAssessment?) -> String {
+        if let assessment, !assessment.isStopped, let headway = assessment.timeHeadwaySeconds {
+            return gap + " · " + RVFormat.gapSeconds(headway)
+        }
+        return gap
     }
 }

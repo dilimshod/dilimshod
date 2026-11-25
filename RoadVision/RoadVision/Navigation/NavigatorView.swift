@@ -24,16 +24,16 @@ struct NavigatorView: View {
             mapLayer(nav)
                 .ignoresSafeArea()
 
-            VStack(spacing: 10) {
+            VStack(spacing: 8) {
                 topSection(nav)
                     .background(heightReader($topInset))
                 cornerRow(nav)
             }
-            .padding(.horizontal, 12)
+            .padding(.horizontal, 10)
             .padding(.top, 4)
             .frame(maxHeight: .infinity, alignment: .top)
 
-            VStack(spacing: 8) {
+            VStack(spacing: 6) {
                 if let error = nav.errorMessage {
                     errorBanner(error, nav: nav)
                         .transition(.move(edge: .bottom).combined(with: .opacity))
@@ -41,7 +41,7 @@ struct NavigatorView: View {
                 bottomSection(nav)
                 attributionFooter(nav)
             }
-            .padding(.horizontal, 12)
+            .padding(.horizontal, 10)
             .padding(.bottom, 2)
             .background(heightReader($bottomInset))
             .frame(maxHeight: .infinity, alignment: .bottom)
@@ -120,7 +120,7 @@ struct NavigatorView: View {
 
     @ViewBuilder
     private func topSection(_ nav: NavigationService) -> some View {
-        VStack(spacing: 8) {
+        VStack(spacing: 6) {
             if nav.state == .navigating, let progress = nav.progress {
                 ManeuverBannerView(progress: progress, isRerouting: nav.isRecalculating)
                 laneGuidance(nav, progress: progress)
@@ -185,20 +185,20 @@ struct NavigatorView: View {
 
     private func roadStrip(_ nav: NavigationService) -> some View {
         let limit = speedLimit(nav)
-        return HStack(spacing: 12) {
-            VStack(alignment: .leading, spacing: 3) {
+        return HStack(spacing: 8) {
+            VStack(alignment: .leading, spacing: 1) {
                 Text(roadName(nav))
-                    .font(.headline)
+                    .font(.subheadline.weight(.semibold))
                     .lineLimit(1)
                     .minimumScaleFactor(0.8)
-                HStack(spacing: 6) {
+                HStack(spacing: 5) {
                     if let lanes = laneText(nav) {
                         Label(lanes, systemImage: "road.lanes")
-                            .font(.subheadline.weight(.semibold))
+                            .font(.caption.weight(.semibold))
                             .monospacedDigit()
                     }
                     Text("OSM")
-                        .font(.system(size: 9, weight: .bold))
+                        .font(.system(size: 8, weight: .bold))
                         .padding(.horizontal, 4)
                         .padding(.vertical, 1)
                         .overlay(Capsule().stroke(Color.white.opacity(0.5), lineWidth: 1))
@@ -216,9 +216,10 @@ struct NavigatorView: View {
                             warningEnabled: app.settings.speedWarningEnabled)
         }
         .foregroundStyle(.white)
-        .padding(.horizontal, 14)
-        .padding(.vertical, 10)
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+        .padding(.leading, 12)
+        .padding(.trailing, 4)
+        .padding(.vertical, 4)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
     }
 
     /// Nearest hazard (not a signal) inside its warning distance, shown as a glanceable chip.
@@ -229,19 +230,19 @@ struct NavigatorView: View {
             return feature.kind != .trafficSignals && ahead >= 0 && ahead <= feature.kind.alertDistance
         }
         if let hazard {
-            HStack(spacing: 8) {
+            HStack(spacing: 6) {
                 Image(systemName: hazard.kind.symbolName)
-                    .font(.headline)
+                    .font(.footnote.weight(.bold))
                 Text(hazard.kind.displayName)
-                    .font(.subheadline.weight(.bold))
+                    .font(.footnote.weight(.bold))
                     .lineLimit(1)
                 Text(RVFormat.distance(max(0, hazard.distanceAlongRoute - progress.distanceAlong)))
-                    .font(.subheadline.weight(.bold))
+                    .font(.footnote.weight(.bold))
                     .monospacedDigit()
             }
             .foregroundStyle(.white)
-            .padding(.horizontal, 14)
-            .frame(minHeight: 40)
+            .padding(.horizontal, 10)
+            .frame(minHeight: 30)
             .background(hazardTint(hazard.kind), in: Capsule())
             .frame(maxWidth: .infinity, alignment: .leading)
             .accessibilityElement(children: .combine)
@@ -261,30 +262,31 @@ struct NavigatorView: View {
     // MARK: - Corner row (camera, buttons)
 
     private func cornerRow(_ nav: NavigationService) -> some View {
-        HStack(alignment: .top, spacing: 12) {
+        HStack(alignment: .top, spacing: 10) {
             cameraCorner
             Spacer(minLength: 0)
-            VStack(spacing: 10) {
+            VStack(spacing: 2) {
                 if !hasRoadInfo(nav) {
                     SpeedometerView(speedKmh: app.location.speedKmh, limitKmh: nil, compact: true)
                 }
                 if !isFollowing {
-                    GlassIconButton(systemName: "location.fill", label: "Центр", tint: .blue) {
+                    GlassIconButton(systemName: "location.fill", label: "Центр", size: 44, tint: .blue) {
                         isFollowing = true
                     }
                 }
                 GlassIconButton(systemName: app.settings.showTrafficOnMap ? "car.2.fill" : "car.2",
                                 label: "Пробки",
+                                size: 44,
                                 tint: app.settings.showTrafficOnMap ? .orange : .white) {
                     app.settings.showTrafficOnMap.toggle()
                 }
-                GlassIconButton(systemName: "exclamationmark.bubble.fill", label: "Сообщить") {
+                GlassIconButton(systemName: "exclamationmark.bubble.fill", label: "Сообщить", size: 44) {
                     incidentTarget = IncidentReportTarget(coordinate: nil)
                 }
-                GlassIconButton(systemName: "gearshape.fill", label: "Настройки") {
+                GlassIconButton(systemName: "gearshape.fill", label: "Настройки", size: 44) {
                     app.showSettings = true
                 }
-                AssistantButton()
+                AssistantButton(size: 44)
             }
         }
     }
@@ -295,7 +297,7 @@ struct NavigatorView: View {
             // Live camera with recognition boxes; it sizes and styles itself and returns to the camera on tap.
             CameraPiPView(pipeline: app.recognition)
         } else {
-            GlassIconButton(systemName: "camera.fill", label: "Камера") {
+            GlassIconButton(systemName: "camera.fill", label: "Камера", size: 44) {
                 app.switchTo(.camera)
             }
         }
@@ -330,10 +332,10 @@ struct NavigatorView: View {
                                 startPlanning(to: nav.placeSearch.mapItem(for: recent), rememberAsRecent: true)
                             } label: {
                                 Label(recent.name, systemImage: "clock.arrow.circlepath")
-                                    .font(.subheadline.weight(.semibold))
+                                    .font(.footnote.weight(.semibold))
                                     .lineLimit(1)
-                                    .padding(.horizontal, 16)
-                                    .frame(minHeight: 52)
+                                    .padding(.horizontal, 14)
+                                    .frame(minHeight: 44)
                                     .background(.regularMaterial, in: Capsule())
                             }
                             .buttonStyle(.plain)
@@ -344,20 +346,20 @@ struct NavigatorView: View {
             Button {
                 showSearch = true
             } label: {
-                HStack(spacing: 12) {
+                HStack(spacing: 10) {
                     Image(systemName: "magnifyingglass")
-                        .font(.title3.weight(.semibold))
+                        .font(.headline)
                     Text("Куда едем?")
-                        .font(.title3.weight(.semibold))
+                        .font(.headline)
                     Spacer(minLength: 0)
                 }
-                .padding(.horizontal, 20)
-                .frame(maxWidth: .infinity, minHeight: 60)
+                .padding(.horizontal, 18)
+                .frame(maxWidth: .infinity, minHeight: 50)
                 .background(.regularMaterial, in: Capsule())
                 .contentShape(Capsule())
             }
             .buttonStyle(.plain)
-            .shadow(color: .black.opacity(0.3), radius: 10, y: 3)
+            .shadow(color: .black.opacity(0.25), radius: 6, y: 2)
         }
     }
 

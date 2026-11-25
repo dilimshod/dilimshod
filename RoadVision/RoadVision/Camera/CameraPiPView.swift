@@ -13,7 +13,7 @@ struct CameraPiPView: View {
     }
 
     private var size: CGSize {
-        verticalSizeClass == .compact ? CGSize(width: 200, height: 120) : CGSize(width: 160, height: 110)
+        verticalSizeClass == .compact ? CGSize(width: 176, height: 104) : CGSize(width: 136, height: 96)
     }
 
     private var isLive: Bool {
@@ -33,8 +33,8 @@ struct CameraPiPView: View {
         .frame(width: size.width, height: size.height)
         .overlay(alignment: .topLeading) {
             if isLive, let color = pipeline.currentLightColor {
-                TrafficLightDotView(color: color, size: 16)
-                    .padding(7)
+                TrafficLightDotView(color: color, size: 12)
+                    .padding(6)
             }
         }
         .overlay(alignment: .bottomTrailing) {
@@ -60,13 +60,13 @@ struct CameraPiPView: View {
                     .padding(8)
             }
         }
-        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
         .overlay(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .strokeBorder(Color.white.opacity(0.3), lineWidth: 1)
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .strokeBorder(Color.white.opacity(0.25), lineWidth: 0.75)
         )
-        .shadow(color: .black.opacity(0.45), radius: 10, x: 0, y: 4)
-        .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .shadow(color: .black.opacity(0.3), radius: 6, x: 0, y: 2)
+        .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
         .onTapGesture {
             app.switchTo(.camera)
         }

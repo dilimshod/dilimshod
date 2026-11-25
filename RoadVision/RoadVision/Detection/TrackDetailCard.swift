@@ -12,13 +12,13 @@ struct TrackDetailCard: View {
     let onClose: () -> Void
 
     /// Card size used to place it next to its box.
-    static let estimatedSize = CGSize(width: 268, height: 210)
+    static let estimatedSize = CGSize(width: 236, height: 180)
 
     private var kindColor: Color { RVTheme.kindColor(track.kind) }
     private var leadColor: Color { RVTheme.statusColor(assessment?.status ?? .unknown) }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 7) {
             header
             if lead != nil {
                 RVBadge(text: "передний автомобиль", color: leadColor, systemImage: "car.rear.fill")
@@ -26,15 +26,15 @@ struct TrackDetailCard: View {
             Rectangle()
                 .fill(Color.white.opacity(0.14))
                 .frame(height: 1)
-            Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 6) {
+            Grid(alignment: .leading, horizontalSpacing: 10, verticalSpacing: 4) {
                 if track.kind == .trafficLight {
                     GridRow {
                         rowTitle("Цвет")
                         HStack(spacing: 6) {
-                            TrafficLightDotView(color: track.lightColor ?? .unknown, size: 12)
+                            TrafficLightDotView(color: track.lightColor ?? .unknown, size: 10)
                             Text((track.lightColor ?? .unknown).displayName + " (оценка)")
                         }
-                        .font(RVTheme.font(14, weight: .semibold))
+                        .font(RVTheme.font(12, weight: .semibold))
                     }
                 }
                 GridRow {
@@ -78,54 +78,54 @@ struct TrackDetailCard: View {
             }
         }
         .foregroundStyle(.white)
-        .padding(14)
+        .padding(11)
         .frame(width: Self.estimatedSize.width, alignment: .leading)
-        .rvGlass(cornerRadius: RVTheme.Radius.card, tint: lead != nil ? leadColor : kindColor.opacity(0.6))
+        .rvGlass(cornerRadius: RVTheme.Radius.panel, tint: lead != nil ? leadColor : kindColor.opacity(0.6))
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Подробности объекта")
     }
 
     private var header: some View {
-        HStack(alignment: .top, spacing: 10) {
+        HStack(alignment: .top, spacing: 8) {
             Group {
                 if track.kind == .trafficLight {
-                    TrafficLightDotView(color: track.lightColor ?? .unknown, size: 18)
+                    TrafficLightDotView(color: track.lightColor ?? .unknown, size: 14)
                 } else {
                     Image(systemName: track.kind.symbolName)
-                        .font(.system(size: 17, weight: .bold))
+                        .font(.system(size: 13, weight: .bold))
                         .foregroundStyle(kindColor)
                 }
             }
-            .frame(width: 38, height: 38)
+            .frame(width: 30, height: 30)
             .background(kindColor.opacity(0.18), in: Circle())
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(track.kind.displayName)
-                    .font(RVTheme.font(17, weight: .bold))
+                    .font(RVTheme.font(15, weight: .bold))
                 if let make = track.make, let confidence = track.makeConfidence {
                     Text("\(make) · уверенность \(Int((min(max(confidence, 0), 1) * 100).rounded()))%")
-                        .font(RVTheme.font(13, weight: .semibold))
+                        .font(RVTheme.font(11, weight: .semibold))
                         .foregroundStyle(.white.opacity(0.8))
                         .monospacedDigit()
                         .lineLimit(2)
                 } else if track.kind.isVehicle && track.kind != .bicycle {
                     Text("Марка не определена")
-                        .font(RVTheme.font(13, weight: .medium))
+                        .font(RVTheme.font(11, weight: .medium))
                         .foregroundStyle(.white.opacity(0.6))
                 }
             }
             Spacer(minLength: 4)
             Button(action: onClose) {
                 Image(systemName: "xmark")
-                    .font(.system(size: 13, weight: .bold))
-                    .frame(width: 30, height: 30)
+                    .font(.system(size: 11, weight: .bold))
+                    .frame(width: 26, height: 26)
                     .background(Color.white.opacity(0.14), in: Circle())
                     .frame(width: 44, height: 44)
                     .contentShape(Rectangle())
             }
             .buttonStyle(RVPressableButtonStyle())
-            .padding(.top, -7)
-            .padding(.trailing, -7)
+            .padding(.top, -9)
+            .padding(.trailing, -9)
             .accessibilityLabel("Закрыть")
         }
     }
@@ -143,13 +143,13 @@ struct TrackDetailCard: View {
 
     private func rowTitle(_ text: String) -> some View {
         Text(text)
-            .font(RVTheme.font(13, weight: .medium))
+            .font(RVTheme.font(11, weight: .medium))
             .foregroundStyle(.white.opacity(0.65))
     }
 
     private func rowValue(_ text: String, color: Color = .white) -> some View {
         Text(text)
-            .font(RVTheme.font(14, weight: .semibold))
+            .font(RVTheme.font(12, weight: .semibold))
             .monospacedDigit()
             .foregroundStyle(color)
             .lineLimit(1)
@@ -163,7 +163,7 @@ struct TrackDetailCard: View {
         let x = minX <= maxX ? min(max(rect.midX, minX), maxX) : size.width / 2
         let below = rect.midY < size.height * 0.5
         let preferredY = below ? rect.maxY + 14 + h / 2 : rect.minY - 14 - h / 2
-        let minY = safeArea.top + 70 + h / 2, maxY = size.height - safeArea.bottom - 120 - h / 2
+        let minY = safeArea.top + 56 + h / 2, maxY = size.height - safeArea.bottom - 72 - h / 2
         let y = minY <= maxY ? min(max(preferredY, minY), maxY) : size.height / 2
         return CGPoint(x: x, y: y)
     }

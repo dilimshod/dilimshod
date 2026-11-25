@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// Top banner of turn-by-turn guidance: big maneuver arrow, distance to the maneuver, instruction and "Затем: …".
+/// Compact top banner of turn-by-turn guidance: maneuver arrow, distance to the maneuver, instruction and "Затем: …".
 /// Shows a rerouting / off-route state instead of the instruction when appropriate.
 struct ManeuverBannerView: View {
     let progress: RouteProgress
@@ -8,38 +8,41 @@ struct ManeuverBannerView: View {
     var isRerouting: Bool = false
 
     var body: some View {
-        HStack(alignment: .center, spacing: 14) {
+        HStack(alignment: .center, spacing: 10) {
             symbol
-                .frame(width: 68, height: 68)
-                .background(.white.opacity(0.14), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                .frame(width: 46, height: 46)
+                .background(.white.opacity(0.14), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
 
-            VStack(alignment: .leading, spacing: 3) {
+            VStack(alignment: .leading, spacing: 1) {
                 if isRerouting {
                     Text("Перестраиваю маршрут…")
-                        .font(.title3.weight(.bold))
+                        .font(.headline)
                     Text("Новый маршрут от текущего положения")
-                        .font(.subheadline)
+                        .font(.caption)
                         .foregroundStyle(.white.opacity(0.8))
                 } else if progress.isOffRoute {
                     Text("Вы съехали с маршрута")
-                        .font(.title3.weight(.bold))
+                        .font(.headline)
                     Text("Маршрут будет перестроен")
-                        .font(.subheadline)
+                        .font(.caption)
                         .foregroundStyle(.white.opacity(0.8))
                 } else {
-                    if let distance = progress.distanceToNextManeuver {
-                        Text(RVFormat.distance(distance))
-                            .font(.system(size: 34, weight: .heavy, design: .rounded))
-                            .monospacedDigit()
-                            .contentTransition(.numericText())
+                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                        if let distance = progress.distanceToNextManeuver {
+                            Text(RVFormat.distance(distance))
+                                .font(.system(size: 22, weight: .heavy, design: .rounded))
+                                .monospacedDigit()
+                                .contentTransition(.numericText())
+                                .layoutPriority(1)
+                        }
+                        Text(instructionText)
+                            .font(.subheadline.weight(.semibold))
+                            .lineLimit(2)
+                            .minimumScaleFactor(0.8)
                     }
-                    Text(instructionText)
-                        .font(.title3.weight(.semibold))
-                        .lineLimit(2)
-                        .minimumScaleFactor(0.75)
                     if let following = progress.followingInstruction, !following.isEmpty {
                         Text("Затем: \(following)")
-                            .font(.subheadline)
+                            .font(.caption)
                             .foregroundStyle(.white.opacity(0.75))
                             .lineLimit(1)
                     }
@@ -48,10 +51,10 @@ struct ManeuverBannerView: View {
             .foregroundStyle(.white)
             Spacer(minLength: 0)
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 12)
-        .background(background, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
-        .shadow(color: .black.opacity(0.35), radius: 10, y: 4)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .background(background.opacity(0.92), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .shadow(color: .black.opacity(0.25), radius: 6, y: 2)
         .accessibilityElement(children: .combine)
         .accessibilityLabel(accessibilityText)
         .animation(.easeInOut(duration: 0.25), value: progress.nextStepIndex)
@@ -61,11 +64,10 @@ struct ManeuverBannerView: View {
     private var symbol: some View {
         if isRerouting {
             ProgressView()
-                .controlSize(.large)
                 .tint(.white)
         } else {
             Image(systemName: progress.isOffRoute ? "arrow.triangle.branch" : progress.nextManeuver.symbolName)
-                .font(.system(size: 42, weight: .bold))
+                .font(.system(size: 26, weight: .bold))
                 .foregroundStyle(.white)
                 .symbolRenderingMode(.hierarchical)
         }

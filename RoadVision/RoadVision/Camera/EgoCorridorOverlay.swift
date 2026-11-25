@@ -1,8 +1,9 @@
 import SwiftUI
 
-/// Subtle translucent trapezoid of the own-lane corridor (`EgoCorridor.polygon`) that the lead vehicle is picked from:
+/// Very subtle (opacity ≤ 0.12) translucent trapezoid of the own-lane corridor (`EgoCorridor.polygon`) that the lead vehicle is picked from:
 /// a gradient fill fading toward the horizon, soft edge lines and a dashed centre line. Tinted with the status colour
-/// (white when there is no lead). Uses the same aspect-fill mapping as the boxes; never takes touches.
+/// (white when there is no lead). Off by default (Settings → «Показывать свою полосу»). Uses the same aspect-fill
+/// mapping as the boxes; never takes touches.
 struct EgoCorridorOverlay: View {
     let corridor: EgoCorridor
     let imageSize: CGSize
@@ -23,8 +24,8 @@ struct EgoCorridorOverlay: View {
                         path.closeSubpath()
                     }
                     .fill(LinearGradient(stops: [.init(color: tint.opacity(0), location: 0),
-                                                 .init(color: tint.opacity(0.07), location: 0.45),
-                                                 .init(color: tint.opacity(0.16), location: 1)],
+                                                 .init(color: tint.opacity(0.04), location: 0.45),
+                                                 .init(color: tint.opacity(0.08), location: 1)],
                                          startPoint: top, endPoint: bottom))
 
                     Path { path in
@@ -33,15 +34,15 @@ struct EgoCorridorOverlay: View {
                         path.move(to: points[3])
                         path.addLine(to: points[2])
                     }
-                    .stroke(LinearGradient(colors: [tint.opacity(0), tint.opacity(0.55)], startPoint: top, endPoint: bottom),
-                            style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
+                    .stroke(LinearGradient(colors: [tint.opacity(0), tint.opacity(0.12)], startPoint: top, endPoint: bottom),
+                            style: StrokeStyle(lineWidth: 1.5, lineCap: .round))
 
                     Path { path in
                         path.move(to: Self.midpoint(points[0], points[3]))
                         path.addLine(to: Self.midpoint(points[1], points[2]))
                     }
-                    .stroke(LinearGradient(colors: [tint.opacity(0), tint.opacity(0.28)], startPoint: top, endPoint: bottom),
-                            style: StrokeStyle(lineWidth: 1.5, lineCap: .round, dash: [8, 12]))
+                    .stroke(LinearGradient(colors: [tint.opacity(0), tint.opacity(0.08)], startPoint: top, endPoint: bottom),
+                            style: StrokeStyle(lineWidth: 1, lineCap: .round, dash: [6, 12]))
                 }
             }
         }
