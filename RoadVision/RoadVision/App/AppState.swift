@@ -59,6 +59,8 @@ final class AppState {
         assistant.contextProvider = { [weak self] in
             self?.drivingContext() ?? DrivingContext()
         }
+        recognition.weatherProvider = { [weak weather] in weather?.current }
+        recognition.speech = speech
     }
 
     /// Called once when the root view appears.

@@ -6,12 +6,12 @@ import Vision
 
 /// Frame-processing engine of `RecognitionPipeline`.
 ///
-/// Everything heavy (Vision/Core ML inference, tracking, distance/speed estimation, make classification,
-/// traffic-light colour sampling, research logging) runs on the private serial `recognition.processing` queue —
+/// Everything heavy (Vision/Core ML inference, tracking, distance/speed estimation, lead-vehicle selection,
+/// make classification, traffic-light colour sampling, research logging) runs on the private serial `recognition.processing` queue —
 /// never on the main actor.
 ///
 /// Threading contract
-/// - `detector`, `makeClassifier`, `tracker`, `estimator` and the frame statistics are confined to `queue`.
+/// - `detector`, `makeClassifier`, `tracker`, `estimator`, `leadTracker` and the frame statistics are confined to `queue`.
 /// - Inputs coming from the main actor (GPS, settings), the activity flags and the handlers are lock-protected.
 /// - The experiment recording has its own lock so the main actor can stop it without waiting for inference.
 /// - Results are delivered through `outputHandler` (called on `queue`, at most `maxFramesPerSecond` times per second).
@@ -23,6 +23,10 @@ final class RecognitionWorker: @unchecked Sendable {
         var longitude: Double?
         var detection = VehicleDetector.Options()
         var makeRecognitionEnabled = true
+        /// Run the lead-vehicle (following distance) estimation.
+        var followingDistanceEnabled = true
+        /// Horizon of the own-lane corridor, fraction of the frame height (`settings.corridorHorizon`).
+        var corridorHorizon = EgoCorridor.default.horizonY
     }
 
     /// Snapshot published after every processed frame.
@@ -43,6 +47,9 @@ final class RecognitionWorker: @unchecked Sendable {
         var frameSize: CGSize
         /// Frames processed since the worker was created.
         var processedFrames: Int
+        /// Closest confirmed vehicle in the own-lane corridor with a fused distance estimate (nil when none
+        /// or when following distance is switched off).
+        var leadVehicle: LeadVehicle?
     }
 
     /// Load results of the two models.
@@ -77,6 +84,7 @@ final class RecognitionWorker: @unchecked Sendable {
     private let makeClassifier = MakeClassifier()
     private let tracker = ObjectTracker()
     private let estimator = MonocularSpeedEstimator()
+    private let leadTracker = LeadVehicleTracker()
     private var generation = 0
     private var lastFrameTimestamp: TimeInterval?
     private var fpsEstimate: Double = 0
@@ -149,6 +157,7 @@ final class RecognitionWorker: @unchecked Sendable {
             queue.async { [self] in
                 lastFrameTimestamp = nil
                 fpsEstimate = 0
+                leadTracker.reset()
             }
         }
     }
@@ -171,6 +180,7 @@ final class RecognitionWorker: @unchecked Sendable {
             recordingLock.unlock()
             tracker.reset()
             estimator.reset()
+            leadTracker.reset()
             makeClassifier.reset()
             generation = newGeneration
             lastFrameTimestamp = nil
@@ -246,6 +256,8 @@ final class RecognitionWorker: @unchecked Sendable {
                                       imageWidth: Double(width), imageHeight: Double(height))
         tracks = estimator.update(tracks: tracks, ownSpeedKmh: frameInputs.ownSpeedKmh,
                                   geometry: geometry, timestamp: timestamp)
+        let leadVehicle = updateLeadVehicle(tracks: tracks, inputs: frameInputs, geometry: geometry,
+                                            timestamp: timestamp)
 
         if frameInputs.makeRecognitionEnabled, makeClassifier.status.isReady {
             // Votes become visible in the tracks of the next frame.
@@ -272,8 +284,23 @@ final class RecognitionWorker: @unchecked Sendable {
         let output = Output(generation: generation, tracks: tracks, visibleCounts: visibleCounts,
                             uniqueCounts: uniqueCounts, fps: fpsEstimate, inferenceMs: inferenceEstimate,
                             lightColor: lightColor, frameSize: CGSize(width: width, height: height),
-                            processedFrames: processedFrames)
+                            processedFrames: processedFrames, leadVehicle: leadVehicle)
         outputHandler?(output)
+    }
+
+    /// Picks the lead vehicle (closest confirmed vehicle inside the own-lane corridor) and fuses its distance from the
+    /// apparent box width and height. Resets the tracker while the feature is off so it restarts cleanly.
+    private func updateLeadVehicle(tracks: [TrackedObject], inputs: Inputs, geometry: CameraGeometry,
+                                   timestamp: TimeInterval) -> LeadVehicle? {
+        guard inputs.followingDistanceEnabled else {
+            leadTracker.reset()
+            return nil
+        }
+        let horizon = min(0.8, max(0.1, inputs.corridorHorizon))
+        if leadTracker.corridor.horizonY != horizon {
+            leadTracker.corridor = EgoCorridor(horizonY: horizon)
+        }
+        return leadTracker.update(tracks: tracks, geometry: geometry, timestamp: timestamp)
     }
 
     /// Estimates the colour of every traffic light from the BGRA pixels inside its box.

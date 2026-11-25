@@ -9,6 +9,12 @@ import Observation
 /// queue (throttled to ≤ 15 fps, a frame is processed only when the previous one is finished), and every processed
 /// frame publishes one snapshot back to the main actor — so observable updates stay ≤ 15 Hz.
 ///
+/// Following distance: the worker also picks the lead vehicle (`LeadVehicleTracker`, own-lane corridor from
+/// `settings.corridorHorizon`); the main actor turns it into a `FollowingDistanceAssessment` (own GPS speed, road
+/// surface from the weather or the manual setting, `settings.followingDistancePolicy`) and drives the haptic / tone /
+/// voice warnings through `DistanceWarningController`. Without a lead the assessment still carries the recommended
+/// gap for the current speed (status `.unknown`) so the HUD can show the norm.
+///
 /// Wording: detector scores are "уверенность" (model confidence), distances/speeds are "≈ оценка".
 @Observable
 @MainActor
@@ -48,6 +54,36 @@ final class RecognitionPipeline {
     /// Frames processed since launch (for the status sheet).
     private(set) var processedFrames = 0
 
+    // MARK: Following distance (only while `settings.followingDistanceEnabled`)
+
+    /// Vehicle directly ahead in the own lane with a fused (≈) distance estimate; nil when none.
+    private(set) var leadVehicle: LeadVehicle?
+    /// Gap to the lead vs the recommendation. Without a lead: recommended gap for the current speed, status `.unknown`.
+    /// nil while following distance is switched off.
+    private(set) var followingAssessment: FollowingDistanceAssessment?
+    /// Road surface used for the recommendation (auto from the app's weather, or the manual setting).
+    private(set) var roadSurface: RoadSurfaceCondition = .dry
+    /// Where `roadSurface` comes from.
+    private(set) var roadSurfaceSource: RoadSurfaceSource = .noWeather
+    /// Moving, dangerously close and the time to collision is below `policy.collisionWarningSeconds` (not throttled;
+    /// for the visual warning — sound/voice are throttled by `DistanceWarningController`).
+    private(set) var isForwardCollisionWarning = false
+
+    /// Current weather for the "auto" road surface (set by `AppState`).
+    @ObservationIgnored var weatherProvider: (@MainActor () -> WeatherSnapshot?)?
+    /// Voice output for distance warnings (set by `AppState`; nil → haptics and tone only).
+    @ObservationIgnored var speech: SpeechService? {
+        didSet { warnings.speech = speech }
+    }
+
+    /// Own-lane corridor used to pick the lead vehicle (for drawing).
+    var egoCorridor: EgoCorridor {
+        EgoCorridor(horizonY: min(0.8, max(0.1, settings.corridorHorizon)))
+    }
+
+    /// The following-distance policy currently in effect (from the settings).
+    var followingDistancePolicy: FollowingDistancePolicy { settings.followingDistancePolicy }
+
     var isRecording: Bool { recordingStartedAt != nil }
 
     /// Unique confirmed road vehicles (car, truck, bus, motorcycle, bicycle) since the last reset.
@@ -69,6 +105,7 @@ final class RecognitionPipeline {
     @ObservationIgnored private var isFinishingRecording = false
     @ObservationIgnored private var generation = 0
     @ObservationIgnored private var lastRecordSetting: Bool
+    @ObservationIgnored private let warnings = DistanceWarningController()
 
     init(location: LocationService, settings: AppSettings, signals: TrafficSignalService) {
         self.location = location
@@ -105,8 +142,11 @@ final class RecognitionPipeline {
         pushLocation()
         location.addListener { [weak self] _ in
             self?.pushLocation()
+            // Keeps the recommended gap current even without camera frames (no model, camera paused).
+            self?.refreshFollowingDistance(fromFrame: false)
         }
         observeSettings()
+        refreshFollowingDistance(fromFrame: false)
         // Compile/load the models in the background right away so they are ready when the camera starts.
         worker.loadModels()
     }
@@ -283,6 +323,9 @@ final class RecognitionPipeline {
             signals.cameraLightColor = output.lightColor
         }
         processedFrames = output.processedFrames
+        let lead = settings.followingDistanceEnabled ? output.leadVehicle : nil
+        if leadVehicle != lead { leadVehicle = lead }
+        refreshFollowingDistance(fromFrame: true)
     }
 
     private func applyModelStatuses(_ statuses: RecognitionWorker.ModelStatuses) {
@@ -306,6 +349,52 @@ final class RecognitionPipeline {
             currentLightColor = nil
             signals.cameraLightColor = nil
         }
+        if leadVehicle != nil { leadVehicle = nil }
+        warnings.reset()
+        refreshFollowingDistance(fromFrame: false)
+    }
+
+    // MARK: - Following distance
+
+    /// Recomputes the assessment (and, for camera frames, feeds the warning controller).
+    private func refreshFollowingDistance(fromFrame: Bool) {
+        guard settings.followingDistanceEnabled else {
+            if leadVehicle != nil { leadVehicle = nil }
+            if followingAssessment != nil { followingAssessment = nil }
+            if isForwardCollisionWarning { isForwardCollisionWarning = false }
+            warnings.reset()
+            return
+        }
+        let surface = resolveRoadSurface()
+        if roadSurface != surface.condition { roadSurface = surface.condition }
+        if roadSurfaceSource != surface.source { roadSurfaceSource = surface.source }
+
+        let policy = settings.followingDistancePolicy
+        let lead = leadVehicle
+        let assessment = FollowingDistanceCalculator.assess(
+            distanceMeters: lead?.distanceMeters, ownSpeedKmh: location.speedKmh,
+            relativeSpeedKmh: lead?.relativeSpeedKmh, policy: policy, condition: surface.condition)
+        if followingAssessment != assessment { followingAssessment = assessment }
+
+        let collision = lead != nil && DistanceWarningController.isForwardCollision(assessment, policy: policy)
+        if isForwardCollisionWarning != collision { isForwardCollisionWarning = collision }
+
+        if fromFrame {
+            warnings.evaluate(assessment, leadID: lead?.trackID, policy: policy,
+                              enabled: settings.distanceWarningsEnabled)
+        }
+    }
+
+    /// "auto" → guessed from the current weather (dry when unknown); otherwise the manual surface.
+    private func resolveRoadSurface() -> (condition: RoadSurfaceCondition, source: RoadSurfaceSource) {
+        let mode = settings.roadSurfaceMode
+        if mode != "auto", let manual = RoadSurfaceCondition(rawValue: mode) {
+            return (manual, .manual)
+        }
+        guard let weather = weatherProvider?() else { return (.dry, .noWeather) }
+        let condition = RoadSurfaceCondition.from(weatherCode: weather.weatherCode, temperatureC: weather.temperatureC,
+                                                  precipitationMm: weather.precipitationMm)
+        return (condition, .weather)
     }
 
     // MARK: - Inputs to the worker
@@ -327,14 +416,18 @@ final class RecognitionPipeline {
             trackPedestrians: settings.trackPedestrians,
             detectTrafficLights: settings.detectTrafficLights)
         let makeEnabled = settings.makeRecognitionEnabled
+        let followingEnabled = settings.followingDistanceEnabled
+        let horizon = settings.corridorHorizon
         worker.update { inputs in
             inputs.detection = options
             inputs.makeRecognitionEnabled = makeEnabled
+            inputs.followingDistanceEnabled = followingEnabled
+            inputs.corridorHorizon = horizon
         }
     }
 
     /// Re-pushes the recognition settings whenever one of them changes; turning on "record experiment log"
-    /// while the camera runs starts a recording.
+    /// while the camera runs starts a recording. Following-distance settings refresh the assessment right away.
     private func observeSettings() {
         withObservationTracking {
             _ = settings.detectionConfidence
@@ -343,10 +436,17 @@ final class RecognitionPipeline {
             _ = settings.detectTrafficLights
             _ = settings.makeRecognitionEnabled
             _ = settings.recordExperimentLog
+            _ = settings.followingDistanceEnabled
+            _ = settings.corridorHorizon
+            _ = settings.followingTimeGapDry
+            _ = settings.stoppedGapMeters
+            _ = settings.reactionTimeSeconds
+            _ = settings.roadSurfaceMode
         } onChange: { [weak self] in
             Task { @MainActor [weak self] in
                 guard let self else { return }
                 self.pushSettings()
+                self.refreshFollowingDistance(fromFrame: false)
                 let record = self.settings.recordExperimentLog
                 if record != self.lastRecordSetting {
                     self.lastRecordSetting = record
@@ -356,6 +456,25 @@ final class RecognitionPipeline {
                 }
                 self.observeSettings()
             }
+        }
+    }
+}
+
+/// Origin of `RecognitionPipeline.roadSurface`.
+enum RoadSurfaceSource: String, Sendable {
+    /// "auto": guessed from the current Open-Meteo weather.
+    case weather
+    /// "auto", but no weather is available yet → dry is assumed.
+    case noWeather
+    /// Chosen in Settings.
+    case manual
+
+    /// Short Russian label for the surface chip.
+    var displayName: String {
+        switch self {
+        case .weather: return "авто"
+        case .noWeather: return "авто · нет погоды"
+        case .manual: return "вручную"
         }
     }
 }
