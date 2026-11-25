@@ -598,12 +598,12 @@ enum RoadSurfaceSource: String, Sendable {
     /// Chosen in Settings.
     case manual
 
-    /// Short Russian label for the surface chip.
-    var displayName: String {
+    /// Short localized label for the surface chip.
+    var localizedName: String {
         switch self {
-        case .weather: return "авто"
-        case .noWeather: return "авто · нет погоды"
-        case .manual: return "вручную"
+        case .weather: return L("surfaceSource.auto")
+        case .noWeather: return L("surfaceSource.noWeather")
+        case .manual: return L("surfaceSource.manual")
         }
     }
 }

@@ -23,10 +23,10 @@ struct DistanceNormsView: View {
             exampleSection(policy: policy, surface: surface)
 
             Section {
-                Text(FollowingDistanceNorms.rulesDocument)
+                Text(verbatim: FollowingDistanceNorms.localizedRulesDocument)
                     .font(RVTheme.font(14, weight: .regular))
             } header: {
-                Text("Документ")
+                Text(l: "norms.document")
             }
 
             Section {
@@ -34,12 +34,12 @@ struct DistanceNormsView: View {
                     NormItemRow(item: item)
                 }
             } header: {
-                Text("Требования и рекомендации")
+                Text(l: "norms.items.header")
             }
 
             Section {
                 Label {
-                    Text(FollowingDistanceNorms.disclaimer)
+                    Text(verbatim: FollowingDistanceNorms.localizedDisclaimer)
                         .font(RVTheme.font(13, weight: .regular))
                         .foregroundStyle(.secondary)
                 } icon: {
@@ -48,12 +48,12 @@ struct DistanceNormsView: View {
                 }
             }
         }
-        .navigationTitle("Требования к дистанции")
+        .navigationTitle(L("fd.norms.title"))
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             if showsDoneButton {
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("Готово") { dismiss() }
+                    Button(L("common.done")) { dismiss() }
                         .fontWeight(.semibold)
                 }
             }
@@ -66,44 +66,44 @@ struct DistanceNormsView: View {
                                 source: RoadSurfaceSource) -> some View {
         Section {
             LabeledContent {
-                Text("\(surface.displayName) · \(source.displayName)")
+                Text("\(surface.localizedName) · \(source.localizedName)")
             } label: {
-                Label("Покрытие дороги", systemImage: surface.symbolName)
+                Label(L("settings.fd.surface"), systemImage: surface.symbolName)
             }
             LabeledContent {
-                Text("≥ \(RVFormat.compactNumber(policy.timeGap(for: surface))) с")
+                Text(verbatim: "≥ \(RVFormat.compactNumber(policy.timeGap(for: surface))) \(RVFormat.appSeconds)")
                     .monospacedDigit()
             } label: {
-                Label("В движении", systemImage: "speedometer")
+                Label(L("norms.moving"), systemImage: "speedometer")
             }
             LabeledContent {
-                Text("≥ \(RVFormat.compactNumber(policy.stoppedGapMeters)) м")
+                Text(verbatim: "≥ \(RVFormat.compactNumber(policy.stoppedGapMeters)) \(RVFormat.appMeters)")
                     .monospacedDigit()
             } label: {
-                Label("При остановке", systemImage: "hand.raised.fill")
+                Label(L("norms.stopped"), systemImage: "hand.raised.fill")
             }
             LabeledContent {
-                Text("\(RVFormat.compactNumber(policy.reactionTimeSeconds)) с")
+                Text(verbatim: "\(RVFormat.compactNumber(policy.reactionTimeSeconds)) \(RVFormat.appSeconds)")
                     .monospacedDigit()
             } label: {
-                Label("Время реакции", systemImage: "bolt.fill")
+                Label(L("settings.fd.reaction"), systemImage: "bolt.fill")
             }
             LabeledContent {
-                Text("< \(RVFormat.compactNumber(policy.collisionWarningSeconds)) с до столкновения")
+                Text(l: "norms.ttcThreshold", RVFormat.compactNumber(policy.collisionWarningSeconds))
                     .monospacedDigit()
             } label: {
-                Label("Предупреждение", systemImage: "exclamationmark.triangle.fill")
+                Label(L("norms.warning"), systemImage: "exclamationmark.triangle.fill")
             }
             LabeledContent {
-                Text("< \(RVFormat.compactNumber(policy.stoppedSpeedKmh)) км/ч")
+                Text(verbatim: "< \(RVFormat.compactNumber(policy.stoppedSpeedKmh)) \(RVFormat.appKmh)")
                     .monospacedDigit()
             } label: {
-                Label("«Стоим», если скорость", systemImage: "car.rear.fill")
+                Label(L("norms.standingIf"), systemImage: "car.rear.fill")
             }
         } header: {
-            Text("Пороги приложения сейчас")
+            Text(l: "norms.current.header")
         } footer: {
-            Text("Меняются в Настройках → «Дистанция». Покрытие «авто» определяется по погоде Open-Meteo.")
+            Text(l: "norms.current.footer")
         }
     }
 
@@ -111,22 +111,22 @@ struct DistanceNormsView: View {
         Section {
             ForEach(RoadSurfaceCondition.allCases, id: \.self) { condition in
                 LabeledContent {
-                    Text("≥ \(RVFormat.compactNumber(policy.timeGap(for: condition))) с")
+                    Text(verbatim: "≥ \(RVFormat.compactNumber(policy.timeGap(for: condition))) \(RVFormat.appSeconds)")
                         .monospacedDigit()
                         .fontWeight(condition == surface ? .bold : .regular)
                 } label: {
                     HStack(spacing: 8) {
-                        Label(condition.displayName, systemImage: condition.symbolName)
+                        Label(condition.localizedName, systemImage: condition.symbolName)
                         if condition == surface {
-                            RVBadge(text: "сейчас", color: RVTheme.safe)
+                            RVBadge(text: L("norms.now"), color: RVTheme.safe)
                         }
                     }
                 }
             }
         } header: {
-            Text("Интервал до впереди идущего (в движении)")
+            Text(l: "norms.gap.header")
         } footer: {
-            Text("Мокро ×2, снег ×3, гололёд ×5 от сухого интервала (UK Highway Code, правило 126: на мокрой дороге минимум вдвое больше, на льду — до 10 раз).")
+            Text(l: "norms.gap.footer")
         }
     }
 
@@ -134,9 +134,9 @@ struct DistanceNormsView: View {
         Section {
             Grid(alignment: .leading, horizontalSpacing: 14, verticalSpacing: 8) {
                 GridRow {
-                    Text("Скорость")
-                    Text("Интервал")
-                    Text("Остановочный путь")
+                    Text(l: "norms.col.speed")
+                    Text(l: "norms.col.gap")
+                    Text(l: "fd.row.stopping")
                 }
                 .font(RVTheme.font(12, weight: .semibold))
                 .foregroundStyle(.secondary)
@@ -146,7 +146,7 @@ struct DistanceNormsView: View {
                     let stopping = FollowingDistanceCalculator.stoppingDistance(
                         speedKmh: speed, reactionTime: policy.reactionTimeSeconds, friction: surface.frictionCoefficient)
                     GridRow {
-                        Text("\(Int(speed)) км/ч")
+                        Text(verbatim: "\(Int(speed)) \(RVFormat.appKmh)")
                         Text("≈ " + RVFormat.gapMeters(gap))
                         Text("≈ " + RVFormat.gapMeters(stopping))
                     }
@@ -156,9 +156,9 @@ struct DistanceNormsView: View {
             }
             .padding(.vertical, 4)
         } header: {
-            Text("Пример: \(surface.displayName.lowercased())")
+            Text(l: "norms.example", surface.localizedName.lowercased())
         } footer: {
-            Text("Остановочный путь S = v·t + v²/(2·μ·g) — инженерная оценка (μ: сухо 0,7, мокро 0,35, снег 0,2, лёд 0,1), а не измерение.")
+            Text(l: "norms.example.footer")
         }
     }
 }
@@ -169,18 +169,18 @@ private struct NormItemRow: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            RVBadge(text: item.status.rawValue, color: RVTheme.normColor(item.status), systemImage: symbol)
-            Text(item.title)
+            RVBadge(text: item.status.localizedName, color: RVTheme.normColor(item.status), systemImage: symbol)
+            Text(verbatim: item.localizedTitle)
                 .font(RVTheme.font(16, weight: .bold))
-            Text(item.text)
+            Text(verbatim: item.localizedText)
                 .font(RVTheme.font(14, weight: .regular))
                 .fixedSize(horizontal: false, vertical: true)
-            Text("Источник: \(item.source)")
+            Text(l: "norms.source", item.localizedSource)
                 .font(RVTheme.font(12, weight: .medium))
                 .foregroundStyle(.secondary)
             if let urlString = item.url, let url = URL(string: urlString) {
                 Link(destination: url) {
-                    Label("Открыть источник", systemImage: "arrow.up.right.square")
+                    Label(L("norms.openSource"), systemImage: "arrow.up.right.square")
                         .font(RVTheme.font(14, weight: .semibold))
                 }
                 .tint(RVTheme.accent)

@@ -84,9 +84,9 @@ struct DetectionOverlayView: View {
     static func compactTitleText(for track: TrackedObject) -> String {
         if track.kind == .trafficLight { return titleText(for: track) }
         if let make = confidentMakeText(for: track) {
-            return track.kind.displayName + " · " + make
+            return track.kind.localizedName + " · " + make
         }
-        return track.kind.displayName
+        return track.kind.localizedName
     }
 
     /// Box/label colour per object class (see `RVTheme.kindColor`).
@@ -109,14 +109,14 @@ struct DetectionOverlayView: View {
     static func titleText(for track: TrackedObject) -> String {
         if track.kind == .trafficLight {
             if let color = track.lightColor, color != .unknown {
-                return "\(track.kind.displayName) · \(color.displayName)"
+                return "\(track.kind.localizedName) · \(color.localizedName)"
             }
-            return track.kind.displayName
+            return track.kind.localizedName
         }
         if let make = makeText(for: track) {
-            return track.kind.displayName + " · " + make
+            return track.kind.localizedName + " · " + make
         }
-        return track.kind.displayName
+        return track.kind.localizedName
     }
 
     /// "Легковой · Chevrolet 74%" (percentage = detector confidence); traffic lights: "Светофор · Красный".

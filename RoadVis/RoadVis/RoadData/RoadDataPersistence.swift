@@ -41,14 +41,14 @@ enum RoadDataPersistence {
         do {
             url = try fileURL(name)
         } catch {
-            return .failed(message: "Не удалось открыть папку данных: \(error.localizedDescription)")
+            return .failed(message: L("persist.openFolderFailed", error.localizedDescription))
         }
         guard FileManager.default.fileExists(atPath: url.path) else { return .missing }
         let data: Data
         do {
             data = try Data(contentsOf: url)
         } catch {
-            return .failed(message: "Не удалось прочитать \(name): \(error.localizedDescription)")
+            return .failed(message: L("persist.readFailed", name, error.localizedDescription))
         }
         do {
             return .loaded(try JSONDecoder().decode(type, from: data))
@@ -56,7 +56,7 @@ enum RoadDataPersistence {
             let stamp = Int(Date().timeIntervalSince1970)
             let backup = url.deletingLastPathComponent().appendingPathComponent("\(name).corrupt-\(stamp)")
             try? FileManager.default.moveItem(at: url, to: backup)
-            return .failed(message: "Файл \(name) повреждён и сохранён как \(backup.lastPathComponent); начаты новые данные.")
+            return .failed(message: L("persist.corrupted", name, backup.lastPathComponent))
         }
     }
 

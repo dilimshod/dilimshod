@@ -24,13 +24,13 @@ enum ModelStatus: Equatable, Sendable {
         return nil
     }
 
-    /// Short Russian description for status lines.
+    /// Short localized description for status lines.
     var displayText: String {
         switch self {
-        case .loading: return "загрузка…"
+        case .loading: return L("status.loading")
         case .ready(let name): return name
-        case .missing: return "модель не установлена"
-        case .failed(let message): return "ошибка: \(message)"
+        case .missing: return L("status.modelMissing")
+        case .failed(let message): return L("status.error", message)
         }
     }
 }

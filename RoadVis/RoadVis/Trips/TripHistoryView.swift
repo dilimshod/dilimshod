@@ -69,7 +69,7 @@ struct TripHistoryView: View {
                         .font(.subheadline.weight(.semibold))
                     HStack(spacing: 4) {
                         Text(started, style: .timer).monospacedDigit()
-                        Text("· \(RVFormat.distance(recorder.liveDistanceMeters)) · событий: \(recorder.liveEventCount)")
+                        Text("· \(RVFormat.appDistance(recorder.liveDistanceMeters)) · событий: \(recorder.liveEventCount)")
                     }
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -107,8 +107,8 @@ struct TripHistoryRow: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 HStack(spacing: 8) {
-                    Label(RVFormat.distance(stats.distanceMeters), systemImage: "road.lanes")
-                    Label(RVFormat.duration(stats.duration), systemImage: "clock")
+                    Label(RVFormat.appDistance(stats.distanceMeters), systemImage: "road.lanes")
+                    Label(RVFormat.appDuration(stats.duration), systemImage: "clock")
                     if stats.totalEvents > 0 {
                         Label("\(stats.totalEvents)", systemImage: "exclamationmark.triangle.fill")
                             .foregroundStyle(RVTheme.caution)

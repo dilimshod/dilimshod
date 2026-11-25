@@ -57,7 +57,8 @@ public enum OSRM {
 
     /// Parses an OSRM `/route` response into routes (main route first, then alternatives).
     /// - Throws: `OSRMError` for server errors (`code != "Ok"`) and malformed bodies.
-    public static func parseRoutes(_ data: Data) throws -> [NavRoute] {
+    /// `language` selects the instruction text (default Russian; uz / en via `NavInstructionText`).
+    public static func parseRoutes(_ data: Data, language: RVLang = .ru) throws -> [NavRoute] {
         guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             throw OSRMError(code: nil, message: "ответ не является JSON")
         }
@@ -68,10 +69,10 @@ public enum OSRM {
         guard let routes = obj["routes"] as? [[String: Any]], !routes.isEmpty else {
             throw OSRMError(code: "NoRoute", message: "в ответе нет маршрутов")
         }
-        return routes.compactMap { try? parseRoute($0) }.filter { $0.polyline.count >= 2 }
+        return routes.compactMap { try? parseRoute($0, language: language) }.filter { $0.polyline.count >= 2 }
     }
 
-    static func parseRoute(_ route: [String: Any]) throws -> NavRoute {
+    static func parseRoute(_ route: [String: Any], language: RVLang = .ru) throws -> NavRoute {
         let polyline = Polyline.decode(route["geometry"] as? String ?? "", precision: 6)
         guard polyline.count >= 2 else { throw OSRMError(code: nil, message: "маршрут без геометрии") }
         let legs = (route["legs"] as? [[String: Any]]) ?? []
@@ -115,8 +116,8 @@ public enum OSRM {
                     if nameLengths[street] == nil { nameOrder.append(street) }
                     nameLengths[street, default: 0] += distance
                 }
-                let text = instruction(type: type, modifier: modifier, name: street, exit: exit,
-                                       rotaryName: rotaryName)
+                let text = NavInstructionText.osrm(type: type, modifier: modifier, name: street, exit: exit,
+                                                   rotaryName: rotaryName, language: language)
                 steps.append(RouteStepInfo(instruction: text, distance: distance, notice: nil,
                                            maneuver: maneuverType(type: type, modifier: modifier),
                                            lanes: lanes, activeLanes: valid,
@@ -134,7 +135,7 @@ public enum OSRM {
             name = summaries.joined(separator: ", ")
         } else {
             let top = nameOrder.sorted { (nameLengths[$0] ?? 0) > (nameLengths[$1] ?? 0) }.prefix(2)
-            name = top.isEmpty ? "Маршрут OSRM" : top.joined(separator: ", ")
+            name = top.isEmpty ? NavInstructionText.fallbackRouteName(engine: "OSRM", language: language) : top.joined(separator: ", ")
         }
         return NavRoute(source: .osrm, name: name, polyline: polyline,
                         distance: distance > 0 ? distance : Geo.polylineLength(polyline),

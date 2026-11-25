@@ -429,8 +429,8 @@ final class RoadInfoService {
             notes.append("не загружено частей маршрута: \(failedChunks) из \(chunks.count)")
         }
         if !plan.plan.isComplete {
-            notes.append("объекты OSM загружены для первых \(RVFormat.distance(plan.plan.coveredLength)) из "
-                         + RVFormat.distance(plan.plan.totalLength))
+            notes.append("объекты OSM загружены для первых \(RVFormat.appDistance(plan.plan.coveredLength)) из "
+                         + RVFormat.appDistance(plan.plan.totalLength))
         }
         routeFeaturesIncomplete = !notes.isEmpty
         routeFeaturesCoverageNote = notes.isEmpty ? nil

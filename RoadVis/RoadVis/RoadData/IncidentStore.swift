@@ -126,7 +126,7 @@ final class IncidentStore {
         do {
             data = try JSONEncoder().encode(incidents)
         } catch {
-            lastError = "Не удалось сохранить события: \(error.localizedDescription)"
+            lastError = L("incident.saveFailed", error.localizedDescription)
             return
         }
         let previous = writeChain
@@ -136,7 +136,7 @@ final class IncidentStore {
                 try await RoadDataPersistence.write(data, to: Self.fileName)
                 if self?.lastError != nil { self?.lastError = nil }
             } catch {
-                self?.lastError = "Не удалось сохранить события: \(error.localizedDescription)"
+                self?.lastError = L("incident.saveFailed", error.localizedDescription)
             }
         }
     }

@@ -48,9 +48,9 @@ final class RouteWeatherService {
         var targets: [Point] = []
         if total >= Self.midpointMinimumRouteLength,
            let mid = Geo.point(atDistance: total / 2, along: route.polyline, cumulative: cumulative) {
-            targets.append(Point(label: "Середина маршрута", coordinate: mid, distanceAlongRoute: total / 2))
+            targets.append(Point(label: L("weather.midRoute"), coordinate: mid, distanceAlongRoute: total / 2))
         }
-        targets.append(Point(label: "Пункт назначения", coordinate: last, distanceAlongRoute: total))
+        targets.append(Point(label: L("weather.destination"), coordinate: last, distanceAlongRoute: total))
         points = targets
         isLoading = true
         task = Task { [weak self] in
@@ -100,11 +100,11 @@ final class RouteWeatherService {
     private static func describe(_ error: Error) -> String {
         if let urlError = error as? URLError {
             switch urlError.code {
-            case .notConnectedToInternet, .dataNotAllowed: return "нет интернета"
-            case .timedOut: return "сервер не ответил"
+            case .notConnectedToInternet, .dataNotAllowed: return L("net.noInternet")
+            case .timedOut: return L("net.timeout")
             default: return urlError.localizedDescription
             }
         }
-        return (error as? LocalizedError)?.errorDescription ?? "ошибка загрузки"
+        return (error as? LocalizedError)?.errorDescription ?? L("net.loadError")
     }
 }

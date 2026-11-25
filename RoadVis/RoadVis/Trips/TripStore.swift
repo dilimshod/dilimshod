@@ -43,7 +43,7 @@ final class TripStore {
             self.trips = merged.sorted { $0.startedAt > $1.startedAt }
             self.isLoaded = true
             if result.errors > 0 {
-                self.lastError = "Не удалось прочитать файлов поездок: \(result.errors)."
+                self.lastError = L("tripStore.readFailed", result.errors)
             }
         }
     }
@@ -69,7 +69,7 @@ final class TripStore {
             do {
                 try await writer.write(trip)
             } catch {
-                self?.lastError = "Поездка не сохранена: \(error.localizedDescription)"
+                self?.lastError = L("tripStore.saveFailed", error.localizedDescription)
             }
         }
     }

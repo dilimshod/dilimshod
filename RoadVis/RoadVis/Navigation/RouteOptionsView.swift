@@ -180,7 +180,7 @@ private struct RouteOptionCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack(alignment: .firstTextBaseline, spacing: 6) {
-                Text(RVFormat.duration(option.expectedTravelTime))
+                Text(RVFormat.appDuration(option.expectedTravelTime))
                     .font(RVTheme.font(22, weight: .bold))
                     .monospacedDigit()
                 if let delta = RouteComparison.delayText(option.expectedTravelTime, comparedTo: fastestTime) {
@@ -192,7 +192,7 @@ private struct RouteOptionCard: View {
                         .font(RVTheme.font(11, weight: .bold))
                         .foregroundStyle(RVTheme.safe)
                 }
-                Text(RVFormat.distance(option.distance))
+                Text(RVFormat.appDistance(option.distance))
                     .font(.subheadline)
                     .monospacedDigit()
                     .foregroundStyle(.secondary)
@@ -229,7 +229,7 @@ private struct RouteOptionCard: View {
                 }
             }
             if let traffic = option.traffic {
-                Label("Apple Maps: \(traffic.summary)", systemImage: "car.2.fill")
+                Label("Apple Maps: \(traffic.localizedSummary)", systemImage: "car.2.fill")
                     .font(.caption2.weight(.semibold))
                     .foregroundStyle(NavigatorStyle.congestionColor(traffic.level))
             } else if !option.source.mayIncludeTraffic {
@@ -320,13 +320,13 @@ struct RouteComparisonSheet: View {
                 ForEach(option.sources, id: \.self) { EngineBadge(source: $0) }
             }
             Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 3) {
-                row("Время", RVFormat.duration(option.expectedTravelTime)
+                row("Время", RVFormat.appDuration(option.expectedTravelTime)
                     + (RouteComparison.delayText(option.expectedTravelTime, comparedTo: fastest).map { " (\($0))" } ?? ""))
                 ForEach(option.alsoFoundBy, id: \.self) { estimate in
-                    row("  \(estimate.source.badge)", "≈ \(RVFormat.duration(estimate.expectedTravelTime)), "
-                        + RVFormat.distance(estimate.distance))
+                    row("  \(estimate.source.badge)", "≈ \(RVFormat.appDuration(estimate.expectedTravelTime)), "
+                        + RVFormat.appDistance(estimate.distance))
                 }
-                row("Расстояние", RVFormat.distance(option.distance))
+                row("Расстояние", RVFormat.appDistance(option.distance))
                 if let average = facts.averageSpeedKmh { row("Средняя скорость", "≈ \(Int(average.rounded())) км/ч (оценка)") }
                 row("Светофоры", facts.signalCount.map { "\($0)" } ?? "загрузка…")
                 if let maxLimit = facts.maxSpeedLimitKmh { row("Макс. ограничение", "\(maxLimit) км/ч") }
@@ -343,7 +343,7 @@ struct RouteComparisonSheet: View {
                     row("Мосты / тоннели", "\(facts.bridgeCount) / \(facts.tunnelCount)")
                 }
                 row("Платные / магистрали", (facts.hasTolls ? "да" : "нет") + " / " + (facts.hasHighways ? "да" : "нет"))
-                if let traffic = option.traffic { row("Пробки (Apple)", traffic.summary) }
+                if let traffic = option.traffic { row("Пробки (Apple)", traffic.localizedSummary) }
             }
             .font(.caption)
             ForEach(option.route.advisories, id: \.self) { advisory in

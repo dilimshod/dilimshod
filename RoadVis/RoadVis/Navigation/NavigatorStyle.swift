@@ -20,9 +20,9 @@ enum NavigatorStyle {
     static func speedLimitColor(_ kmh: Int?) -> Color { Color(uiColor: speedLimitUIColor(kmh)) }
 
     /// Legend entries of the speed-limit palette.
-    static let speedLimitLegend: [(label: String, kmh: Int?)] = [
-        ("≤30", 30), ("40–50", 50), ("60–70", 70), ("80–90", 90), ("≥100", 100), ("нет данных", nil),
-    ]
+    static var speedLimitLegend: [(label: String, kmh: Int?)] { [
+        ("≤30", 30), ("40–50", 50), ("60–70", 70), ("80–90", 90), ("≥100", 100), (L("common.noData"), nil),
+    ] }
 
     // MARK: Features & timeline
 
@@ -92,7 +92,7 @@ struct SourceTag: View {
             .padding(.vertical, 1)
             .overlay(Capsule().stroke(color.opacity(0.7), lineWidth: 1))
             .foregroundStyle(color)
-            .accessibilityLabel("Источник: \(text)")
+            .accessibilityLabel(L("nav.sourceA11y", text))
     }
 }
 
@@ -124,6 +124,6 @@ struct SpeedLimitLegend: View {
         .lineLimit(1)
         .minimumScaleFactor(0.7)
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("Цвета ограничений скорости")
+        .accessibilityLabel(L("nav.speedLimitColors"))
     }
 }

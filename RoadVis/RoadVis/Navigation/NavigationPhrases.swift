@@ -17,7 +17,7 @@ enum NavigationPhrases {
         let text = instruction.trimmingCharacters(in: .whitespacesAndNewlines)
         var phrase: String
         if distance >= 60 {
-            phrase = "\(RVFormat.spokenDistance(distance)) \(VoicePromptScheduler.lowercasingFirst(text))"
+            phrase = "\(RVFormat.appSpokenDistance(distance)) \(VoicePromptScheduler.lowercasingFirst(text))"
         } else {
             phrase = text
         }

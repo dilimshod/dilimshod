@@ -36,7 +36,7 @@ struct ManeuverBannerView: View {
                     } else {
                         HStack(alignment: .firstTextBaseline, spacing: 8) {
                             if let distance = progress.distanceToNextManeuver {
-                                Text(RVFormat.distance(distance))
+                                Text(RVFormat.appDistance(distance))
                                     .font(.system(size: 22, weight: .heavy, design: .rounded))
                                     .monospacedDigit()
                                     .contentTransition(.numericText())
@@ -130,7 +130,7 @@ struct ManeuverBannerView: View {
         if isRerouting { return "Перестраиваю маршрут" }
         if progress.isOffRoute { return "Вы съехали с маршрута" }
         var parts: [String] = []
-        if let distance = progress.distanceToNextManeuver { parts.append(RVFormat.spokenDistance(distance)) }
+        if let distance = progress.distanceToNextManeuver { parts.append(RVFormat.appSpokenDistance(distance)) }
         parts.append(instructionText)
         if let following = progress.followingInstruction, !following.isEmpty { parts.append("затем \(following)") }
         return parts.joined(separator: ", ")

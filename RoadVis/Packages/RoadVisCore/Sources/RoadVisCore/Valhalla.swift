@@ -234,7 +234,9 @@ public enum Valhalla {
     }
 
     /// Parses `/route` into the main route followed by alternates.
-    public static func parseRoutes(_ data: Data) throws -> [NavRoute] {
+    /// `language`: the app language. ru / en keep Valhalla's own narrative (request it with
+    /// `RVLang.valhallaLanguage`); uz rebuilds every instruction from the maneuver type (`NavInstructionText`).
+    public static func parseRoutes(_ data: Data, language: RVLang = .ru) throws -> [NavRoute] {
         guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             throw ValhallaError(code: nil, message: "Ответ Valhalla не является JSON")
         }
@@ -242,10 +244,10 @@ public enum Valhalla {
         guard let trip = obj["trip"] as? [String: Any] else {
             throw ValhallaError(code: nil, message: "В ответе Valhalla нет маршрута")
         }
-        var routes = [try parseTrip(trip)]
+        var routes = [try parseTrip(trip, language: language)]
         if let alternates = obj["alternates"] as? [[String: Any]] {
             for alt in alternates {
-                if let t = alt["trip"] as? [String: Any], let r = try? parseTrip(t) {
+                if let t = alt["trip"] as? [String: Any], let r = try? parseTrip(t, language: language) {
                     routes.append(r)
                 }
             }
@@ -274,7 +276,7 @@ public enum Valhalla {
         return nil
     }
 
-    static func parseTrip(_ trip: [String: Any]) throws -> NavRoute {
+    static func parseTrip(_ trip: [String: Any], language: RVLang = .ru) throws -> NavRoute {
         guard let legs = trip["legs"] as? [[String: Any]], !legs.isEmpty else {
             throw ValhallaError(code: nil, message: "Маршрут без участков")
         }
@@ -300,7 +302,13 @@ public enum Valhalla {
                     ValhallaLane(directions: int($0["directions"]) ?? 0, valid: int($0["valid"]), active: int($0["active"]))
                 })
                 var instruction = (m["instruction"] as? String) ?? ""
-                if maneuverType(type) == .arrive {
+                if !language.usesValhallaNarrative {
+                    instruction = NavInstructionText.valhalla(type: type, streetNames: street,
+                                                              roundaboutExitCount: int(m["roundabout_exit_count"]),
+                                                              roundaboutExitStreetNames:
+                                                                (m["roundabout_exit_street_names"] as? [String]) ?? [],
+                                                              language: language)
+                } else if maneuverType(type) == .arrive {
                     instruction = arrivalInstruction(instruction: instruction,
                                                      alert: m["verbal_transition_alert_instruction"] as? String)
                 }
@@ -324,7 +332,7 @@ public enum Valhalla {
         let time = double(summary?["time"]) ?? 0
         if (summary?["has_toll"] as? Bool) == true { anyToll = true }
         if (summary?["has_highway"] as? Bool) == true { anyHighway = true }
-        let name = names.isEmpty ? "Маршрут OSM" : names.joined(separator: ", ")
+        let name = names.isEmpty ? NavInstructionText.fallbackRouteName(engine: "OSM", language: language) : names.joined(separator: ", ")
         return NavRoute(source: .valhalla, name: name, polyline: polyline,
                         distance: distance > 0 ? distance : Geo.polylineLength(polyline),
                         expectedTravelTime: time, steps: steps,

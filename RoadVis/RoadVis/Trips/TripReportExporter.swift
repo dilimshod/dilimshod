@@ -225,11 +225,11 @@ private struct TripPDFSummaryPage: View {
             HStack(alignment: .center, spacing: 18) {
                 TripScoreRing(score: score.score, size: 96)
                 VStack(alignment: .leading, spacing: 4) {
-                    Text(TripScoring.grade(score.score))
+                    Text(TripScoring.localizedGrade(score.score))
                         .font(.system(size: 16, weight: .bold))
                     Text("Штрафных очков: \(RVFormat.decimal(score.totalPenalty, digits: 1)) · на 1 км: \(RVFormat.decimal(score.penaltyPerKm, digits: 2))")
                         .font(.system(size: 10))
-                    Text(TripScoring.formulaDescription)
+                    Text(TripScoring.localizedFormulaDescription)
                         .font(.system(size: 8))
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -301,7 +301,7 @@ private struct TripPDFEventsPage: View {
                             Text(TripStyle.timeText(event.date)).monospacedDigit()
                             HStack(spacing: 4) {
                                 Circle().fill(TripStyle.color(event.kind)).frame(width: 7, height: 7)
-                                Text(event.kind.tripReportTitle)
+                                Text(event.kind.localizedTitle)
                             }
                             Text(TripStyle.valueText(event))
                             Text(event.note.flatMap { $0 == "GPS" || $0.hasPrefix("GPS +") ? nil : $0 }

@@ -14,24 +14,24 @@ struct RecognitionStatusView: View {
     var body: some View {
         NavigationStack {
             List {
-                Section("Модели") {
+                Section(L("recStatus.models")) {
                     detectorRow
                     makeRow
                 }
 
-                Section("Производительность") {
-                    LabeledContent("Обработка", value: pipeline.isRunning ? "\(Int(pipeline.fps.rounded())) к/с" : "—")
-                    LabeledContent("Время модели", value: pipeline.isRunning ? "\(Int(pipeline.inferenceMs.rounded())) мс" : "—")
-                    LabeledContent("Кадр", value: "\(Int(pipeline.frameSize.width)) × \(Int(pipeline.frameSize.height))")
-                    LabeledContent("Угол обзора камеры", value: "\(Int(pipeline.camera.horizontalFieldOfView.rounded()))°")
-                    LabeledContent("Обработано кадров", value: "\(pipeline.processedFrames)")
+                Section(L("recStatus.performance")) {
+                    LabeledContent(L("recStatus.processing"), value: pipeline.isRunning ? L("recStatus.fps", Int(pipeline.fps.rounded())) : "—")
+                    LabeledContent(L("recStatus.inference"), value: pipeline.isRunning ? L("recStatus.ms", Int(pipeline.inferenceMs.rounded())) : "—")
+                    LabeledContent(L("recStatus.frame"), value: "\(Int(pipeline.frameSize.width)) × \(Int(pipeline.frameSize.height))")
+                    LabeledContent(L("recStatus.fov"), value: "\(Int(pipeline.camera.horizontalFieldOfView.rounded()))°")
+                    LabeledContent(L("recStatus.frames"), value: "\(pipeline.processedFrames)")
                 }
                 .monospacedDigit()
 
-                Section("Камера") {
+                Section(L("common.camera")) {
                     Label(cameraStateText, systemImage: cameraStateSymbol)
                     if pipeline.isRecording, let started = pipeline.recordingStartedAt {
-                        Label("Идёт запись эксперимента с \(RVFormat.clock(started))", systemImage: "record.circle")
+                        Label(L("recStatus.recordingSince", RVFormat.clock(started)), systemImage: "record.circle")
                             .foregroundStyle(.red)
                     }
                 }
@@ -42,37 +42,37 @@ struct RecognitionStatusView: View {
                             Text("\(pipeline.uniqueCounts[kind] ?? 0)")
                                 .monospacedDigit()
                         } label: {
-                            Label(kind.displayName, systemImage: kind.symbolName)
+                            Label(kind.localizedName, systemImage: kind.symbolName)
                         }
                     }
-                    LabeledContent("Всего ТС", value: "\(pipeline.totalUniqueVehicles)")
+                    LabeledContent(L("recStatus.totalVehicles"), value: "\(pipeline.totalUniqueVehicles)")
                         .font(.headline)
                     Button(role: .destructive) {
                         pipeline.resetCounters()
                     } label: {
-                        Label("Сбросить счётчики", systemImage: "arrow.counterclockwise")
+                        Label(L("counters.reset"), systemImage: "arrow.counterclockwise")
                     }
                 } header: {
-                    Text("Уникальные объекты с последнего сброса")
+                    Text(l: "recStatus.uniqueHeader")
                 } footer: {
-                    Text("Каждый объект считается один раз — когда его трек подтверждён на нескольких кадрах подряд. Сейчас в кадре: \(pipeline.totalVisibleVehicles) ТС.")
+                    Text(l: "recStatus.uniqueFooter", pipeline.totalVisibleVehicles)
                 }
 
-                Section("Как читать данные") {
-                    Text("Проценты у рамок — уверенность модели, а не точность распознавания.")
-                    Text("Расстояние и скорость других машин — оценка (≈) по размеру рамки на одной камере при типичной высоте ТС; возможна ошибка в десятки процентов.")
-                    Text("Дистанция до машины впереди — оценка (≈) по ширине и высоте её рамки в коридоре вашей полосы. ПДД РУз (п.73) требуют безопасную дистанцию без числа; интервалы в секундах и метрах — рекомендации.")
-                    Text("Цвет светофора определяется по цвету пикселей — это оценка, проверяйте глазами.")
-                    Text("Полосы, ограничения скорости и названия дорог — из OpenStreetMap и могут быть неполными.")
+                Section(L("recStatus.howToRead")) {
+                    Text(l: "recStatus.read.confidence")
+                    Text(l: "recStatus.read.distance")
+                    Text(l: "recStatus.read.lead")
+                    Text(l: "recStatus.read.light")
+                    Text(l: "recStatus.read.osm")
                 }
                 .font(.system(size: 14, design: .rounded))
                 .foregroundStyle(.secondary)
             }
-            .navigationTitle("Распознавание")
+            .navigationTitle(L("recStatus.title"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("Готово") { dismiss() }
+                    Button(L("common.done")) { dismiss() }
                 }
             }
         }
@@ -88,19 +88,19 @@ struct RecognitionStatusView: View {
             LabeledContent {
                 Text(name)
             } label: {
-                Label("Детектор", systemImage: "cpu")
+                Label(L("recStatus.detector"), systemImage: "cpu")
             }
         case .loading:
             LabeledContent {
                 ProgressView()
             } label: {
-                Label("Детектор: загрузка…", systemImage: "cpu")
+                Label(L("recStatus.detector.loading"), systemImage: "cpu")
             }
         case .missing:
-            Label("Детектор: модель YOLO не найдена (см. README → «Модель распознавания»)", systemImage: "exclamationmark.triangle.fill")
+            Label(L("recStatus.detector.missing"), systemImage: "exclamationmark.triangle.fill")
                 .foregroundStyle(.orange)
         case .failed(let message):
-            Label("Детектор: ошибка загрузки — \(message)", systemImage: "exclamationmark.triangle.fill")
+            Label(L("recStatus.detector.failed", message), systemImage: "exclamationmark.triangle.fill")
                 .foregroundStyle(.red)
         }
     }
@@ -108,7 +108,7 @@ struct RecognitionStatusView: View {
     @ViewBuilder
     private var makeRow: some View {
         if !app.settings.makeRecognitionEnabled {
-            Label("Марка: выключено в настройках", systemImage: "tag")
+            Label(L("recStatus.make.off"), systemImage: "tag")
                 .foregroundStyle(.secondary)
         } else {
             switch pipeline.makeClassifierStatus {
@@ -116,29 +116,29 @@ struct RecognitionStatusView: View {
                 LabeledContent {
                     Text(name)
                 } label: {
-                    Label("Марка", systemImage: "tag")
+                    Label(L("recStatus.make"), systemImage: "tag")
                 }
             case .loading:
                 LabeledContent {
                     ProgressView()
                 } label: {
-                    Label("Марка: загрузка…", systemImage: "tag")
+                    Label(L("recStatus.make.loading"), systemImage: "tag")
                 }
             case .missing:
-                Label("Марка: модель не установлена", systemImage: "tag.slash")
+                Label(L("recStatus.make.missing"), systemImage: "tag.slash")
                     .foregroundStyle(.secondary)
             case .failed(let message):
-                Label("Марка: ошибка загрузки — \(message)", systemImage: "exclamationmark.triangle.fill")
+                Label(L("recStatus.make.failed", message), systemImage: "exclamationmark.triangle.fill")
                     .foregroundStyle(.red)
             }
         }
     }
 
     private var cameraStateText: String {
-        if pipeline.cameraPermissionDenied { return "Нет доступа к камере" }
-        if let error = pipeline.cameraError { return "Ошибка: \(error)" }
-        if pipeline.isCameraInterrupted { return "Приостановлена системой" }
-        return pipeline.isRunning ? "Работает" : "Остановлена"
+        if pipeline.cameraPermissionDenied { return L("camera.noAccess") }
+        if let error = pipeline.cameraError { return L("common.errorWith", error) }
+        if pipeline.isCameraInterrupted { return L("camera.interrupted") }
+        return pipeline.isRunning ? L("camera.running") : L("camera.stopped")
     }
 
     private var cameraStateSymbol: String {

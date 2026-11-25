@@ -72,7 +72,7 @@ struct CameraPiPView: View {
         }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(accessibilityText)
-        .accessibilityHint("Открыть камеру на весь экран")
+        .accessibilityHint(L("pip.hint"))
         .accessibilityAddTraits(.isButton)
         .accessibilityAction {
             app.switchTo(.camera)
@@ -83,7 +83,7 @@ struct CameraPiPView: View {
         VStack(spacing: 6) {
             Image(systemName: pipeline.cameraPermissionDenied ? "video.slash.fill" : "camera.fill")
                 .font(.system(size: 26, weight: .semibold))
-            Text(pipeline.cameraPermissionDenied ? "Нет доступа" : "Камера")
+            Text(verbatim: pipeline.cameraPermissionDenied ? L("pip.noAccess") : L("common.camera"))
                 .font(.system(size: 13, weight: .semibold, design: .rounded))
         }
         .foregroundStyle(.white.opacity(0.75))
@@ -92,17 +92,16 @@ struct CameraPiPView: View {
     }
 
     private var accessibilityText: String {
-        guard isLive else { return "Камера" }
-        var text = "Камера, в кадре \(pipeline.totalVisibleVehicles) ТС"
+        guard isLive else { return L("common.camera") }
+        var text = L("pip.a11y.inFrame", pipeline.totalVisibleVehicles)
         if let color = pipeline.currentLightColor {
-            text += ", светофор: \(color.displayName.lowercased())"
+            text += L("pip.a11y.light", color.localizedName.lowercased())
         }
         if let lead = pipeline.leadVehicle {
             let d = lead.distanceMeters
-            text += ", до машины впереди примерно "
-                + RVFormat.spokenQuantity(d, digits: d < 10 ? 1 : 0, one: "метр", few: "метра", many: "метров") + " (оценка)"
+            text += L("pip.a11y.lead", RVFormat.appSpokenMeters(d))
             if let status = pipeline.followingAssessment?.status, status != .unknown {
-                text += ", \(status.displayName.lowercased())"
+                text += ", \(status.localizedName.lowercased())"
             }
         }
         return text

@@ -48,8 +48,8 @@ struct LaneGuidanceView: View {
 
     private var accessibilityText: String {
         let good = lanes.indices.filter { isRecommended($0) }.map { String($0 + 1) }
-        if good.isEmpty { return "Полос: \(lanes.count)" }
-        return "Полос: \(lanes.count). Рекомендуемые полосы слева: \(good.joined(separator: ", "))"
+        if good.isEmpty { return L("lanes.a11y.count", lanes.count) }
+        return L("lanes.a11y.recommended", lanes.count, good.joined(separator: ", "))
     }
 }
 

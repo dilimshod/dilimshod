@@ -132,7 +132,7 @@ struct TripReportView: View {
                 legendDot(RVTheme.accent, "Проехали")
                 if !trip.routePolyline.isEmpty { legendDot(.gray, "Маршрут") }
                 ForEach(DrivingEventKind.allCases.filter { kind in trip.events.contains { $0.kind == kind } }, id: \.self) { kind in
-                    legendDot(TripStyle.color(kind), kind.tripReportTitle)
+                    legendDot(TripStyle.color(kind), kind.localizedTitle)
                 }
             }
             .font(.caption2)
@@ -154,7 +154,7 @@ struct TripReportView: View {
                     Text("Оценка вождения")
                         .font(.caption)
                         .foregroundStyle(.secondary)
-                    Text(TripScoring.grade(score.score))
+                    Text(TripScoring.localizedGrade(score.score))
                         .font(.title3.weight(.bold))
                         .foregroundStyle(TripStyle.scoreColor(score.score))
                     Text("Штрафных очков \(RVFormat.decimal(score.totalPenalty, digits: 1)) · \(RVFormat.decimal(score.penaltyPerKm, digits: 2)) на км")
@@ -165,13 +165,13 @@ struct TripReportView: View {
             }
             DisclosureGroup("Как считается балл", isExpanded: $showsFormula) {
                 VStack(alignment: .leading, spacing: 6) {
-                    Text(TripScoring.formulaDescription)
+                    Text(TripScoring.localizedFormulaDescription)
                         .font(.caption)
                         .foregroundStyle(.secondary)
                     ForEach(DrivingEventKind.allCases.filter { (score.penaltyByKind[$0] ?? 0) > 0 }, id: \.self) { kind in
                         HStack {
                             Circle().fill(TripStyle.color(kind)).frame(width: 8, height: 8)
-                            Text(kind.tripReportTitle)
+                            Text(kind.localizedTitle)
                             Spacer()
                             Text("−\(RVFormat.decimal(score.penaltyByKind[kind] ?? 0, digits: 1)) очк.")
                                 .monospacedDigit()
@@ -295,7 +295,7 @@ struct TripEventRow: View {
                 .background(TripStyle.color(event.kind), in: Circle())
             VStack(alignment: .leading, spacing: 2) {
                 HStack {
-                    Text(event.kind.tripReportTitle)
+                    Text(event.kind.localizedTitle)
                         .font(.subheadline.weight(.semibold))
                     if event.severity == .violation {
                         RVBadge(text: "нарушение", color: RVTheme.danger)
@@ -399,18 +399,18 @@ struct TripStatsGrid: View {
 
     private var tiles: [Tile] {
         var result = [
-            Tile(title: "Расстояние", value: RVFormat.distance(stats.distanceMeters), symbol: "road.lanes", color: RVTheme.accent),
-            Tile(title: "Время в пути", value: RVFormat.duration(stats.duration), symbol: "clock", color: .purple),
+            Tile(title: "Расстояние", value: RVFormat.appDistance(stats.distanceMeters), symbol: "road.lanes", color: RVTheme.accent),
+            Tile(title: "Время в пути", value: RVFormat.appDuration(stats.duration), symbol: "clock", color: .purple),
             Tile(title: "Средняя скорость", value: "\(RVFormat.speed(stats.averageSpeedKmh)) км/ч", symbol: "gauge.with.dots.needle.33percent", color: .teal),
             Tile(title: "Макс. скорость", value: "\(RVFormat.speed(stats.maxSpeedKmh)) км/ч", symbol: "gauge.with.dots.needle.100percent", color: .orange),
-            Tile(title: "Выше лимита", value: RVFormat.duration(stats.timeOverLimit), symbol: "exclamationmark.triangle", color: RVTheme.danger),
+            Tile(title: "Выше лимита", value: RVFormat.appDuration(stats.timeOverLimit), symbol: "exclamationmark.triangle", color: RVTheme.danger),
             Tile(title: "Событий на 100 км", value: RVFormat.decimal(stats.eventsPer100km, digits: 1), symbol: "chart.bar", color: RVTheme.caution),
         ]
         if let lead = stats.averageLeadDistanceMeters {
             result.append(Tile(title: "≈ Дистанция, средняя", value: "≈ \(RVFormat.decimal(lead, digits: 0)) м",
                                symbol: "car.2", color: RVTheme.safe))
         }
-        result.append(Tile(title: "В движении", value: RVFormat.duration(stats.movingDuration), symbol: "car", color: .mint))
+        result.append(Tile(title: "В движении", value: RVFormat.appDuration(stats.movingDuration), symbol: "car", color: .mint))
         return result
     }
 }

@@ -54,9 +54,9 @@ struct RVPressableButtonStyle: ButtonStyle {
     ZStack {
         Color.gray
         HStack(spacing: 20) {
-            GlassIconButton(systemName: "gearshape.fill", label: "Настройки") {}
-            GlassIconButton(systemName: "map.fill", label: "Навигатор", size: 68) {}
-            GlassIconButton(systemName: "arrow.counterclockwise", label: "Сбросить", size: 36, tint: .orange) {}
+            GlassIconButton(systemName: "gearshape.fill", label: L("common.settings")) {}
+            GlassIconButton(systemName: "map.fill", label: L("common.navigator"), size: 68) {}
+            GlassIconButton(systemName: "arrow.counterclockwise", label: L("common.reset"), size: 36, tint: .orange) {}
         }
     }
 }

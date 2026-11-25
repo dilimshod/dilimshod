@@ -96,7 +96,7 @@ struct NavigationMiniBanner: View {
             Text("Перестраиваю…")
                 .font(RVTheme.font(16, weight: .bold))
         } else if let distance = nav.progress?.distanceToNextManeuver {
-            Text(RVFormat.distance(distance))
+            Text(RVFormat.appDistance(distance))
                 .rvNumeric(20, weight: .heavy)
                 .contentTransition(.numericText())
         } else {
@@ -181,7 +181,7 @@ struct NavigationMiniBanner: View {
     private func accessibilityText(_ nav: NavigationService) -> String {
         if nav.state == .arrived { return "Вы прибыли" }
         guard let progress = nav.progress else { return "Навигация" }
-        let distance = progress.distanceToNextManeuver.map { RVFormat.distance($0) + ", " } ?? ""
+        let distance = progress.distanceToNextManeuver.map { RVFormat.appDistance($0) + ", " } ?? ""
         return distance + (progress.nextInstruction ?? "Продолжайте движение")
     }
 }

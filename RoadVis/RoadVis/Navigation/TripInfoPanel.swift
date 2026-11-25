@@ -53,10 +53,10 @@ struct TripInfoPanel: View {
                         Text(RVFormat.clock(Date().addingTimeInterval(progress.remainingTimeSeconds)))
                             .font(RVTheme.font(20, weight: .bold))
                             .monospacedDigit()
-                        Text(RVFormat.duration(progress.remainingTimeSeconds))
+                        Text(RVFormat.appDuration(progress.remainingTimeSeconds))
                             .font(.subheadline.weight(.semibold))
                             .monospacedDigit()
-                        Text(RVFormat.distance(progress.remainingDistance))
+                        Text(RVFormat.appDistance(progress.remainingDistance))
                             .font(.subheadline)
                             .monospacedDigit()
                             .foregroundStyle(.secondary)
@@ -98,8 +98,8 @@ struct TripInfoPanel: View {
     private func headerAccessibilityText(_ nav: NavigationService) -> String {
         guard let progress = nav.progress else { return "Ожидание GPS" }
         let arrival = RVFormat.clock(Date().addingTimeInterval(progress.remainingTimeSeconds))
-        return "Прибытие в \(arrival), осталось \(RVFormat.duration(progress.remainingTimeSeconds)), "
-            + RVFormat.distance(progress.remainingDistance)
+        return "Прибытие в \(arrival), осталось \(RVFormat.appDuration(progress.remainingTimeSeconds)), "
+            + RVFormat.appDistance(progress.remainingDistance)
     }
 
     // MARK: Chips
@@ -110,23 +110,23 @@ struct TripInfoPanel: View {
             HStack(spacing: 6) {
                 if summary.count > 0 {
                     chip(symbol: "light.beacon.max", tint: .orange,
-                         text: "\(summary.count) · ≈ \(RVFormat.duration(summary.seconds))")
-                        .accessibilityLabel("Светофоров впереди \(summary.count), ожидание примерно \(RVFormat.duration(summary.seconds)), оценка")
+                         text: "\(summary.count) · ≈ \(RVFormat.appDuration(summary.seconds))")
+                        .accessibilityLabel("Светофоров впереди \(summary.count), ожидание примерно \(RVFormat.appDuration(summary.seconds)), оценка")
                 }
                 if let level = nav.congestion {
-                    chip(symbol: "car.2.fill", tint: NavigatorStyle.congestionColor(level), text: level.displayName + " ≈")
+                    chip(symbol: "car.2.fill", tint: NavigatorStyle.congestionColor(level), text: level.localizedName + " ≈")
                 } else if nav.isWaitingAtSignal {
                     chip(symbol: "pause.circle", tint: .secondary, text: "у светофора")
                 }
                 let cameras = nav.upcomingEvents().filter { $0.kind == .feature(.speedCamera) }
                 if let camera = cameras.first {
                     chip(symbol: "camera.fill", tint: .purple,
-                         text: RVFormat.distance(max(0, camera.distanceAlongRoute - nav.distanceAlong)))
-                        .accessibilityLabel("Камера через \(RVFormat.distance(camera.distanceAlongRoute - nav.distanceAlong))")
+                         text: RVFormat.appDistance(max(0, camera.distanceAlongRoute - nav.distanceAlong)))
+                        .accessibilityLabel("Камера через \(RVFormat.appDistance(camera.distanceAlongRoute - nav.distanceAlong))")
                 }
                 if let weather = app.weather.current {
                     chip(symbol: weather.symbolName, tint: weather.roadWarnings.isEmpty ? .secondary : .orange,
-                         text: weather.temperatureC.map { "\(Int($0.rounded()))°" } ?? weather.conditionDescription)
+                         text: weather.temperatureC.map { "\(Int($0.rounded()))°" } ?? weather.localizedCondition)
                 }
                 if let destination = nav.routeWeather.points.last?.snapshot, let t = destination.temperatureC {
                     chip(symbol: "flag.checkered", tint: destination.roadWarnings.isEmpty ? .secondary : .orange,
@@ -192,7 +192,7 @@ struct TripInfoPanel: View {
             VStack(alignment: .leading, spacing: 4) {
                 sectionTitle("Светофоры", trailing: nil)
                 if summary.count > 0 {
-                    Text("Впереди: \(summary.count) · суммарное ожидание ≈ \(RVFormat.duration(summary.seconds)) (оценка)")
+                    Text("Впереди: \(summary.count) · суммарное ожидание ≈ \(RVFormat.appDuration(summary.seconds)) (оценка)")
                         .font(.footnote.weight(.semibold))
                         .monospacedDigit()
                 }
@@ -229,13 +229,13 @@ struct TripInfoPanel: View {
     private func nextSignalRow(_ nav: NavigationService, along: Double) -> some View {
         if let next = app.signals.upcoming(fromDistance: along, limit: 1).first {
             signalRow(distance: next.distanceAhead,
-                      waitText: "≈ \(RVFormat.duration(next.estimate.expectedWaitSeconds)) (оценка)",
+                      waitText: "≈ \(RVFormat.appDuration(next.estimate.expectedWaitSeconds)) (оценка)",
                       sourceText: Self.signalSourceText(next.estimate.source),
                       stopProbability: next.estimate.stopProbability)
         } else if let distance = nav.distanceToNextSignal {
             let model = SignalWaitModel.estimate(app.settings.signalAssumptions)
             signalRow(distance: distance,
-                      waitText: "≈ \(RVFormat.duration(model.expectedWaitSeconds)) (оценка)",
+                      waitText: "≈ \(RVFormat.appDuration(model.expectedWaitSeconds)) (оценка)",
                       sourceText: Self.signalSourceText(.model),
                       stopProbability: model.stopProbability)
         }
@@ -243,7 +243,7 @@ struct TripInfoPanel: View {
 
     private func signalRow(distance: Double, waitText: String, sourceText: String, stopProbability: Double) -> some View {
         VStack(alignment: .leading, spacing: 2) {
-            Text("Ближайший через \(RVFormat.distance(distance)) · ожидание \(waitText)")
+            Text("Ближайший через \(RVFormat.appDistance(distance)) · ожидание \(waitText)")
                 .font(.footnote)
                 .monospacedDigit()
             HStack(spacing: 6) {
@@ -253,7 +253,7 @@ struct TripInfoPanel: View {
                 if let color = app.recognition.currentLightColor, color != .unknown, distance < 150 {
                     HStack(spacing: 4) {
                         TrafficLightDotView(color: color, size: 10)
-                        Text("камера: \(color.displayName.lowercased())")
+                        Text("камера: \(color.localizedName.lowercased())")
                     }
                     .font(.caption2.weight(.semibold))
                 }
@@ -269,7 +269,7 @@ struct TripInfoPanel: View {
             if let level = nav.congestion {
                 HStack(spacing: 8) {
                     Circle().fill(NavigatorStyle.congestionColor(level)).frame(width: 10, height: 10)
-                    Text("\(level.displayName) · по вашей скорости (оценка)")
+                    Text("\(level.localizedName) · по вашей скорости (оценка)")
                         .font(.footnote.weight(.semibold))
                 }
                 if let own = nav.averageSpeedKmh, let typical = nav.currentEdge?.typicalSpeedKmh {
@@ -295,7 +295,7 @@ struct TripInfoPanel: View {
     private func trafficNote(_ nav: NavigationService) -> String {
         guard let option = nav.selectedRouteOption else { return "" }
         if let traffic = option.traffic {
-            return "Apple Maps: \(traffic.summary)."
+            return "Apple Maps: \(traffic.localizedSummary)."
         }
         return "Бесплатных данных о пробках в реальном времени для этого региона нет. Загруженность оценивается "
             + "по вашей скорости относительно типичной скорости участка (Valhalla/OSM) — один автомобиль, не данные о трафике."
@@ -388,11 +388,11 @@ struct TimelineRow: View {
             }
             Spacer(minLength: 4)
             VStack(alignment: .trailing, spacing: 0) {
-                Text(RVFormat.distance(distanceAhead))
+                Text(RVFormat.appDistance(distanceAhead))
                     .font(RVTheme.font(12, weight: .bold))
                     .monospacedDigit()
                 if let timeAhead, timeAhead >= 30 {
-                    Text("≈ \(RVFormat.duration(timeAhead))")
+                    Text("≈ \(RVFormat.appDuration(timeAhead))")
                         .font(.caption2)
                         .monospacedDigit()
                         .foregroundStyle(.secondary)

@@ -18,14 +18,14 @@ struct TrafficLightIndicatorView: View {
 
     /// Visible caption: the colour marked as an estimate, e.g. "≈ Красный" (unknown → "Не определён").
     static func estimateCaption(for color: TrafficLightColor) -> String {
-        color == .unknown ? color.displayName : "≈ \(color.displayName)"
+        color == .unknown ? color.localizedName : "≈ \(color.localizedName)"
     }
 
     /// VoiceOver label that never states the camera estimate as a fact, e.g. "Светофор: ≈ Красный (оценка камеры)".
     static func estimateAccessibilityLabel(for color: TrafficLightColor) -> String {
         color == .unknown
-            ? "Светофор: цвет не определён (оценка камеры)"
-            : "Светофор: ≈ \(color.displayName) (оценка камеры)"
+            ? L("light.a11y.unknown")
+            : L("light.a11y.color", color.localizedName)
     }
 
     /// Display colour for a traffic-light state (unknown → grey).

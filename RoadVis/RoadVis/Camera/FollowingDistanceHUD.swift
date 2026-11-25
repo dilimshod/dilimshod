@@ -49,9 +49,9 @@ struct FollowingDistanceHUD: View {
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(FollowingDistanceText.accessibilitySummary(assessment, policy: policy, hasLead: hasLead))
         .accessibilityAddTraits(.isButton)
-        .accessibilityHint(expanded ? "Свернуть" : "Показать подробности")
+        .accessibilityHint(expanded ? L("common.collapse") : L("common.showDetails"))
         .accessibilityAction { toggle() }
-        .accessibilityAction(named: Text("Требования к дистанции")) { onShowNorms() }
+        .accessibilityAction(named: Text(l: "fd.norms.title")) { onShowNorms() }
     }
 
     private func toggle() {
@@ -162,12 +162,12 @@ struct FollowingDistanceHUD: View {
                 .contentShape(Rectangle())
         }
         .buttonStyle(RVPressableButtonStyle())
-        .accessibilityLabel("Требования к дистанции")
+        .accessibilityLabel(L("fd.norms.title"))
     }
 
     private var headerTitle: String {
-        if isForwardCollisionWarning { return "Опасное сближение!" }
-        return status.displayName
+        if isForwardCollisionWarning { return L("fd.collision") }
+        return status.localizedName
     }
 
     private func statusIcon(size: CGFloat) -> some View {
@@ -197,16 +197,16 @@ struct FollowingDistanceHUD: View {
     }
 
     private var gapCaption: String {
-        guard hasLead else { return "машина впереди не найдена" }
+        guard hasLead else { return L("fd.noLeadFound") }
         if !assessment.isStopped, let headway = assessment.timeHeadwaySeconds {
-            return RVFormat.gapSeconds(headway) + " до машины · оценка"
+            return L("fd.headwayCaption", RVFormat.gapSeconds(headway))
         }
-        return "оценка по камере"
+        return L("fd.cameraEstimate")
     }
 
     private func normBlock(size: CGFloat) -> some View {
         VStack(alignment: .trailing, spacing: 0) {
-            Text(assessment.isStopped ? "норма стоя" : "норма")
+            Text(verbatim: assessment.isStopped ? L("fd.normStanding") : L("fd.normWord"))
                 .font(RVTheme.font(10, weight: .semibold))
                 .foregroundStyle(.white.opacity(0.7))
             Text(FollowingDistanceText.recommended(assessment))
@@ -214,7 +214,7 @@ struct FollowingDistanceHUD: View {
                 .contentTransition(.numericText())
                 .lineLimit(1)
             if !assessment.isStopped, let gap = assessment.recommendedTimeGapSeconds {
-                Text("\(RVFormat.compactNumber(gap)) с · \(assessment.condition.displayName.lowercased())")
+                Text(verbatim: "\(RVFormat.compactNumber(gap)) \(RVFormat.appSeconds) · \(assessment.condition.localizedName.lowercased())")
                     .rvNumeric(10, weight: .semibold)
                     .foregroundStyle(.white.opacity(0.7))
             }
@@ -223,25 +223,25 @@ struct FollowingDistanceHUD: View {
 
     private var detailRows: some View {
         VStack(alignment: .leading, spacing: 5) {
-            NormRow(symbol: "speedometer", title: "В движении:",
+            NormRow(symbol: "speedometer", title: L("fd.row.moving"),
                     value: FollowingDistanceText.movingNorm(assessment, policy: policy),
                     isActive: !assessment.isStopped, tint: hasLead && !assessment.isStopped ? color : .white)
-            NormRow(symbol: "hand.raised.fill", title: "При остановке:",
+            NormRow(symbol: "hand.raised.fill", title: L("fd.row.stopped"),
                     value: FollowingDistanceText.stoppedNorm(policy: policy),
                     isActive: assessment.isStopped, tint: hasLead && assessment.isStopped ? color : .white)
             if let stopping = FollowingDistanceText.stoppingDistance(assessment) {
-                NormRow(symbol: "ruler", title: "Остановочный путь", value: stopping, isActive: true, tint: .white)
+                NormRow(symbol: "ruler", title: L("fd.row.stopping"), value: stopping, isActive: true, tint: .white)
             }
             if hasLead, let ttc = FollowingDistanceText.timeToCollision(assessment) {
-                NormRow(symbol: "exclamationmark.triangle.fill", title: "До столкновения", value: ttc,
+                NormRow(symbol: "exclamationmark.triangle.fill", title: L("fd.row.ttc"), value: ttc,
                         isActive: true, tint: RVTheme.danger)
             }
             if assessment.ownSpeedKmh == nil {
-                Text("Нет скорости GPS — показана норма для стоящего автомобиля.")
+                Text(l: "fd.noGps")
                     .font(RVTheme.font(10, weight: .medium))
                     .foregroundStyle(RVTheme.caution)
             }
-            Text("Оценка по одной камере, не заменяет внимание водителя.")
+            Text(l: "fd.disclaimer")
                 .font(RVTheme.font(10, weight: .medium))
                 .foregroundStyle(.white.opacity(0.55))
         }
@@ -269,7 +269,7 @@ struct FollowingDistanceHUD: View {
                         .contentTransition(.numericText())
                         .lineLimit(1)
                         .minimumScaleFactor(0.6)
-                    Text(isForwardCollisionWarning ? "Опасное сближение!" : (hasLead ? status.displayName : "нет машины впереди"))
+                    Text(verbatim: isForwardCollisionWarning ? L("fd.collision") : (hasLead ? status.localizedName : L("fd.noLead")))
                         .font(RVTheme.font(10, weight: .semibold))
                         .foregroundStyle(isForwardCollisionWarning ? RVTheme.danger : .white.opacity(0.75))
                         .lineLimit(1)
@@ -349,10 +349,10 @@ private struct SurfaceChip: View {
             Image(systemName: condition.symbolName)
                 .symbolRenderingMode(.multicolor)
             if detail != .icon {
-                Text(condition.displayName)
+                Text(condition.localizedName)
             }
             if detail == .full {
-                Text("· " + source.displayName)
+                Text(verbatim: "· " + source.localizedName)
                     .foregroundStyle(.white.opacity(0.65))
             }
         }
@@ -362,7 +362,7 @@ private struct SurfaceChip: View {
         .padding(.horizontal, 6)
         .padding(.vertical, 3)
         .background(Color.white.opacity(0.12), in: Capsule())
-        .accessibilityLabel("Покрытие: \(condition.displayName), \(source.displayName)")
+        .accessibilityLabel(L("fd.surface.a11y", condition.localizedName, source.localizedName))
     }
 }
 
@@ -401,7 +401,7 @@ private struct NormRow: View {
     let standing = FollowingDistanceCalculator.assess(distanceMeters: 1.6, ownSpeedKmh: 0, relativeSpeedKmh: nil,
                                                       policy: policy, condition: .wet)
     let lead = LeadVehicle(trackID: 1, kind: .car, box: BBox(x: 0.4, y: 0.5, width: 0.2, height: 0.1),
-                           distanceMeters: 18, relativeSpeedKmh: -12, method: "ширина+высота")
+                           distanceMeters: 18, relativeSpeedKmh: -12, method: "width+height")
     return ZStack {
         Color(white: 0.3).ignoresSafeArea()
         VStack(spacing: 16) {

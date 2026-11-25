@@ -150,7 +150,7 @@ struct TripEventsByKindChart: View {
 
     var body: some View {
         Chart(data.kindCounts) { item in
-            BarMark(x: .value("Количество", item.count), y: .value("Вид", item.kind.tripReportTitle))
+            BarMark(x: .value("Количество", item.count), y: .value("Вид", item.kind.localizedTitle))
                 .foregroundStyle(TripStyle.color(item.kind).gradient)
                 .cornerRadius(5)
                 .annotation(position: .trailing) {
@@ -212,10 +212,10 @@ struct TripSpeedBandChart: View {
                 ForEach(data.bands) { item in
                     HStack(spacing: 6) {
                         Circle().fill(TripStyle.bandColor(item.band)).frame(width: 9, height: 9)
-                        Text(item.band.title)
+                        Text(item.band.localizedTitle)
                             .font(.caption)
                         Spacer(minLength: 4)
-                        Text("\(Int((item.share * 100).rounded()))% · \(RVFormat.duration(item.seconds))")
+                        Text("\(Int((item.share * 100).rounded()))% · \(RVFormat.appDuration(item.seconds))")
                             .font(.caption.weight(.semibold))
                             .monospacedDigit()
                     }

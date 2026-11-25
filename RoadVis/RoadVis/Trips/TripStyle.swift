@@ -57,7 +57,7 @@ enum TripStyle {
         case .speeding:
             var text = event.value.map { "+\(n($0)) км/ч" } ?? "превышение"
             if let limit = event.limit { text += " при лимите \(n(limit))" }
-            if event.duration > 0 { text += " · \(RVFormat.duration(event.duration))" }
+            if event.duration > 0 { text += " · \(RVFormat.appDuration(event.duration))" }
             return text
         case .tailgating:
             var text = event.value.map { "≈ \(n($0)) м" } ?? "≈ мало"

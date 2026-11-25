@@ -29,7 +29,7 @@ struct TripMapView: View {
                 }
             }
             ForEach(trip.events.filter { $0.coordinate != nil }) { event in
-                Annotation(event.kind.tripReportTitle, coordinate: event.coordinate!.coordinate, anchor: .center) {
+                Annotation(event.kind.localizedTitle, coordinate: event.coordinate!.coordinate, anchor: .center) {
                     Image(systemName: event.kind.symbolName)
                         .font(.system(size: event.id == highlightedEventID ? 15 : 10, weight: .bold))
                         .foregroundStyle(.white)

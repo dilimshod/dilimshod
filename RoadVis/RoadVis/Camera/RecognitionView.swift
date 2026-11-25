@@ -103,7 +103,7 @@ struct RecognitionView: View {
                 }
                 Spacer(minLength: 8)
                 VStack(alignment: .trailing, spacing: 0) {
-                    GlassIconButton(systemName: "gearshape.fill", label: "Настройки", size: RVTheme.HUD.button) {
+                    GlassIconButton(systemName: "gearshape.fill", label: L("common.settings"), size: RVTheme.HUD.button) {
                         app.showSettings = true
                     }
                     StatusDotButton(pipeline: pipeline) {
@@ -158,7 +158,7 @@ struct RecognitionView: View {
             Task {
                 let urls = await pipeline.finishRecording()
                 isSavingRecording = false
-                let error = urls.isEmpty ? (pipeline.recordingError ?? "Нет данных для сохранения") : nil
+                let error = urls.isEmpty ? (pipeline.recordingError ?? L("rec.noDataToSave")) : nil
                 export = RecordingExport(urls: urls, error: error)
             }
         } else {
@@ -310,9 +310,9 @@ private struct CameraPermissionCard: View {
             Image(systemName: "video.slash.fill")
                 .font(.system(size: 44, weight: .semibold))
                 .foregroundStyle(.white.opacity(0.85))
-            Text("Нет доступа к камере")
+            Text(l: "camera.noAccess")
                 .font(RVTheme.font(22, weight: .bold))
-            Text("Разрешите доступ к камере в Настройках, чтобы распознавать транспорт. Спидометр, навигатор и ассистент работают и без камеры.")
+            Text(l: "rec.allowCamera")
                 .font(RVTheme.font(16, weight: .regular))
                 .multilineTextAlignment(.center)
                 .foregroundStyle(.white.opacity(0.8))
@@ -321,7 +321,7 @@ private struct CameraPermissionCard: View {
                     openURL(url)
                 }
             } label: {
-                Label("Открыть настройки", systemImage: "gearshape.fill")
+                Label(L("rec.openSettings"), systemImage: "gearshape.fill")
                     .font(RVTheme.font(17, weight: .bold))
                     .padding(.horizontal, 20)
                     .frame(minHeight: 52)
@@ -367,7 +367,7 @@ private struct RoadLine: View {
                     Text("·")
                         .foregroundStyle(.white.opacity(0.6))
                 }
-                Text(road.displayName)
+                Text(road.localizedDisplayName)
                     .truncationMode(.tail)
                     .contentTransition(.opacity)
                 Text("OSM")
@@ -410,22 +410,22 @@ private struct RoadLine: View {
         let approx = info.isEstimated ? "≈ " : ""
         if let inDirection = info.lanesInDirection {
             if let total = info.totalLanes, !info.isOneway, total != inDirection {
-                return "Полос: \(approx)\(inDirection) из \(total)"
+                return L("lanes.ofTotal", "\(approx)\(inDirection)", total)
             }
-            return "Полос: \(approx)\(inDirection)"
+            return L("lanes.count", "\(approx)\(inDirection)")
         }
         if let total = info.totalLanes {
-            return "Полос: \(approx)\(total)"
+            return L("lanes.count", "\(approx)\(total)")
         }
-        return "Полос: нет данных"
+        return L("lanes.noData")
     }
 
     static func accessibilityText(_ road: RoadSegmentInfo) -> String {
-        var text = "Дорога: \(road.displayName). \(lanesText(road.laneInfo).replacingOccurrences(of: "≈ ", with: ""))"
+        var text = L("rec.road.a11y", road.localizedDisplayName, lanesText(road.laneInfo).replacingOccurrences(of: "≈ ", with: ""))
         if road.laneInfo.isEstimated {
-            text += " (оценка)"
+            text += " (" + L("common.estimate") + ")"
         }
-        return text + ". Данные OpenStreetMap."
+        return text + ". " + L("rec.road.osmData")
     }
 }
 
@@ -456,21 +456,21 @@ private struct StatusDotButton: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(RVPressableButtonStyle())
-        .accessibilityLabel("Состояние распознавания: \(text)")
-        .accessibilityHint("Открыть подробности")
+        .accessibilityLabel(L("rec.status.a11y", text))
+        .accessibilityHint(L("rec.status.hint"))
     }
 
     private var text: String {
         switch pipeline.detectorStatus {
         case .ready(let name):
-            guard pipeline.isRunning else { return "Камера выкл. · \(name)" }
-            return "\(Int(pipeline.fps.rounded())) к/с · \(Int(pipeline.inferenceMs.rounded())) мс · \(name)"
+            guard pipeline.isRunning else { return L("rec.status.cameraOff", name) }
+            return L("recStatus.fps", Int(pipeline.fps.rounded())) + " · " + L("recStatus.ms", Int(pipeline.inferenceMs.rounded())) + " · \(name)"
         case .loading:
-            return "Загрузка модели…"
+            return L("rec.status.loading")
         case .missing:
-            return "Нет модели"
+            return L("rec.status.noModel")
         case .failed:
-            return "Ошибка модели"
+            return L("rec.status.modelError")
         }
     }
 
@@ -532,8 +532,8 @@ private struct CountersButton: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(RVPressableButtonStyle())
-        .accessibilityLabel("Всего ТС: \(total)")
-        .accessibilityHint(isExpanded ? "Скрыть счётчики" : "Показать счётчики по типам")
+        .accessibilityLabel(L("rec.totalVehicles.a11y", total))
+        .accessibilityHint(isExpanded ? L("rec.counters.hide") : L("rec.counters.show"))
     }
 }
 
@@ -555,14 +555,14 @@ private struct CountersPanel: View {
             }
             if showPedestrians {
                 CounterChip(kind: .person, count: pipeline.uniqueCounts[.person] ?? 0)
-                    .accessibilityLabel("Пешеходы: \(pipeline.uniqueCounts[.person] ?? 0)")
+                    .accessibilityLabel(L("rec.pedestrians.a11y", pipeline.uniqueCounts[.person] ?? 0))
             }
             Text("Σ \(pipeline.totalUniqueVehicles)")
                 .rvNumeric(12, weight: .bold)
                 .contentTransition(.numericText())
                 .animation(RVTheme.snappy, value: pipeline.totalUniqueVehicles)
                 .padding(.leading, 2)
-                .accessibilityLabel("Всего ТС: \(pipeline.totalUniqueVehicles)")
+                .accessibilityLabel(L("rec.totalVehicles.a11y", pipeline.totalUniqueVehicles))
             Button(action: reset) {
                 Image(systemName: "arrow.counterclockwise")
                     .font(.system(size: 11, weight: .bold))
@@ -571,7 +571,7 @@ private struct CountersPanel: View {
                     .contentShape(Rectangle())
             }
             .buttonStyle(RVPressableButtonStyle())
-            .accessibilityLabel("Сбросить счётчики")
+            .accessibilityLabel(L("counters.reset"))
         }
         .foregroundStyle(.white)
         .rvTextShadow()
@@ -583,7 +583,7 @@ private struct CountersPanel: View {
         )
         .sensoryFeedback(.success, trigger: resetCount)
         .accessibilityElement(children: .contain)
-        .accessibilityLabel("Уникальные транспортные средства")
+        .accessibilityLabel(L("rec.uniqueVehicles"))
     }
 
     private func reset() {
@@ -612,7 +612,7 @@ private struct CounterChip: View {
         .padding(.horizontal, 4)
         .frame(minWidth: 32, minHeight: 24)
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel("\(kind.displayName): \(count)")
+        .accessibilityLabel("\(kind.localizedName): \(count)")
     }
 }
 
@@ -641,13 +641,13 @@ private struct BannerStack: View {
                 switch pipeline.detectorStatus {
                 case .missing:
                     InfoBanner(systemImage: "exclamationmark.triangle.fill", tint: .orange,
-                               title: "Модель YOLO не найдена",
-                               message: "Экспортируйте yolo11n в CoreML (README → «Модель распознавания»). Спидометр, навигатор и ассистент работают без неё.") {
+                               title: L("rec.banner.noModel.title"),
+                               message: L("rec.banner.noModel.message")) {
                         hideModelBanner = true
                     }
                 case .failed(let message):
                     InfoBanner(systemImage: "exclamationmark.triangle.fill", tint: .red,
-                               title: "Не удалось загрузить модель распознавания",
+                               title: L("rec.banner.modelFailed"),
                                message: message) {
                         hideModelBanner = true
                     }
@@ -657,11 +657,11 @@ private struct BannerStack: View {
             }
             if let error = pipeline.cameraError {
                 InfoBanner(systemImage: "video.slash.fill", tint: .red,
-                           title: "Камера недоступна", message: error, onClose: nil)
+                           title: L("rec.banner.cameraUnavailable"), message: error, onClose: nil)
             } else if pipeline.isCameraInterrupted {
                 InfoBanner(systemImage: "pause.circle.fill", tint: .yellow,
-                           title: "Камера приостановлена системой",
-                           message: "Используется другим приложением или недоступна в этом режиме.",
+                           title: L("rec.banner.interrupted.title"),
+                           message: L("rec.banner.interrupted.message"),
                            onClose: nil)
             }
         }
@@ -719,7 +719,7 @@ private struct InfoBanner: View {
                 }
                 .buttonStyle(RVPressableButtonStyle())
                 .padding(.vertical, -8)
-                .accessibilityLabel("Скрыть")
+                .accessibilityLabel(L("common.hide"))
             }
         }
         .foregroundStyle(.white)
@@ -766,13 +766,13 @@ private struct RecordButton: View {
                     ProgressView()
                         .controlSize(.small)
                         .tint(.white)
-                        .accessibilityLabel("Сохранение")
+                        .accessibilityLabel(L("rec.saving"))
                 } else if isRecording, let startedAt {
                     TimelineView(.periodic(from: startedAt, by: 1)) { context in
                         Text(Self.elapsedText(from: startedAt, to: context.date))
                     }
                 } else {
-                    Text("Запись")
+                    Text(l: "rec.record")
                 }
             }
             .rvNumeric(14, weight: .semibold)
@@ -792,8 +792,8 @@ private struct RecordButton: View {
         .buttonStyle(RVPressableButtonStyle())
         .disabled(!isEnabled || isSaving)
         .opacity(isEnabled ? 1 : 0.45)
-        .accessibilityLabel(isRecording ? "Остановить запись эксперимента" : "Начать запись эксперимента")
-        .accessibilityHint("Сохраняет покадровые детекции и уникальные ТС в CSV")
+        .accessibilityLabel(isRecording ? L("rec.record.stop") : L("rec.record.start"))
+        .accessibilityHint(L("rec.record.hint"))
     }
 
     /// "04:17" or "1:02:03".
@@ -822,8 +822,8 @@ private struct NavigatorCornerButton: View {
                 .contentShape(Circle())
         }
         .buttonStyle(RVPressableButtonStyle())
-        .accessibilityLabel("Навигатор")
-        .accessibilityHint("Переключить на карту")
+        .accessibilityLabel(L("common.navigator"))
+        .accessibilityHint(L("rec.toMap.hint"))
     }
 }
 
@@ -851,7 +851,7 @@ private struct RecordingExportSheet: View {
                     }
                 }
                 if !export.urls.isEmpty {
-                    Section("Файлы (Документы → Experiments)") {
+                    Section(L("rec.export.files")) {
                         ForEach(export.urls, id: \.self) { url in
                             Label(url.lastPathComponent, systemImage: "doc.text")
                                 .font(.system(size: 14, design: .monospaced))
@@ -860,25 +860,25 @@ private struct RecordingExportSheet: View {
                     }
                     Section {
                         ShareLink(items: export.urls) {
-                            Label("Поделиться файлами", systemImage: "square.and.arrow.up")
+                            Label(L("rec.export.share"), systemImage: "square.and.arrow.up")
                                 .font(RVTheme.font(17, weight: .semibold))
                                 .frame(maxWidth: .infinity, minHeight: 44)
                         }
                     }
                 }
-                Section("Что внутри") {
-                    Text("detections.csv — каждая детекция на каждом обработанном кадре (track_id связывает кадры одного объекта; confirmed = трек подтверждён, track_hits = число кадров трека, is_lead = передний автомобиль).")
-                    Text("summary.csv — по классам: покадровые детекции, детекции подтверждённых треков, число track_id и уникальные ТС (счёт приложения); медиана дистанции до переднего авто. Отправляйте оба файла.")
-                    Text("Проценты — уверенность модели, а не точность. Расстояния и скорости — оценка по одной камере (≈).")
+                Section(L("rec.export.inside")) {
+                    Text(l: "rec.export.detections")
+                    Text(l: "rec.export.summary")
+                    Text(l: "rec.export.note")
                         .foregroundStyle(.secondary)
                 }
                 .font(RVTheme.font(14, weight: .regular))
             }
-            .navigationTitle(export.urls.isEmpty ? "Запись не сохранена" : "Запись сохранена")
+            .navigationTitle(export.urls.isEmpty ? L("rec.export.notSaved") : L("rec.export.saved"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("Готово") { dismiss() }
+                    Button(L("common.done")) { dismiss() }
                 }
             }
         }

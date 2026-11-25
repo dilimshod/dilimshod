@@ -166,7 +166,7 @@ private struct SettingsFollowingDistanceSection: View {
                 Picker("Покрытие дороги", selection: $settings.roadSurfaceMode) {
                     Text("Авто (по погоде)").tag("auto")
                     ForEach(RoadSurfaceCondition.allCases, id: \.self) { surface in
-                        Text(surface.displayName).tag(surface.rawValue)
+                        Text(surface.localizedName).tag(surface.rawValue)
                     }
                 }
                 Toggle("Предупреждения: вибрация, звук, голос", isOn: $settings.distanceWarningsEnabled)
@@ -332,7 +332,7 @@ private struct SettingsNavigationSection: View {
                 HStack {
                     Text("Срок жизни отметок")
                     Spacer()
-                    Text(RVFormat.duration(settings.incidentLifetimeMinutes * 60))
+                    Text(RVFormat.appDuration(settings.incidentLifetimeMinutes * 60))
                         .monospacedDigit()
                         .foregroundStyle(.secondary)
                 }
@@ -465,7 +465,7 @@ private struct SettingsSignalSection: View {
                     .accessibilityValue(settingsPercent(settings.signalGreenRatio))
             }
             LabeledContent("Ожидание по модели") {
-                Text("≈ \(RVFormat.duration(estimate.expectedWaitSeconds)) (оценка), остановка в \(settingsPercent(estimate.stopProbability)) случаев")
+                Text("≈ \(RVFormat.appDuration(estimate.expectedWaitSeconds)) (оценка), остановка в \(settingsPercent(estimate.stopProbability)) случаев")
                     .multilineTextAlignment(.trailing)
                     .foregroundStyle(.secondary)
             }

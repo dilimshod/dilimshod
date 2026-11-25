@@ -85,6 +85,9 @@ public final class RouteProgressTracker {
     /// Start distance (along the polyline) of each step = where its maneuver happens.
     public let maneuverDistances: [Double]
 
+    /// Language of the fallback "destination" instruction (default Russian).
+    public var language: RVLang = .ru
+
     private var lastSegment = 0
     private var lastAlong = 0.0
     private var offRouteCount = 0
@@ -183,7 +186,7 @@ public final class RouteProgressTracker {
             nextManeuver = steps[n].resolvedManeuver
             distanceToNext = max(0, maneuverDistances[n] - along)
         } else {
-            nextInstruction = arrived ? "Вы прибыли" : "Пункт назначения"
+            nextInstruction = NavInstructionText.destination(arrived: arrived, language: language)
             nextManeuver = .arrive
             distanceToNext = remaining
         }
@@ -213,6 +216,8 @@ public final class RouteProgressTracker {
 public struct VoicePromptScheduler: Sendable {
     public let thresholds: [Double]
     private var announced: [Int: Set<Int>] = [:]
+    /// Language of the spoken distance prefix (default Russian).
+    public var language: RVLang = .ru
 
     public init(thresholds: [Double] = [1000, 400, 100]) {
         self.thresholds = thresholds.sorted(by: >)
@@ -240,7 +245,7 @@ public struct VoicePromptScheduler: Sendable {
         if threshold <= 150 || distance < 60 {
             return text
         }
-        return "\(RVFormat.spokenDistance(distance)) \(Self.lowercasingFirst(text))"
+        return "\(RVFormat.spokenDistance(distance, language: language)) \(Self.lowercasingFirst(text))"
     }
 
     static func lowercasingFirst(_ s: String) -> String {

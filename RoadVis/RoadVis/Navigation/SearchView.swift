@@ -223,7 +223,7 @@ struct SearchView: View {
             }
             Spacer(minLength: 8)
             if let distance {
-                Text(RVFormat.distance(distance))
+                Text(RVFormat.appDistance(distance))
                     .font(.subheadline.weight(.semibold))
                     .monospacedDigit()
                     .foregroundStyle(.secondary)

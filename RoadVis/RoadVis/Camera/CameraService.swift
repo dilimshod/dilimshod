@@ -12,10 +12,10 @@ enum CameraServiceError: LocalizedError {
 
     var errorDescription: String? {
         switch self {
-        case .noCamera: return "На устройстве не найдена основная камера"
-        case .cannotAddInput: return "Не удалось подключить камеру к сеансу съёмки"
-        case .cannotAddOutput: return "Не удалось получить видеопоток с камеры"
-        case .inputFailed(let message): return "Ошибка камеры: \(message)"
+        case .noCamera: return L("camera.err.noCamera")
+        case .cannotAddInput: return L("camera.err.input")
+        case .cannotAddOutput: return L("camera.err.output")
+        case .inputFailed(let message): return L("camera.err.failed", message)
         }
     }
 }

@@ -51,7 +51,7 @@ struct SpeedometerView: View {
                     .lineLimit(1)
                     .minimumScaleFactor(0.6)
                     .frame(minWidth: compact ? 36 : 46)
-                Text("км/ч")
+                Text(verbatim: RVFormat.appKmh)
                     .font(.system(size: compact ? 9 : 10, weight: .semibold, design: .rounded))
                     .foregroundStyle(isOverLimit ? Color.red.opacity(0.9) : Color.white.opacity(0.75))
             }
@@ -82,15 +82,15 @@ struct SpeedometerView: View {
     private var accessibilityText: String {
         var parts: [String] = []
         if let speedKmh, speedKmh.isFinite {
-            parts.append("Скорость \(speedKmh < 1 ? "0" : RVFormat.speed(speedKmh)) км/ч")
+            parts.append(L("speedo.a11y.speed", speedKmh < 1 ? "0" : RVFormat.speed(speedKmh)))
         } else {
-            parts.append("Скорость неизвестна")
+            parts.append(L("speedo.a11y.unknown"))
         }
         if let limitKmh, limitKmh > 0 {
-            parts.append("ограничение \(limitKmh) км/ч")
+            parts.append(L("speedo.a11y.limit", limitKmh))
         }
         if isOverLimit {
-            parts.append("превышение скорости")
+            parts.append(L("speedo.a11y.over"))
         }
         return parts.joined(separator: ", ")
     }
@@ -158,7 +158,7 @@ struct SpeedLimitSignView: View {
         .frame(width: size, height: size)
         .shadow(color: .black.opacity(0.35), radius: 3, x: 0, y: 1)
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel("Ограничение скорости \(kmh) км/ч")
+        .accessibilityLabel(L("speedo.a11y.limitSign", kmh))
     }
 }
 

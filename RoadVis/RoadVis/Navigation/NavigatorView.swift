@@ -173,10 +173,10 @@ struct NavigatorView: View {
             HStack(spacing: 6) {
                 Image(systemName: hazard.kind.symbolName)
                     .font(.footnote.weight(.bold))
-                Text(hazard.kind.displayName)
+                Text(hazard.kind.localizedName)
                     .font(.footnote.weight(.bold))
                     .lineLimit(1)
-                Text(RVFormat.distance(max(0, hazard.distanceAlongRoute - progress.distanceAlong)))
+                Text(RVFormat.appDistance(max(0, hazard.distanceAlongRoute - progress.distanceAlong)))
                     .font(.footnote.weight(.bold))
                     .monospacedDigit()
             }

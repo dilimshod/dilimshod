@@ -29,7 +29,7 @@ struct IncidentReportView: View {
                                     Image(systemName: kind.symbolName)
                                         .font(.system(size: 30, weight: .semibold))
                                         .foregroundStyle(color(for: kind))
-                                    Text(kind.displayName)
+                                    Text(kind.localizedName)
                                         .font(.headline)
                                         .multilineTextAlignment(.center)
                                         .lineLimit(2)

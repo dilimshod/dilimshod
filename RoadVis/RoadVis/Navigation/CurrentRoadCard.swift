@@ -122,9 +122,9 @@ struct CurrentRoadCard: View {
         if let lanes = edge?.laneCount, lanes > 1 {
             result.append(Fact(symbol: "road.lanes", text: "Полос по ходу: \(lanes)", source: "Valhalla"))
         }
-        if let surface = road?.surfaceDisplayName {
+        if let surface = road?.localizedSurfaceName {
             result.append(Fact(symbol: "square.grid.3x3.fill", text: surface, source: "OSM"))
-        } else if let surface = RouteEdgeAttributes.surfaceDisplayName(edge?.surface) {
+        } else if let surface = CoreText.valhallaSurface(edge?.surface) {
             result.append(Fact(symbol: "square.grid.3x3.fill", text: surface, source: "Valhalla"))
         }
         if let lit = road?.lit {
@@ -147,13 +147,13 @@ struct CurrentRoadCard: View {
     // MARK: Values
 
     private func roadName(road: RoadSegmentInfo?, edge: RouteEdgeAttributes?) -> String {
-        if let road { return road.displayName }
+        if let road { return road.localizedDisplayName }
         if let name = edge?.names.first, !name.isEmpty { return name }
         return "Дорога"
     }
 
     private func roadClass(road: RoadSegmentInfo?, edge: RouteEdgeAttributes?) -> String? {
-        road?.roadClassName ?? RouteEdgeAttributes.roadClassDisplayName(edge?.roadClass)
+        road?.localizedRoadClassName ?? CoreText.valhallaRoadClass(edge?.roadClass)
     }
 
     private func speedLimit(road: RoadSegmentInfo?, edge: RouteEdgeAttributes?) -> Int? {

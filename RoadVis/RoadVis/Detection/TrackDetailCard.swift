@@ -100,7 +100,7 @@ struct TrackDetailCard: View {
             .background(kindColor.opacity(0.18), in: Circle())
 
             VStack(alignment: .leading, spacing: 2) {
-                Text(track.kind.displayName)
+                Text(track.kind.localizedName)
                     .font(RVTheme.font(15, weight: .bold))
                 if let make = track.make, let confidence = track.makeConfidence {
                     Text("\(make) · уверенность \(Int((min(max(confidence, 0), 1) * 100).rounded()))%")
@@ -138,7 +138,7 @@ struct TrackDetailCard: View {
 
     private var ageText: String {
         let age = max(0, track.lastSeen - track.firstSeen)
-        return age < 60 ? RVFormat.gapSeconds(age) : RVFormat.duration(age)
+        return age < 60 ? RVFormat.gapSeconds(age) : RVFormat.appDuration(age)
     }
 
     private func rowTitle(_ text: String) -> some View {
