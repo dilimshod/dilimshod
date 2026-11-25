@@ -57,16 +57,33 @@ public enum Polyline {
 }
 
 /// Where a route came from.
-public enum RouteSource: String, Codable, Hashable, Sendable {
+public enum RouteSource: String, Codable, Hashable, Sendable, CaseIterable {
     case apple
     case valhalla
+    case osrm
 
     public var displayName: String {
         switch self {
         case .apple: return "Apple Maps"
         case .valhalla: return "OpenStreetMap (Valhalla)"
+        case .osrm: return "OpenStreetMap (OSRM)"
         }
     }
+
+    /// Short badge text ("Apple", "Valhalla", "OSRM").
+    public var badge: String {
+        switch self {
+        case .apple: return "Apple"
+        case .valhalla: return "Valhalla"
+        case .osrm: return "OSRM"
+        }
+    }
+
+    /// True when the engine's travel time may include live traffic (only Apple, and only where Apple has data).
+    public var mayIncludeTraffic: Bool { self == .apple }
+
+    /// True for engines working on OpenStreetMap data.
+    public var usesOpenStreetMap: Bool { self != .apple }
 }
 
 /// Engine-independent route used by the navigator.
@@ -113,10 +130,18 @@ public struct RouteEdgeAttributes: Hashable, Sendable {
     public var wayID: Int64?
     /// True when a traffic signal is at this edge or at its end node.
     public var hasTrafficSignal: Bool
+    /// Valhalla surface class ("paved_smooth", "paved", "paved_rough", "compacted", "dirt", "gravel", "path", "impassable").
+    public var surface: String?
+    /// Valhalla edge use ("road", "ramp", "turn_channel", "service_road", "living_street" …).
+    public var use: String?
+    public var isToll: Bool
+    public var isTunnel: Bool
+    public var isBridge: Bool
 
     public init(startDistance: Double, endDistance: Double, names: [String] = [], speedLimitKmh: Int? = nil,
                 laneCount: Int? = nil, typicalSpeedKmh: Double? = nil, roadClass: String? = nil,
-                wayID: Int64? = nil, hasTrafficSignal: Bool = false) {
+                wayID: Int64? = nil, hasTrafficSignal: Bool = false, surface: String? = nil, use: String? = nil,
+                isToll: Bool = false, isTunnel: Bool = false, isBridge: Bool = false) {
         self.startDistance = startDistance
         self.endDistance = endDistance
         self.names = names
@@ -126,6 +151,50 @@ public struct RouteEdgeAttributes: Hashable, Sendable {
         self.roadClass = roadClass
         self.wayID = wayID
         self.hasTrafficSignal = hasTrafficSignal
+        self.surface = surface
+        self.use = use
+        self.isToll = isToll
+        self.isTunnel = isTunnel
+        self.isBridge = isBridge
+    }
+
+    public var length: Double { max(0, endDistance - startDistance) }
+
+    /// Russian road class name for Valhalla `road_class`.
+    public static func roadClassDisplayName(_ roadClass: String?) -> String? {
+        switch roadClass {
+        case "motorway": return "Магистраль"
+        case "trunk": return "Скоростная дорога"
+        case "primary": return "Главная дорога"
+        case "secondary": return "Дорога второго класса"
+        case "tertiary": return "Дорога третьего класса"
+        case "unclassified": return "Местная дорога"
+        case "residential": return "Жилая улица"
+        case "service_other": return "Служебный проезд"
+        case nil: return nil
+        default: return roadClass
+        }
+    }
+
+    /// Russian surface name for Valhalla `surface`.
+    public static func surfaceDisplayName(_ surface: String?) -> String? {
+        switch surface {
+        case "paved_smooth": return "Ровный асфальт"
+        case "paved": return "Асфальт"
+        case "paved_rough": return "Неровное покрытие"
+        case "compacted": return "Укатанный грунт"
+        case "dirt": return "Грунт"
+        case "gravel": return "Гравий"
+        case "path": return "Тропа"
+        case "impassable": return "Непроезжая"
+        case nil: return nil
+        default: return surface
+        }
+    }
+
+    /// True for major road classes (motorway, trunk, primary).
+    public var isPrimaryRoad: Bool {
+        ["motorway", "trunk", "primary"].contains(roadClass ?? "")
     }
 }
 
@@ -230,7 +299,12 @@ public enum Valhalla {
                 let (lanes, active) = lanes(from: laneData.map {
                     ValhallaLane(directions: int($0["directions"]) ?? 0, valid: int($0["valid"]), active: int($0["active"]))
                 })
-                steps.append(RouteStepInfo(instruction: (m["instruction"] as? String) ?? "",
+                var instruction = (m["instruction"] as? String) ?? ""
+                if maneuverType(type) == .arrive {
+                    instruction = arrivalInstruction(instruction: instruction,
+                                                     alert: m["verbal_transition_alert_instruction"] as? String)
+                }
+                steps.append(RouteStepInfo(instruction: instruction,
                                            distance: lengthMeters,
                                            notice: nil,
                                            maneuver: maneuverType(type),
@@ -255,6 +329,15 @@ public enum Valhalla {
                         distance: distance > 0 ? distance : Geo.polylineLength(polyline),
                         expectedTravelTime: time, steps: steps,
                         hasTolls: anyToll, hasHighways: anyHighway, advisories: [])
+    }
+
+    /// Text of the arrival step shown/spoken BEFORE arriving: the future-tense alert ("Пункт назначения будет
+    /// справа.") when Valhalla provides it, else the instruction with "Вы прибыли" → "Вы прибудете".
+    public static func arrivalInstruction(instruction: String, alert: String?) -> String {
+        if let alert = alert?.trimmingCharacters(in: .whitespacesAndNewlines), !alert.isEmpty { return alert }
+        return instruction
+            .replacingOccurrences(of: "Вы прибыли", with: "Вы прибудете")
+            .replacingOccurrences(of: "вы прибыли", with: "вы прибудете")
     }
 
     /// Valhalla maneuver type code → ManeuverType.
@@ -315,7 +398,8 @@ public enum Valhalla {
     public static let traceAttributeFilters = [
         "shape", "edge.names", "edge.length", "edge.speed", "edge.speed_limit", "edge.lane_count",
         "edge.road_class", "edge.way_id", "edge.begin_shape_index", "edge.end_shape_index",
-        "edge.traffic_signal", "node.traffic_signal",
+        "edge.traffic_signal", "node.traffic_signal", "edge.surface", "edge.use", "edge.toll", "edge.tunnel",
+        "edge.bridge",
     ]
 
     /// Body for `POST /trace_attributes`. Use `edgeWalk: true` only for shapes produced by Valhalla itself;
@@ -361,7 +445,11 @@ public enum Valhalla {
                                               speedLimitKmh: limit, laneCount: lanes,
                                               typicalSpeedKmh: double(e["speed"]),
                                               roadClass: e["road_class"] as? String,
-                                              wayID: wayID, hasTrafficSignal: signal))
+                                              wayID: wayID, hasTrafficSignal: signal,
+                                              surface: e["surface"] as? String, use: e["use"] as? String,
+                                              isToll: (e["toll"] as? Bool) == true,
+                                              isTunnel: (e["tunnel"] as? Bool) == true,
+                                              isBridge: (e["bridge"] as? Bool) == true))
         }
         return result
     }

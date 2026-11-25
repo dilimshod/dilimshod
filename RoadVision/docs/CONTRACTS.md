@@ -21,7 +21,8 @@ General rules
 Already written & tested (do not change signatures): `Geo.swift` (GeoPoint, Geo.*, Double.kmh/.mps), `VisionModels.swift`
 (VehicleKind, BBox, TrafficLightColor, Detection), `RoadAttributes.swift` (LaneTurn, Lane, LaneInfo(+ .unknown), SpeedLimit),
 `Tracking.swift`, `MonocularSpeedEstimator.swift`, `YOLODecoder.swift`, `TrafficLightColorClassifier.swift`, `ExperimentLog.swift`,
-`Maneuver.swift`, `RouteProgress.swift`, `Formatting.swift`, `ChatProtocol.swift`, `AssistantPrompt.swift`.
+`Maneuver.swift`, `RouteProgress.swift`, `Formatting.swift`, `ChatProtocol.swift`, `AssistantPrompt.swift`
+(the last two are leftovers of the removed AI assistant: still compiled and tested, but unused by the app).
 
 ### 1.1 Vision logic
 ```swift
@@ -309,7 +310,7 @@ public enum IncidentFilter {
 }
 ```
 
-### 1.3 Navigation + chat logic
+### 1.3 Navigation logic (+ unused chat helpers)
 ```swift
 // Maneuver.swift
 public enum ManeuverType: String, Codable, Hashable, Sendable, CaseIterable {
@@ -371,7 +372,7 @@ public enum RVFormat {
     public static func clock(_ date: Date, calendar: Calendar = .current) -> String   // "14:35"
 }
 
-// ChatProtocol.swift
+// ChatProtocol.swift + AssistantPrompt.swift — NOT used by the app (the AI assistant was removed); kept with their tests.
 public struct ChatMessage: Codable, Hashable, Identifiable, Sendable {
     public enum Role: String, Codable, Sendable { case system, user, assistant }
     public var id: UUID; public var role: Role; public var content: String; public var date: Date
@@ -430,13 +431,19 @@ public enum ChatHistory {
 `App/SpeechService.swift`, `Shared/AppBridges.swift`. Read them; do not rename anything they reference.
 
 Key shell APIs:
-- `AppState`: `mode`, `showAssistant`, `showSettings`, `switchTo(_:)`, `toggleMode()`, `updateCameraForMode()`,
-  services `settings, location, speech, roadInfo, weather, signals, incidents, navigation, recognition, assistant`, `drivingContext()`.
+- `AppState`: `mode`, `showSettings`, `switchTo(_:)`, `toggleMode()`, `updateCameraForMode()`, `handleScenePhase(_:)`,
+  services `settings, location, speech, roadInfo, weather, signals, incidents, navigation, recognition`.
+  App-wide lifecycle (camera, GPS, idle timer) is driven by `RootView` from `UIApplication.didBecomeActive /
+  willEnterForeground / didEnterBackground` notifications (not per-scene `scenePhase`); `handleScenePhase` ignores
+  `.inactive` and repeated phases, so several scenes act only once per app state change.
 - `LocationService`: `location: CLLocation?`, `speedKmh: Double?`, `course`, `heading`, `travelDirection`, `coordinate: GeoPoint?`,
   `isAuthorized`, `authorizationStatus`, `start()`, `stop()`, `setBackgroundUpdates(_:)`, `addListener(_:) -> UUID`, `removeListener(_:)`.
-- `SpeechService`: `speak(_:priority:language:)`, `stop()`, `isSpeaking`, `isMuted`, `defaultLanguage`,
-  `prepareForRecording() throws`, `finishRecording()`.
-- `AppSettings`: see file (all user preferences, `signalAssumptions`, `languageCode`, `overpassEndpoints`).
+- `SpeechService`: `speak(_:priority:)`, `stop()`, `isSpeaking`, `isMuted`, `static voiceLanguage` (= "ru-RU", fixed —
+  every prompt is Russian; no setting changes it), `russianVoice()`, `static voice(for:)` (system default voice for the
+  language, else an enhanced/premium `com.apple.voice.*` / `com.apple.ttsbundle.*` voice; never novelty/Eloquence).
+  The `.playback`/`.voicePrompt` session ducks other audio only while speaking and is deactivated with
+  `.notifyOthersOnDeactivation` after the last utterance. No microphone / recording.
+- `AppSettings`: see file (all user preferences, `signalAssumptions`, `overpassEndpoints`).
 - `AppBridges.swift`: `GeoPoint(CLLocationCoordinate2D)`, `.coordinate`, `MKPolyline.coordinates/.geoPoints`,
   `BBox(visionRect:)`, `.visionRect`, `.cgRect`, `.rect(in:)`.
 
@@ -508,12 +515,14 @@ struct SpeedLimitSignView: View { init(kmh: Int, size: CGFloat = 44) }
 struct GlassIconButton: View { init(systemName: String, label: String, size: CGFloat = 52, tint: Color = .white, action: @escaping () -> Void) }
 struct RVPressableButtonStyle: ButtonStyle            // added: press feedback (scale/opacity), any background
 struct TrafficLightIndicatorView: View { init(color: TrafficLightColor, lampSize: CGFloat = 16, showsCaption: Bool = true)
-    static func displayColor(for color: TrafficLightColor) -> Color }   // added
+    static func displayColor(for color: TrafficLightColor) -> Color   // added
+    static func estimateCaption(for:) -> String                       // "≈ Красный" (unknown → "Не определён")
+    static func estimateAccessibilityLabel(for:) -> String }          // "Светофор: ≈ Красный (оценка камеры)"
 struct TrafficLightDotView: View { init(color: TrafficLightColor, size: CGFloat = 14) }   // added
 ```
 The detector model is looked up in the bundle by name, first found wins: `RoadVisionDetector`, `yolo26n`, `yolo11n`,
 `yolov8n` (`.mlmodelc`). The make classifier: `VehicleMakeClassifier.mlmodelc`. Missing model → `.missing`, the UI shows
-an explanatory banner, the app keeps working (speed, navigator, assistant).
+an explanatory banner, the app keeps working (speed, navigator).
 Frames are rotated upright by the capture connection (`AVCaptureDevice.RotationCoordinator`; while a preview layer is
 attached, the coordinator's *preview* angle is used for the frames too), so Vision always runs with orientation `.up` and
 normalized boxes map onto the buffer; the overlay maps them onto the aspect-fill preview with `frameSize`.
@@ -623,49 +632,8 @@ Additions (navigator slice, nothing above changed): `NavigationService.placeSear
 `ValhallaClient.setEndpoint(_:)`, `static ValhallaClient.url(endpoint:path:)`; `struct NavigationMapView` (UIViewRepresentable);
 `struct NavigationSettingsSection: View` (Form sections «Маршрутизация», «Пробки», embedded by SettingsView).
 
-### 2.4 Assistant + settings (folders Assistant/, Settings/)
+### 2.4 Settings (folder Settings/)
 ```swift
-@Observable @MainActor final class AssistantViewModel {
-    init(settings: AppSettings, speech: SpeechService)
-    var contextProvider: (@MainActor () -> DrivingContext)?
-    private(set) var messages: [ChatMessage]
-    var isListening: Bool { get }                  // computed from recognizer (read-only, as before)
-    private(set) var isThinking: Bool
-    var partialTranscript: String { get }          // computed from recognizer
-    private(set) var activeProviderName: String
-    var errorMessage: String? { get }              // chat error, else speech-input error
-    var draft: String
-    func toggleListening(); func sendDraft(); func send(_ text: String) async
-    func stopSpeaking(); func clearConversation()
-    // additions:
-    let recognizer: SpeechRecognizerService
-    var isStartingListening: Bool { get }; var recognitionNotice: String? { get }
-    var speechPermissionDenied: Bool { get }; var isSpeaking: Bool { get }
-    func cancelResponse(); func dismissError(); func refreshProviderName()
-}
-protocol ChatBackend {                              // yields deltas of the visible answer only
-    var displayName: String { get }
-    var providerID: String { get }                  // added (default "")
-    var historyCharacterBudget: Int { get }         // added (default 6000; Apple 2500)
-    func stream(messages: [ChatMessage]) -> AsyncThrowingStream<String, Error>
-}
-struct ChatBackendError: LocalizedError { enum Kind { unauthorized, rateLimited, http(Int), timeout, network, invalidConfiguration, emptyResponse, server, unavailable }; let kind; let message }
-final class OpenAICompatibleBackend: ChatBackend { init(preset:apiKey: String?, model: String /* "" = default */, session: = .shared, firstByteTimeout: = 15) }
-final class AppleOnDeviceBackend: ChatBackend { init(); static func status(localeIdentifier: String) -> AppleIntelligenceStatus }
-enum AppleIntelligenceStatus { available, requiresNewerSystem, deviceNotEligible, notEnabled, modelNotReady, unsupportedLanguage, unavailable; isAvailable; message }
-enum ChatBackendResolver { static func resolve(settings:) -> ChatBackendResolution /* backends + problem */; providerTitle(for:); apiKey(for:); apiKeyAccount(for:);
-                           effectivePreset(_:settings:); acceptsAPIKey(_:); usesCustomBaseURL(_:); autoChainDescription(settings:); selectableProviderIDs }
-enum ChatModelCatalog { static func fetchModels(for: ChatProviderPreset, apiKey: String?) async throws -> [String] }
-enum ChatConnectionTester { @MainActor static func run(settings: AppSettings) async -> ChatConnectionTestResult }
-final class KeychainStore { static let shared; func string(for key: String) -> String?; func set(_ value: String?, for key: String)
-                            static func apiKeyAccount(for presetID: String) -> String /* "ai.key.<id>" */; func contains(_ key: String) -> Bool }
-@Observable @MainActor final class SpeechRecognizerService {   // SFSpeechRecognizer + AVAudioEngine, uses SpeechService.prepareForRecording/finishRecording
-    init(speech: SpeechService)
-    private(set) var isListening, isStarting, transcript, authorizationDenied, errorMessage, fallbackNotice, activeLocaleIdentifier, isOnDevice
-    func start(localeIdentifier: String, onFinal: @escaping @MainActor (String) -> Void) async; func stop(); func cancel(); func clearError()
-}
-struct AssistantView: View                         // chat sheet: bubbles, mic button, text field, provider label
-struct AssistantButton: View { init(size: CGFloat = 60) }   // floating round button (sparkles/mic) → app.showAssistant = true
 struct SettingsView: View                          // all settings sections (see AppSettings) + data-source disclaimers;
                                                    // embeds the navigator's `NavigationSettingsSection()` (Navigation/)
 ```
@@ -770,9 +738,9 @@ Honesty: distances "≈ … (оценка)", detector scores "увереннос
   automatically; non-Swift files in `RoadVision/` are copied into the bundle as resources, so do NOT add extra
   README/markdown/JSON files there (duplicate resource names break the build). `RoadVision/Models/README.md` is
   excluded via a membership exception in the project.
-- `Config/Info.plist` (outside the synced folder) holds UIBackgroundModes [location, audio], ATS
-  `NSAllowsLocalNetworking`, `UIFileSharingEnabled`, `LSSupportsOpeningDocumentsInPlace`. Usage descriptions and the
-  rest come from `INFOPLIST_KEY_*` build settings.
+- `Config/Info.plist` (outside the synced folder) holds UIBackgroundModes [location, audio], `UIFileSharingEnabled`,
+  `LSSupportsOpeningDocumentsInPlace`. Usage descriptions (camera, location only — no microphone, speech recognition or
+  local network) and the rest come from `INFOPLIST_KEY_*` build settings.
 - Asset catalog: `AppIcon`, `AccentColor` (asset symbol generation is on → do not declare your own `Color.accent` /
   `ColorResource.accent`).
 - Core ML model classes are NOT generated (`COREML_CODEGEN_LANGUAGE = None`): load models by bundle resource name

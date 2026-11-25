@@ -16,6 +16,18 @@ struct TrafficLightIndicatorView: View {
         self.showsCaption = showsCaption
     }
 
+    /// Visible caption: the colour marked as an estimate, e.g. "≈ Красный" (unknown → "Не определён").
+    static func estimateCaption(for color: TrafficLightColor) -> String {
+        color == .unknown ? color.displayName : "≈ \(color.displayName)"
+    }
+
+    /// VoiceOver label that never states the camera estimate as a fact, e.g. "Светофор: ≈ Красный (оценка камеры)".
+    static func estimateAccessibilityLabel(for color: TrafficLightColor) -> String {
+        color == .unknown
+            ? "Светофор: цвет не определён (оценка камеры)"
+            : "Светофор: ≈ \(color.displayName) (оценка камеры)"
+    }
+
     /// Display colour for a traffic-light state (unknown → grey).
     static func displayColor(for color: TrafficLightColor) -> Color {
         switch color {
@@ -50,7 +62,7 @@ struct TrafficLightIndicatorView: View {
                 }
             }
             if showsCaption {
-                Text(color.displayName)
+                Text(Self.estimateCaption(for: color))
                     .font(.system(size: max(10, lampSize * 0.7), weight: .semibold, design: .rounded))
                     .foregroundStyle(color == .unknown ? Color.white.opacity(0.7) : Self.displayColor(for: color))
                     .lineLimit(1)
@@ -59,7 +71,7 @@ struct TrafficLightIndicatorView: View {
             }
         }
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel("Светофор: \(color.displayName.lowercased()) (оценка по камере)")
+        .accessibilityLabel(Self.estimateAccessibilityLabel(for: color))
     }
 
     private func lamp(_ lampColor: TrafficLightColor) -> some View {
@@ -89,7 +101,7 @@ struct TrafficLightDotView: View {
             .frame(width: size, height: size)
             .overlay(Circle().strokeBorder(Color.white.opacity(0.85), lineWidth: max(1, size * 0.1)))
             .shadow(color: color == .unknown ? .clear : fill.opacity(0.9), radius: size * 0.4)
-            .accessibilityLabel("Светофор: \(color.displayName.lowercased())")
+            .accessibilityLabel(TrafficLightIndicatorView.estimateAccessibilityLabel(for: color))
     }
 }
 
