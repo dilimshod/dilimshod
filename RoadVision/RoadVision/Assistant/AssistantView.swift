@@ -41,7 +41,7 @@ struct AssistantView: View {
         .background(Color(red: 0.06, green: 0.07, blue: 0.09).ignoresSafeArea())
         .preferredColorScheme(.dark)
         .onAppear {
-            assistant.refreshProviderName()
+            app.assistant.refreshProviderName()
         }
     }
 
@@ -56,6 +56,7 @@ struct AssistantView: View {
                     .foregroundStyle(.cyan)
             }
             .frame(width: 40, height: 40)
+            .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 2) {
                 Text("ИИ‑помощник")
                     .font(.system(.headline, design: .rounded))
@@ -71,7 +72,7 @@ struct AssistantView: View {
             } label: {
                 Image(systemName: "gearshape.fill")
                     .font(.system(size: 18, weight: .semibold))
-                    .frame(width: 44, height: 44)
+                    .frame(width: 52, height: 52)
                     .background(.ultraThinMaterial, in: Circle())
             }
             .accessibilityLabel("Настройки помощника")
@@ -80,7 +81,7 @@ struct AssistantView: View {
             } label: {
                 Image(systemName: "xmark")
                     .font(.system(size: 18, weight: .bold))
-                    .frame(width: 44, height: 44)
+                    .frame(width: 52, height: 52)
                     .background(.ultraThinMaterial, in: Circle())
             }
             .accessibilityLabel("Закрыть")
@@ -154,8 +155,8 @@ struct AssistantView: View {
                     } label: {
                         Text(suggestion)
                             .font(.system(.callout, design: .rounded).weight(.medium))
-                            .padding(.horizontal, 14)
-                            .frame(minHeight: 44)
+                            .padding(.horizontal, 16)
+                            .frame(minHeight: 52)
                             .background(.ultraThinMaterial, in: Capsule())
                             .overlay(Capsule().strokeBorder(Color.white.opacity(0.15), lineWidth: 1))
                     }
@@ -193,7 +194,7 @@ struct AssistantView: View {
                 Image(systemName: "xmark.circle.fill")
                     .font(.system(size: 20))
                     .foregroundStyle(.secondary)
-                    .frame(width: 44, height: 44)
+                    .frame(width: 52, height: 52)
             }
             .buttonStyle(.plain)
             .accessibilityLabel("Скрыть ошибку")

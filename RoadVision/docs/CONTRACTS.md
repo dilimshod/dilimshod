@@ -442,6 +442,10 @@ Key shell APIs:
 
 ### 2.1 Camera & recognition (folders Camera/, Detection/, Shared/)
 ```swift
+enum ModelStatus: Equatable, Sendable {                // Detection/VehicleDetector.swift
+    case loading, ready(String), missing, failed(String)
+    var isReady: Bool { get }; var modelName: String? { get }; var displayText: String { get }   // Russian
+}
 @Observable @MainActor final class RecognitionPipeline {
     init(location: LocationService, settings: AppSettings, signals: TrafficSignalService)
     let camera: CameraService
@@ -449,31 +453,66 @@ Key shell APIs:
     private(set) var visibleCounts: [VehicleKind: Int] // currently visible confirmed objects by kind
     private(set) var uniqueCounts: [VehicleKind: Int]  // unique confirmed objects since reset
     var totalUniqueVehicles: Int { get }
+    var totalVisibleVehicles: Int { get }               // added: visible confirmed road vehicles
     private(set) var fps: Double
     private(set) var inferenceMs: Double
-    private(set) var detectorStatus: ModelStatus       // enum ModelStatus: Equatable { case loading, ready(String), missing, failed(String) }
+    private(set) var detectorStatus: ModelStatus
     private(set) var makeClassifierStatus: ModelStatus
-    private(set) var currentLightColor: TrafficLightColor?   // nearest/largest traffic light
-    private(set) var isRunning: Bool
+    private(set) var currentLightColor: TrafficLightColor?   // largest confirmed traffic light (.unknown = colour not determined); nil = none
+    private(set) var isRunning: Bool                    // capture session running
     private(set) var cameraPermissionDenied: Bool
-    var isRecording: Bool { get }
-    func start(); func stop()
+    private(set) var frameSize: CGSize                  // added: upright buffer size in pixels (for aspect-fill box mapping)
+    private(set) var cameraError: String?               // added: configuration error (e.g. no camera in the simulator)
+    private(set) var isCameraInterrupted: Bool          // added: system interruption (other app, Split View, call…)
+    private(set) var recordingStartedAt: Date?          // added
+    private(set) var lastRecordingFiles: [URL]          // added
+    private(set) var recordingError: String?            // added
+    private(set) var processedFrames: Int               // added
+    var isRecording: Bool { get }                       // stays true until the CSV files of finishRecording() are on disk
+    func start(); func stop()                           // start() is idempotent; asks for camera permission on first use
     func resetCounters()
-    func startRecording(); func stopRecording() -> [URL]    // CSV files written to Documents/Experiments/
+    func startRecording(); @discardableResult func stopRecording() -> [URL]    // CSV files written to Documents/Experiments/
+    func finishRecording() async -> [URL]               // added: same as stopRecording(), writes off the main actor
+    nonisolated static var experimentsDirectory: URL { get }   // added: Documents/Experiments/
 }
-final class CameraService            // AVCaptureSession wrapper; `session: AVCaptureSession`; BGRA frames delegate; fieldOfView
-struct CameraPreviewView: UIViewRepresentable { init(session: AVCaptureSession) }   // aspect-fill preview layer
-struct DetectionOverlayView: View { init(tracks: [TrackedObject], showDistance: Bool, showSpeed: Bool) }
-struct RecognitionView: View          // full-screen camera UI (see README for layout); has the corner map button
-struct CameraPiPView: View { init(pipeline: RecognitionPipeline) }   // small live camera + boxes, used by the navigator
+final class CameraService: NSObject, @unchecked Sendable {     // not MainActor
+    let session: AVCaptureSession
+    var frameHandler: ((CVPixelBuffer, CMTime) -> Void)?       // called on the serial "camera.frames" queue, frames upright BGRA
+    var stateHandler: (@Sendable (_ isRunning: Bool, _ isInterrupted: Bool) -> Void)?   // any queue
+    var horizontalFieldOfView: Double { get }                  // activeFormat.videoFieldOfView, fallback 65
+    var isRunning: Bool { get }; var isInterrupted: Bool { get }; var videoRotationAngle: Double { get }
+    static var authorizationStatus: AVAuthorizationStatus { get }; static func requestAccess() async -> Bool
+    func start(completion: (@Sendable (Error?) -> Void)? = nil); func stop()   // on the serial "camera.session" queue
+}
+extension Notification.Name { static let cameraPreviewLayerDidChange: Notification.Name }   // object: AVCaptureSession
+struct CameraPreviewView: UIViewRepresentable { init(session: AVCaptureSession, videoGravity: AVLayerVideoGravity = .resizeAspectFill) }
+// CHANGED: imageSize (the pipeline's frameSize) is required to map boxes with aspect-fill geometry.
+struct DetectionOverlayView: View {
+    init(tracks: [TrackedObject], imageSize: CGSize, showDistance: Bool, showSpeed: Bool, showLabels: Bool = true)
+    static func color(for kind: VehicleKind) -> Color
+}
+struct RecognitionView: View          // full-screen camera UI; has the corner map button (→ app.switchTo(.navigator))
+struct RecognitionStatusView: View { init(pipeline: RecognitionPipeline) }   // status sheet (models, fps, counters, disclaimers)
+struct CameraPiPView: View { init(pipeline: RecognitionPipeline) }   // small live camera + boxes, tap → app.switchTo(.camera)
+final class VehicleDetector; final class MakeClassifier; enum VehicleMakeNormalizer; final class RecognitionWorker   // internal
 // Shared/ components also used by the navigator:
-struct SpeedometerView: View { init(speedKmh: Double?, limitKmh: Int?, warningTolerance: Double = 5, compact: Bool = false) }
+struct SpeedometerView: View {
+    init(speedKmh: Double?, limitKmh: Int?, warningTolerance: Double = 5, compact: Bool = false, warningEnabled: Bool = true)
+    static func isOverLimit(speedKmh: Double?, limitKmh: Int?, tolerance: Double) -> Bool
+}
 struct SpeedLimitSignView: View { init(kmh: Int, size: CGFloat = 44) }
 struct GlassIconButton: View { init(systemName: String, label: String, size: CGFloat = 52, tint: Color = .white, action: @escaping () -> Void) }
+struct RVPressableButtonStyle: ButtonStyle            // added: press feedback (scale/opacity), any background
+struct TrafficLightIndicatorView: View { init(color: TrafficLightColor, lampSize: CGFloat = 16, showsCaption: Bool = true)
+    static func displayColor(for color: TrafficLightColor) -> Color }   // added
+struct TrafficLightDotView: View { init(color: TrafficLightColor, size: CGFloat = 14) }   // added
 ```
 The detector model is looked up in the bundle by name, first found wins: `RoadVisionDetector`, `yolo26n`, `yolo11n`,
 `yolov8n` (`.mlmodelc`). The make classifier: `VehicleMakeClassifier.mlmodelc`. Missing model → `.missing`, the UI shows
 an explanatory banner, the app keeps working (speed, navigator, assistant).
+Frames are rotated upright by the capture connection (`AVCaptureDevice.RotationCoordinator`; while a preview layer is
+attached, the coordinator's *preview* angle is used for the frames too), so Vision always runs with orientation `.up` and
+normalized boxes map onto the buffer; the overlay maps them onto the aspect-fill preview with `frameSize`.
 
 ### 2.2 Road data services (folder RoadData/)
 ```swift
@@ -580,22 +619,45 @@ avoidTolls, avoidHighways, showCameraPiP, speedWarningEnabled, speedWarningToler
     init(settings: AppSettings, speech: SpeechService)
     var contextProvider: (@MainActor () -> DrivingContext)?
     private(set) var messages: [ChatMessage]
-    private(set) var isListening: Bool; private(set) var isThinking: Bool
-    private(set) var partialTranscript: String
+    var isListening: Bool { get }                  // computed from recognizer (read-only, as before)
+    private(set) var isThinking: Bool
+    var partialTranscript: String { get }          // computed from recognizer
     private(set) var activeProviderName: String
-    private(set) var errorMessage: String?
+    var errorMessage: String? { get }              // chat error, else speech-input error
     var draft: String
     func toggleListening(); func sendDraft(); func send(_ text: String) async
     func stopSpeaking(); func clearConversation()
+    // additions:
+    let recognizer: SpeechRecognizerService
+    var isStartingListening: Bool { get }; var recognitionNotice: String? { get }
+    var speechPermissionDenied: Bool { get }; var isSpeaking: Bool { get }
+    func cancelResponse(); func dismissError(); func refreshProviderName()
 }
-protocol ChatBackend { var displayName: String { get }; func stream(messages: [ChatMessage]) -> AsyncThrowingStream<String, Error> }  // yields deltas
-final class OpenAICompatibleBackend: ChatBackend   // preset + key + model
-final class AppleOnDeviceBackend: ChatBackend      // iOS 26 FoundationModels, only when available & locale supported
-final class KeychainStore { static let shared; func string(for key: String) -> String?; func set(_ value: String?, for key: String) }
-final class SpeechRecognizerService                // SFSpeechRecognizer + AVAudioEngine, uses SpeechService.prepareForRecording/finishRecording
+protocol ChatBackend {                              // yields deltas of the visible answer only
+    var displayName: String { get }
+    var providerID: String { get }                  // added (default "")
+    var historyCharacterBudget: Int { get }         // added (default 6000; Apple 2500)
+    func stream(messages: [ChatMessage]) -> AsyncThrowingStream<String, Error>
+}
+struct ChatBackendError: LocalizedError { enum Kind { unauthorized, rateLimited, http(Int), timeout, network, invalidConfiguration, emptyResponse, server, unavailable }; let kind; let message }
+final class OpenAICompatibleBackend: ChatBackend { init(preset:apiKey: String?, model: String /* "" = default */, session: = .shared, firstByteTimeout: = 15) }
+final class AppleOnDeviceBackend: ChatBackend { init(); static func status(localeIdentifier: String) -> AppleIntelligenceStatus }
+enum AppleIntelligenceStatus { available, requiresNewerSystem, deviceNotEligible, notEnabled, modelNotReady, unsupportedLanguage, unavailable; isAvailable; message }
+enum ChatBackendResolver { static func resolve(settings:) -> ChatBackendResolution /* backends + problem */; providerTitle(for:); apiKey(for:); apiKeyAccount(for:);
+                           effectivePreset(_:settings:); acceptsAPIKey(_:); usesCustomBaseURL(_:); autoChainDescription(settings:); selectableProviderIDs }
+enum ChatModelCatalog { static func fetchModels(for: ChatProviderPreset, apiKey: String?) async throws -> [String] }
+enum ChatConnectionTester { @MainActor static func run(settings: AppSettings) async -> ChatConnectionTestResult }
+final class KeychainStore { static let shared; func string(for key: String) -> String?; func set(_ value: String?, for key: String)
+                            static func apiKeyAccount(for presetID: String) -> String /* "ai.key.<id>" */; func contains(_ key: String) -> Bool }
+@Observable @MainActor final class SpeechRecognizerService {   // SFSpeechRecognizer + AVAudioEngine, uses SpeechService.prepareForRecording/finishRecording
+    init(speech: SpeechService)
+    private(set) var isListening, isStarting, transcript, authorizationDenied, errorMessage, fallbackNotice, activeLocaleIdentifier, isOnDevice
+    func start(localeIdentifier: String, onFinal: @escaping @MainActor (String) -> Void) async; func stop(); func cancel(); func clearError()
+}
 struct AssistantView: View                         // chat sheet: bubbles, mic button, text field, provider label
-struct AssistantButton: View                       // floating round button (sparkles/mic) → app.showAssistant = true
-struct SettingsView: View                          // all settings sections (see AppSettings) + data-source disclaimers
+struct AssistantButton: View { init(size: CGFloat = 60) }   // floating round button (sparkles/mic) → app.showAssistant = true
+struct SettingsView: View                          // all settings sections (see AppSettings) + data-source disclaimers;
+                                                   // embeds the navigator's `NavigationSettingsSection()` (Navigation/)
 ```
 
 ---------------------------------------------------------------------------------------------------
@@ -623,3 +685,23 @@ UI: lead vehicle highlighted (animated corner brackets + glow, colour by status)
 bottom-centre ("own car") to the lead box bottom-centre with a floating label "≈ 18 м · 1,4 с", ego-lane corridor overlay,
 safe-distance HUD (current gap vs recommended in motion / when stopped, stopping distance, TTC), forward-collision warning
 (haptic + tone + voice, throttled), tappable boxes with a detail card.
+
+---------------------------------------------------------------------------------------------------
+## 4. Project, resources and models (added by the project-files slice)
+- `RoadVision.xcodeproj` (objectVersion 77): one app target `RoadVision`, two synchronized folders —
+  `RoadVision/` (app) and `Packages/RoadVisionCore/Sources/RoadVisionCore` (core). Any file added there is built
+  automatically; non-Swift files in `RoadVision/` are copied into the bundle as resources, so do NOT add extra
+  README/markdown/JSON files there (duplicate resource names break the build). `RoadVision/Models/README.md` is
+  excluded via a membership exception in the project.
+- `Config/Info.plist` (outside the synced folder) holds UIBackgroundModes [location, audio], ATS
+  `NSAllowsLocalNetworking`, `UIFileSharingEnabled`, `LSSupportsOpeningDocumentsInPlace`. Usage descriptions and the
+  rest come from `INFOPLIST_KEY_*` build settings.
+- Asset catalog: `AppIcon`, `AccentColor` (asset symbol generation is on → do not declare your own `Color.accent` /
+  `ColorResource.accent`).
+- Core ML model classes are NOT generated (`COREML_CODEGEN_LANGUAGE = None`): load models by bundle resource name
+  (`Bundle.main.url(forResource: "RoadVisionDetector", withExtension: "mlmodelc")`). Still avoid naming Swift types
+  `RoadVisionDetector*` / `VehicleMakeClassifier*` so the project keeps working if someone re-enables generation.
+- `RoadVision/Models/RoadVisionDetector.mlpackage` (present): YOLO11n COCO-80, 640×640 RGB image input named `image`,
+  pipeline mlProgram(FP16) → NonMaximumSuppression; optional Double inputs `iouThreshold` (default 0.45) and
+  `confidenceThreshold` (default 0.25); outputs `confidence` [N×80] and `coordinates` [N×4] (normalized x,y,w,h) →
+  Vision returns `VNRecognizedObjectObservation` with COCO labels ("car", "traffic light", …).

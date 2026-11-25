@@ -36,8 +36,10 @@ struct NavigationMapView: UIViewRepresentable {
     var showsTraffic: Bool
     var trafficTileTemplate: String
     var allowsRouteSelection: Bool
-    /// Bottom inset (points) kept free of routes when fitting the overview (space for the route cards).
-    var overviewBottomInset: CGFloat = 340
+    /// Heights of the SwiftUI overlays above (top) and below (bottom) the map, measured inside the safe area.
+    /// Applied as the map's layout margins (MapKit keeps its compass, scale and legal label inside them) and as
+    /// padding when fitting the route overview.
+    var mapInsets: UIEdgeInsets = .zero
     @Binding var isFollowing: Bool
     var onSelectRoute: (Int) -> Void
     var onLongPress: (CLLocationCoordinate2D) -> Void
@@ -66,7 +68,10 @@ struct NavigationMapView: UIViewRepresentable {
         coordinator.onSelectRoute = onSelectRoute
         coordinator.onLongPress = onLongPress
         coordinator.allowsRouteSelection = allowsRouteSelection
-        coordinator.overviewBottomInset = overviewBottomInset
+        if map.layoutMargins != mapInsets {
+            map.layoutMargins = mapInsets
+        }
+        coordinator.mapInsets = mapInsets
 
         if coordinator.appliedShowsTraffic != showsTraffic {
             coordinator.appliedShowsTraffic = showsTraffic
@@ -145,7 +150,7 @@ struct NavigationMapView: UIViewRepresentable {
         var onSelectRoute: ((Int) -> Void)?
         var onLongPress: ((CLLocationCoordinate2D) -> Void)?
         var allowsRouteSelection = false
-        var overviewBottomInset: CGFloat = 340
+        var mapInsets: UIEdgeInsets = .zero
         var appliedShowsTraffic = false
 
         private var routeOverlays: [String: RoutePolyline] = [:]
@@ -156,6 +161,7 @@ struct NavigationMapView: UIViewRepresentable {
         private var lastMode: NavigationMapView.CameraMode?
         private var lastFollowing = false
         private var fittedRouteSignature: [String] = []
+        private var fittedInsets: UIEdgeInsets = .zero
         private var lastCameraHeading: CLLocationDirection = 0
         private var isProgrammaticCameraChange = false
 
@@ -331,8 +337,15 @@ struct NavigationMapView: UIViewRepresentable {
                     map.setUserTrackingMode(.none, animated: false)
                 }
                 let signature = routes.map(Self.routeKey)
-                if (modeChanged || signature != fittedRouteSignature || (followingChanged && following)), !routes.isEmpty {
+                // The overlays are measured after they appear, so refit once their height settles (while the
+                // user has not moved the map).
+                let insetsChanged = abs(mapInsets.top - fittedInsets.top) > 20
+                    || abs(mapInsets.bottom - fittedInsets.bottom) > 20
+                let needsFit = modeChanged || signature != fittedRouteSignature
+                    || (followingChanged && following) || (following && insetsChanged)
+                if needsFit, !routes.isEmpty {
                     fittedRouteSignature = signature
+                    fittedInsets = mapInsets
                     fitRoutes(on: map, routes: routes, animated: true)
                 }
 
@@ -357,7 +370,18 @@ struct NavigationMapView: UIViewRepresentable {
             }
             guard !rect.isNull else { return }
             flattenCamera(map)
-            let padding = UIEdgeInsets(top: 170, left: 40, bottom: overviewBottomInset, right: 90)
+            let safe = map.safeAreaInsets
+            var top = safe.top + mapInsets.top + 24
+            var bottom = safe.bottom + mapInsets.bottom + 24
+            // Keep at least 120 pt of map visible even with tall overlays.
+            let available = map.bounds.height - top - bottom
+            if map.bounds.height > 0, available < 120 {
+                let excess = 120 - available
+                let share = top + bottom > 0 ? top / (top + bottom) : 0.5
+                top = max(safe.top, top - excess * share)
+                bottom = max(safe.bottom, bottom - excess * (1 - share))
+            }
+            let padding = UIEdgeInsets(top: top, left: 40, bottom: bottom, right: 84)
             setProgrammatic {
                 map.setVisibleMapRect(rect, edgePadding: padding, animated: animated)
             }

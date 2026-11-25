@@ -10,6 +10,7 @@ struct SettingsView: View {
                 SettingsRecognitionSection()
                 SettingsExperimentsSection()
                 SettingsNavigationSection()
+                NavigationSettingsSection()
                 SettingsRoadDataSection()
                 SettingsSignalSection()
                 SettingsAssistantSection()
@@ -229,27 +230,18 @@ private struct SettingsExperimentsSection: View {
 
 // MARK: - Navigation
 
+/// General navigator preferences. Routing engine, Valhalla server, route attributes and traffic sources are in
+/// `NavigationSettingsSection` (navigator slice), which follows this section in the form.
 private struct SettingsNavigationSection: View {
     @Environment(AppState.self) private var app
-    @State private var valhallaDraft = ""
-    @State private var valhallaError: String?
-    @State private var trafficTemplateDraft = ""
-    @State private var trafficTemplateError: String?
 
     var body: some View {
         @Bindable var settings = app.settings
         Section {
             Toggle("Голосовые подсказки", isOn: $settings.voiceGuidanceEnabled)
-            Picker("Построение маршрутов", selection: $settings.routingEngine) {
-                Text("Авто: Apple, иначе OSM").tag("auto")
-                Text("Apple Maps").tag("apple")
-                Text("OpenStreetMap (Valhalla)").tag("valhalla")
-            }
             Toggle("Избегать платных дорог", isOn: $settings.avoidTolls)
             Toggle("Избегать автомагистралей", isOn: $settings.avoidHighways)
             Toggle("Окно камеры поверх карты", isOn: $settings.showCameraPiP)
-            Toggle("Слой пробок на карте", isOn: $settings.showTrafficOnMap)
-            Toggle("Ограничения, полосы и светофоры по маршруту", isOn: $settings.routeAttributesEnabled)
             Toggle("Предупреждать о превышении скорости", isOn: $settings.speedWarningEnabled)
             Stepper(value: $settings.speedWarningTolerance, in: 0...30, step: 1) {
                 HStack {
@@ -273,98 +265,8 @@ private struct SettingsNavigationSection: View {
         } header: {
             Text("Навигация")
         } footer: {
-            Text("Apple Maps может не строить маршруты в Узбекистане — в режиме «Авто» маршрут строится по OpenStreetMap (Valhalla). Отметки о ДТП, ремонте и т. п. хранятся только на этом телефоне.")
+            Text("Ограничение скорости берётся из OpenStreetMap и может отсутствовать или быть устаревшим. Отметки о ДТП, ремонте и т. п. хранятся только на этом телефоне и удаляются по истечении срока.")
         }
-
-        Section {
-            VStack(alignment: .leading, spacing: 6) {
-                Text("Сервер Valhalla")
-                    .font(.subheadline)
-                TextField(Valhalla.defaultEndpoint, text: $valhallaDraft)
-                    .keyboardType(.URL)
-                    .textInputAutocapitalization(.never)
-                    .autocorrectionDisabled()
-                    .submitLabel(.done)
-                    .onSubmit(applyValhalla)
-                if let valhallaError {
-                    Text(valhallaError)
-                        .font(.footnote)
-                        .foregroundStyle(.red)
-                }
-            }
-            if settings.valhallaEndpoint != Valhalla.defaultEndpoint {
-                Button("Вернуть сервер по умолчанию") {
-                    app.settings.valhallaEndpoint = Valhalla.defaultEndpoint
-                    valhallaDraft = Valhalla.defaultEndpoint
-                    valhallaError = nil
-                }
-            }
-            VStack(alignment: .leading, spacing: 6) {
-                Text("Свой слой пробок (тайлы)")
-                    .font(.subheadline)
-                TextField("https://…/{z}/{x}/{y}.png", text: $trafficTemplateDraft)
-                    .keyboardType(.URL)
-                    .textInputAutocapitalization(.never)
-                    .autocorrectionDisabled()
-                    .submitLabel(.done)
-                    .onSubmit(applyTrafficTemplate)
-                if let trafficTemplateError {
-                    Text(trafficTemplateError)
-                        .font(.footnote)
-                        .foregroundStyle(.red)
-                }
-            }
-        } header: {
-            Text("Серверы навигации")
-        } footer: {
-            Text("Публичный сервер Valhalla (FOSSGIS) — только для умеренного использования. Маршруты и атрибуты дорог: © участники OpenStreetMap. Шаблон тайлов пробок — от провайдера, к которому у вас есть доступ; пусто = выключено.")
-        }
-        .onAppear {
-            valhallaDraft = app.settings.valhallaEndpoint
-            trafficTemplateDraft = app.settings.trafficTileTemplate
-        }
-        .onDisappear {
-            applyValhalla()
-            applyTrafficTemplate()
-        }
-    }
-
-    private func applyValhalla() {
-        let trimmed = valhallaDraft.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed.isEmpty {
-            app.settings.valhallaEndpoint = Valhalla.defaultEndpoint
-            valhallaDraft = Valhalla.defaultEndpoint
-            valhallaError = nil
-            return
-        }
-        guard let valid = settingsValidatedURL(trimmed) else {
-            valhallaError = "Введите адрес вида https://valhalla.example.org"
-            return
-        }
-        var endpoint = valid
-        while endpoint.hasSuffix("/") { endpoint.removeLast() }
-        app.settings.valhallaEndpoint = endpoint
-        valhallaDraft = endpoint
-        valhallaError = nil
-    }
-
-    private func applyTrafficTemplate() {
-        let trimmed = trafficTemplateDraft.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed.isEmpty {
-            app.settings.trafficTileTemplate = ""
-            trafficTemplateError = nil
-            return
-        }
-        let hasPlaceholders = trimmed.contains("{z}") && trimmed.contains("{x}") && trimmed.contains("{y}")
-        let probe = trimmed.replacingOccurrences(of: "{z}", with: "1")
-            .replacingOccurrences(of: "{x}", with: "1")
-            .replacingOccurrences(of: "{y}", with: "1")
-        guard hasPlaceholders, settingsValidatedURL(probe) != nil else {
-            trafficTemplateError = "Нужен адрес с {z}, {x} и {y}, например https://tiles.example.org/{z}/{x}/{y}.png"
-            return
-        }
-        app.settings.trafficTileTemplate = trimmed
-        trafficTemplateError = nil
     }
 }
 
@@ -389,6 +291,10 @@ private struct SettingsRoadDataSection: View {
                 Text("Свой сервер").tag(Self.customTag)
             }
             .disabled(!settings.roadDataEnabled)
+            .onAppear(perform: syncChoice)
+            .onChange(of: choice) { _, newValue in
+                choiceChanged(newValue)
+            }
             if choice == Self.customTag {
                 TextField("https://example.org/api/interpreter", text: $customEndpoint)
                     .keyboardType(.URL)
@@ -396,6 +302,7 @@ private struct SettingsRoadDataSection: View {
                     .autocorrectionDisabled()
                     .submitLabel(.done)
                     .onSubmit(applyCustomEndpoint)
+                    .onDisappear(perform: applyCustomEndpoint)
                 if let customError {
                     Text(customError)
                         .font(.footnote)
@@ -406,13 +313,6 @@ private struct SettingsRoadDataSection: View {
             Text("Данные о дорогах")
         } footer: {
             Text("Полосы, ограничения скорости, светофоры, переходы, камеры и ремонт — из OpenStreetMap (© участники OpenStreetMap, лицензия ODbL) через публичный Overpass API. Если сервер не отвечает, используется резервный.")
-        }
-        .onAppear(perform: syncChoice)
-        .onChange(of: choice) { _, newValue in
-            choiceChanged(newValue)
-        }
-        .onDisappear {
-            if choice == Self.customTag { applyCustomEndpoint() }
         }
     }
 
@@ -522,6 +422,8 @@ private struct SettingsAssistantSection: View {
     @Environment(AppState.self) private var app
     @State private var apiKeyDraft = ""
     @State private var keyIsSaved = false
+    /// Preset whose key is currently in `apiKeyDraft` — a draft is only ever saved under this preset.
+    @State private var draftPresetID: String?
     @State private var savedKeyPresetIDs: Set<String> = []
     @State private var models: [String] = []
     @State private var isLoadingModels = false
@@ -539,6 +441,21 @@ private struct SettingsAssistantSection: View {
                 ForEach(ChatBackendResolver.selectableProviderIDs, id: \.self) { id in
                     Text(ChatBackendResolver.providerTitle(for: id)).tag(id)
                 }
+            }
+            // Lifecycle handlers live on one row (not on the Section) so that they run exactly once.
+            .onAppear {
+                loadKey(for: app.settings.aiProviderID)
+                refreshSavedKeys()
+                appleStatus = AppleOnDeviceBackend.status(localeIdentifier: app.settings.speechLocaleIdentifier)
+            }
+            .onDisappear {
+                saveKey(for: app.settings.aiProviderID)
+            }
+            .onChange(of: settings.aiProviderID) { oldValue, newValue in
+                providerChanged(from: oldValue, to: newValue)
+            }
+            .onChange(of: settings.speechLocaleIdentifier) { _, newValue in
+                appleStatus = AppleOnDeviceBackend.status(localeIdentifier: newValue)
             }
             providerInfo(providerID: providerID, preset: preset)
             if providerID == ChatPresets.autoID {
@@ -558,20 +475,6 @@ private struct SettingsAssistantSection: View {
             Text("ИИ‑помощник")
         } footer: {
             Text("Все варианты бесплатны. Ключи API хранятся только в Связке ключей iPhone и отправляются лишь выбранному сервису. Названия моделей меняются — при ошибке загрузите актуальный список.")
-        }
-        .onAppear {
-            loadKey(for: app.settings.aiProviderID)
-            refreshSavedKeys()
-            appleStatus = AppleOnDeviceBackend.status(localeIdentifier: app.settings.speechLocaleIdentifier)
-        }
-        .onDisappear {
-            saveKey(for: app.settings.aiProviderID)
-        }
-        .onChange(of: settings.aiProviderID) { oldValue, newValue in
-            providerChanged(from: oldValue, to: newValue)
-        }
-        .onChange(of: settings.speechLocaleIdentifier) { _, newValue in
-            appleStatus = AppleOnDeviceBackend.status(localeIdentifier: newValue)
         }
 
         Section {
@@ -756,12 +659,13 @@ private struct SettingsAssistantSection: View {
         } else {
             apiKeyDraft = ""
         }
+        draftPresetID = presetID
         keyIsSaved = !apiKeyDraft.isEmpty
     }
 
     /// Writes the key field to the Keychain (empty → deletes the stored key).
     private func saveKey(for presetID: String) {
-        guard ChatBackendResolver.acceptsAPIKey(presetID) else { return }
+        guard presetID == draftPresetID, ChatBackendResolver.acceptsAPIKey(presetID) else { return }
         let trimmed = apiKeyDraft.trimmingCharacters(in: .whitespacesAndNewlines)
         KeychainStore.shared.set(trimmed.isEmpty ? nil : trimmed, for: ChatBackendResolver.apiKeyAccount(for: presetID))
         apiKeyDraft = trimmed

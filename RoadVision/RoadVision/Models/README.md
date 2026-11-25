@@ -42,12 +42,11 @@ python tools/export_yolo_coreml.py --quantize 8 --force          # ≈ в 2 ра
 Stanford Cars — только для некоммерческих исследований, и в нём почти нет машин узбекского автопарка
 (Cobalt, Nexia, Spark, Damas, Gentra, BYD, Chery…). Для реальной точности нужен собственный размеченный датасет.
 
-## Важно: имена типов Swift
+## Важно: классы моделей не генерируются
 
-Для каждого `*.mlpackage` Xcode генерирует Swift‑классы с именем модели (`RoadVisionDetector`,
-`RoadVisionDetectorInput`, `RoadVisionDetectorOutput`, `VehicleMakeClassifier`, …). Не создавайте в коде
-собственные типы с такими именами — будет конфликт. Приложение загружает модели по имени файла из бандла
-и сгенерированные классы не использует.
+В проекте задано `COREML_CODEGEN_LANGUAGE = None`: Xcode не создаёт Swift‑классы для моделей. Приложение загружает
+`RoadVisionDetector.mlmodelc` и `VehicleMakeClassifier.mlmodelc` по имени файла из бандла. Поэтому модель можно
+заменить файлом с тем же именем без изменений в коде.
 
 ## Лицензии
 

@@ -72,6 +72,8 @@ struct RecognitionView: View {
                     }
                     TrafficLightSlot(pipeline: pipeline)
                 }
+                // The road chip truncates first; buttons and the status line keep their size.
+                .layoutPriority(1)
             }
 
             if !isLandscape {
@@ -226,7 +228,7 @@ private struct RoadChip: View {
             .foregroundStyle(.white)
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
-            .frame(maxWidth: 240, alignment: .leading)
+            .frame(maxWidth: 210, alignment: .leading)
             .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
             .accessibilityElement(children: .ignore)
             .accessibilityLabel(Self.accessibilityText(road))
@@ -270,10 +272,14 @@ private struct StatusLineButton: View {
                 Circle()
                     .fill(dotColor)
                     .frame(width: 8, height: 8)
-                Text(text)
-                    .font(.system(size: 12, weight: .semibold, design: .rounded))
-                    .monospacedDigit()
-                    .lineLimit(1)
+                // Full "к/с · мс · model" when it fits, otherwise without the model name.
+                ViewThatFits(in: .horizontal) {
+                    Text(text)
+                    Text(shortText)
+                }
+                .font(.system(size: 12, weight: .semibold, design: .rounded))
+                .monospacedDigit()
+                .lineLimit(1)
             }
             .foregroundStyle(.white)
             .padding(.horizontal, 10)
@@ -299,6 +305,11 @@ private struct StatusLineButton: View {
         case .failed:
             return "Ошибка модели"
         }
+    }
+
+    private var shortText: String {
+        guard case .ready = pipeline.detectorStatus, pipeline.isRunning else { return text }
+        return "\(Int(pipeline.fps.rounded())) к/с · \(Int(pipeline.inferenceMs.rounded())) мс"
     }
 
     private var dotColor: Color {
@@ -371,7 +382,9 @@ private struct CountersPanel: View {
         .padding(.horizontal, 10)
         .padding(.vertical, 6)
         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-        .onLongPressGesture(minimumDuration: 0.8, perform: reset)
+        .simultaneousGesture(
+            LongPressGesture(minimumDuration: 0.8).onEnded { _ in reset() }
+        )
         .sensoryFeedback(.success, trigger: resetCount)
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Уникальные транспортные средства")
@@ -536,7 +549,7 @@ private struct RecordButton: View {
                 if isSaving {
                     ProgressView()
                         .tint(.white)
-                    Text("Сохранение…")
+                        .accessibilityLabel("Сохранение")
                 } else if isRecording, let startedAt {
                     TimelineView(.periodic(from: startedAt, by: 1)) { context in
                         Text(Self.elapsedText(from: startedAt, to: context.date))
