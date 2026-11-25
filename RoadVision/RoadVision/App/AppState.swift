@@ -28,6 +28,8 @@ final class AppState {
     let recognition: RecognitionPipeline
 
     @ObservationIgnored private var started = false
+    /// Last app-wide lifecycle state handled by `handleScenePhase` (dedupes per-scene / repeated notifications).
+    @ObservationIgnored private var handledPhase: ScenePhase?
 
     init() {
         let settings = AppSettings()
@@ -65,6 +67,10 @@ final class AppState {
         weather.start()
         signals.start()
         updateCameraForMode()
+        // The first didBecomeActive notification can fire before the root view subscribes.
+        if UIApplication.shared.applicationState != .background {
+            handleScenePhase(.active)
+        }
     }
 
     /// Switches between the recognition screen and the navigator.
@@ -90,7 +96,11 @@ final class AppState {
         }
     }
 
+    /// App-wide lifecycle (camera, GPS, idle timer). Driven by UIApplication notifications, not per-scene
+    /// `scenePhase`, and deduplicated so several scenes / repeated notifications act only once per change.
     func handleScenePhase(_ phase: ScenePhase) {
+        guard phase != .inactive, phase != handledPhase else { return }
+        handledPhase = phase
         switch phase {
         case .active:
             UIApplication.shared.isIdleTimerDisabled = true

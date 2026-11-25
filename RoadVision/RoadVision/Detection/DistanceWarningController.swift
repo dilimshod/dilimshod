@@ -104,7 +104,7 @@ final class DistanceWarningController {
             lastKeepDistanceAlert = now   // no "keep distance" right after the collision warning
             notificationFeedback.notificationOccurred(.error)
             playAlertTone()
-            speech?.speak(Self.collisionPhrase, priority: .high, language: "ru-RU")
+            speech?.speak(Self.collisionPhrase, priority: .high)
         } else if Self.isTooClose(assessment, policy: policy) {
             collisionSince = nil
             let since = tooCloseSince ?? now
@@ -113,7 +113,7 @@ final class DistanceWarningController {
             if let last = lastKeepDistanceAlert, now.timeIntervalSince(last) < Self.keepDistanceRepeatInterval { return }
             lastKeepDistanceAlert = now
             lightImpact.impactOccurred()
-            speech?.speak(Self.keepDistancePhrase, priority: .normal, language: "ru-RU")
+            speech?.speak(Self.keepDistancePhrase, priority: .normal)
         } else {
             collisionSince = nil
             tooCloseSince = nil

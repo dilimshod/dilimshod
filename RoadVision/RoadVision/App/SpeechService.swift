@@ -8,33 +8,32 @@ enum SpeechPriority: Int, Comparable {
     static func < (lhs: SpeechPriority, rhs: SpeechPriority) -> Bool { lhs.rawValue < rhs.rawValue }
 }
 
-/// Text-to-speech shared by navigation prompts and the AI assistant.
-/// Also owns the audio-session switching between playback (prompts) and recording (speech input).
+/// Text-to-speech for navigation prompts and driving warnings.
+/// All prompts are Russian, so the voice language is fixed to ru-RU (no setting can switch it).
+/// The audio session ducks other audio only while speaking and is deactivated after the last utterance.
 @Observable
 @MainActor
 final class SpeechService: NSObject {
     private(set) var isSpeaking = false
     /// Global mute for all speech output.
     var isMuted = false
-    /// Default BCP-47 language for utterances.
-    var defaultLanguage = "ru-RU"
-    /// True while the microphone is in use (set by the speech recognizer).
-    private(set) var isRecordingSessionActive = false
+    /// BCP-47 language of every utterance. Fixed: all prompts in the app are written in Russian.
+    static let voiceLanguage = "ru-RU"
 
     @ObservationIgnored private let synthesizer = AVSpeechSynthesizer()
     @ObservationIgnored private var currentPriority: SpeechPriority = .low
-    @ObservationIgnored private var voiceCache: [String: AVSpeechSynthesisVoice] = [:]
+    @ObservationIgnored private var cachedVoice: AVSpeechSynthesisVoice?
 
     override init() {
         super.init()
         synthesizer.delegate = self
     }
 
-    /// Speaks `text`. A `.high` priority utterance interrupts whatever is being spoken;
+    /// Speaks `text` in Russian. A `.high` priority utterance interrupts whatever is being spoken;
     /// `.low` utterances are dropped while something else is speaking.
-    func speak(_ text: String, priority: SpeechPriority = .normal, language: String? = nil) {
+    func speak(_ text: String, priority: SpeechPriority = .normal) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !isMuted, !trimmed.isEmpty, !isRecordingSessionActive else { return }
+        guard !isMuted, !trimmed.isEmpty else { return }
         if synthesizer.isSpeaking {
             if priority == .low { return }
             if priority >= currentPriority && priority == .high {
@@ -43,7 +42,7 @@ final class SpeechService: NSObject {
         }
         activatePlaybackSession()
         let utterance = AVSpeechUtterance(string: trimmed)
-        utterance.voice = voice(for: language ?? defaultLanguage)
+        utterance.voice = russianVoice()
         utterance.rate = AVSpeechUtteranceDefaultSpeechRate
         utterance.pitchMultiplier = 1.0
         utterance.postUtteranceDelay = 0.05
@@ -57,24 +56,41 @@ final class SpeechService: NSObject {
         }
     }
 
-    /// Picks the highest-quality installed voice for the language, falling back to Russian, then the system default.
-    func voice(for language: String) -> AVSpeechSynthesisVoice? {
-        if let cached = voiceCache[language] { return cached }
-        let normalized = language.replacingOccurrences(of: "_", with: "-")
-        let prefix = String(normalized.prefix(2)).lowercased()
-        let voices = AVSpeechSynthesisVoice.speechVoices()
-        let exact = voices.filter { $0.language.caseInsensitiveCompare(normalized) == .orderedSame }
-        let sameLanguage = exact.isEmpty ? voices.filter { $0.language.lowercased().hasPrefix(prefix) } : exact
-        let best = sameLanguage.max { $0.quality.rawValue < $1.quality.rawValue }
-            ?? AVSpeechSynthesisVoice(language: normalized)
-            ?? AVSpeechSynthesisVoice(language: "ru-RU")
-        if let best { voiceCache[language] = best }
-        return best
+    /// The Russian voice used for every prompt (cached).
+    func russianVoice() -> AVSpeechSynthesisVoice? {
+        if let cachedVoice { return cachedVoice }
+        let voice = Self.voice(for: Self.voiceLanguage)
+        cachedVoice = voice
+        return voice
     }
 
-    /// Audio session for spoken prompts: ducks music, mixes with other audio.
+    /// Picks a natural voice for `language`: the system default voice for the language first, then an
+    /// enhanced/premium Apple voice, never a novelty or Eloquence voice.
+    static func voice(for language: String) -> AVSpeechSynthesisVoice? {
+        let normalized = language.replacingOccurrences(of: "_", with: "-")
+        if let systemDefault = AVSpeechSynthesisVoice(language: normalized), isAcceptable(systemDefault) {
+            return systemDefault
+        }
+        let candidates = AVSpeechSynthesisVoice.speechVoices().filter {
+            $0.language.caseInsensitiveCompare(normalized) == .orderedSame && isAcceptable($0)
+        }
+        let preferred = candidates.filter { $0.quality == .premium || $0.quality == .enhanced }
+        return preferred.max { $0.quality.rawValue < $1.quality.rawValue }
+            ?? candidates.first
+            ?? AVSpeechSynthesisVoice(language: normalized)
+    }
+
+    /// A regular Apple voice (com.apple.voice.* / com.apple.ttsbundle.*) that is not a novelty or Eloquence voice.
+    private static func isAcceptable(_ voice: AVSpeechSynthesisVoice) -> Bool {
+        let id = voice.identifier.lowercased()
+        guard id.hasPrefix("com.apple.voice.") || id.hasPrefix("com.apple.ttsbundle.") else { return false }
+        if id.contains("eloquence") || id.contains("novelty") { return false }
+        if voice.voiceTraits.contains(.isNoveltyVoice) { return false }
+        return true
+    }
+
+    /// Audio session for spoken prompts: ducks music while speaking, mixes with other audio.
     func activatePlaybackSession() {
-        guard !isRecordingSessionActive else { return }
         let session = AVAudioSession.sharedInstance()
         do {
             try session.setCategory(.playback, mode: .voicePrompt,
@@ -85,30 +101,12 @@ final class SpeechService: NSObject {
         }
     }
 
-    /// Called by the speech recognizer before starting the microphone.
-    func prepareForRecording() throws {
-        stop()
-        let session = AVAudioSession.sharedInstance()
-        try session.setCategory(.playAndRecord, mode: .default,
-                                options: [.duckOthers, .defaultToSpeaker, .allowBluetoothA2DP])
-        try session.setActive(true, options: .notifyOthersOnDeactivation)
-        isRecordingSessionActive = true
-    }
-
-    /// Called by the speech recognizer after the microphone has been stopped.
-    func finishRecording() {
-        isRecordingSessionActive = false
-        activatePlaybackSession()
-    }
-
     private func didFinishUtterance() {
         isSpeaking = synthesizer.isSpeaking
         if !isSpeaking {
             currentPriority = .low
-            if !isRecordingSessionActive {
-                // Give the audio focus back to music / other apps.
-                try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
-            }
+            // Last utterance done: release the session so other apps' audio is un-ducked.
+            try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
         }
     }
 }

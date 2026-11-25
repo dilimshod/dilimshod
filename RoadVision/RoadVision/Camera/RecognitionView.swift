@@ -9,7 +9,7 @@ import UIKit
 /// - top-right edge: settings, status dot (→ status sheet with к/с · мс · model), counters button with the total
 ///   (tap → per-kind counters with reset), traffic-light indicator;
 /// - compact banners under the top row (model problems hide themselves after a few seconds);
-/// - bottom row (44 pt translucent buttons): AI assistant, research recording, navigator.
+/// - bottom row (44 pt translucent buttons): research recording, navigator.
 ///
 /// Camera layers (full screen, same aspect-fill mapping): own-lane corridor, corner-bracket boxes with the lead vehicle
 /// highlighted, the animated distance line to the lead, tap targets (tap a box → detail card), and a red edge glow
@@ -131,7 +131,6 @@ struct RecognitionView: View {
 
             ZStack(alignment: .bottom) {
                 HStack(alignment: .bottom) {
-                    AssistantButton(size: RVTheme.HUD.hit)
                     Spacer()
                     NavigatorCornerButton {
                         app.switchTo(.navigator)
@@ -618,7 +617,7 @@ private struct CounterChip: View {
 
 /// Model / camera problems (compact). The model banners hide themselves after a few seconds (the red status dot and
 /// the status sheet keep the information); camera banners stay while the problem lasts. The navigator,
-/// speedometer and assistant keep working in every case.
+/// and speedometer keep working in every case.
 private struct BannerStack: View {
     let pipeline: RecognitionPipeline
     @Binding var hideModelBanner: Bool

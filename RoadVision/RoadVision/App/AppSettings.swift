@@ -1,7 +1,7 @@
 import Foundation
 import Observation
 
-/// User preferences, persisted in UserDefaults. API keys are NOT stored here (see KeychainStore).
+/// User preferences, persisted in UserDefaults.
 @Observable
 final class AppSettings {
     @ObservationIgnored private let defaults: UserDefaults
@@ -65,18 +65,6 @@ final class AppSettings {
     var signalGreenRatio: Double { didSet { defaults.set(signalGreenRatio, forKey: Keys.signalGreenRatio) } }
     var learnSignalTimings: Bool { didSet { defaults.set(learnSignalTimings, forKey: Keys.learnSignalTimings) } }
 
-    // MARK: AI assistant
-    /// Chat provider preset id (see ChatPresets) or "auto".
-    var aiProviderID: String { didSet { defaults.set(aiProviderID, forKey: Keys.aiProviderID) } }
-    /// Model override; empty = preset default.
-    var aiModel: String { didSet { defaults.set(aiModel, forKey: Keys.aiModel) } }
-    /// Base URL override for OpenAI-compatible providers (e.g. Ollama on a Mac in the same Wi-Fi).
-    var aiCustomBaseURL: String { didSet { defaults.set(aiCustomBaseURL, forKey: Keys.aiCustomBaseURL) } }
-    /// Speech recognition / synthesis locale, e.g. "ru-RU", "uz-UZ", "en-US".
-    var speechLocaleIdentifier: String { didSet { defaults.set(speechLocaleIdentifier, forKey: Keys.speechLocaleIdentifier) } }
-    var speakAssistantReplies: Bool { didSet { defaults.set(speakAssistantReplies, forKey: Keys.speakAssistantReplies) } }
-    var assistantIncludeDrivingContext: Bool { didSet { defaults.set(assistantIncludeDrivingContext, forKey: Keys.assistantIncludeDrivingContext) } }
-
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
         func double(_ key: String, _ fallback: Double) -> Double {
@@ -123,13 +111,6 @@ final class AppSettings {
         signalCycleSeconds = double(Keys.signalCycleSeconds, 90)
         signalGreenRatio = double(Keys.signalGreenRatio, 0.45)
         learnSignalTimings = bool(Keys.learnSignalTimings, true)
-
-        aiProviderID = string(Keys.aiProviderID, "auto")
-        aiModel = string(Keys.aiModel, "")
-        aiCustomBaseURL = string(Keys.aiCustomBaseURL, "")
-        speechLocaleIdentifier = string(Keys.speechLocaleIdentifier, "ru-RU")
-        speakAssistantReplies = bool(Keys.speakAssistantReplies, true)
-        assistantIncludeDrivingContext = bool(Keys.assistantIncludeDrivingContext, true)
     }
 
     static let defaultOverpassEndpoint = "https://overpass-api.de/api/interpreter"
@@ -150,11 +131,6 @@ final class AppSettings {
 
     var signalAssumptions: SignalTimingAssumptions {
         SignalTimingAssumptions(cycleSeconds: signalCycleSeconds, greenRatio: signalGreenRatio)
-    }
-
-    /// Language code ("ru", "uz", "en") derived from the speech locale.
-    var languageCode: String {
-        String(speechLocaleIdentifier.prefix(while: { $0 != "-" && $0 != "_" })).lowercased()
     }
 
     private enum Keys {
@@ -191,11 +167,5 @@ final class AppSettings {
         static let signalCycleSeconds = "rv.signalCycleSeconds"
         static let signalGreenRatio = "rv.signalGreenRatio"
         static let learnSignalTimings = "rv.learnSignalTimings"
-        static let aiProviderID = "rv.aiProviderID"
-        static let aiModel = "rv.aiModel"
-        static let aiCustomBaseURL = "rv.aiCustomBaseURL"
-        static let speechLocaleIdentifier = "rv.speechLocaleIdentifier"
-        static let speakAssistantReplies = "rv.speakAssistantReplies"
-        static let assistantIncludeDrivingContext = "rv.assistantIncludeDrivingContext"
     }
 }
