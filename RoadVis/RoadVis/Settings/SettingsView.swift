@@ -9,6 +9,7 @@ struct SettingsView: View {
             Form {
                 SettingsRecognitionSection()
                 SettingsFollowingDistanceSection()
+                TripSettingsSection()
                 SettingsExperimentsSection()
                 SettingsNavigationSection()
                 NavigationSettingsSection()

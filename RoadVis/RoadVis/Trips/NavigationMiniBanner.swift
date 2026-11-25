@@ -164,6 +164,7 @@ struct NavigationMiniBanner: View {
 private struct RecordingChipBackground: ViewModifier {
     let isStandalone: Bool
 
+    @ViewBuilder
     func body(content: Content) -> some View {
         if isStandalone {
             content.rvGlassCapsule(tint: RVTheme.recording, shadow: false)

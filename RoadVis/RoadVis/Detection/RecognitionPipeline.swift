@@ -74,8 +74,25 @@ final class RecognitionPipeline {
     @ObservationIgnored var weatherProvider: (@MainActor () -> WeatherSnapshot?)?
     /// Voice output for distance warnings (set by `AppState`; nil → haptics and tone only).
     @ObservationIgnored var speech: SpeechService? {
-        didSet { warnings.speech = speech }
+        didSet { warnings.speech = voiceWarningsHandledByCoach ? nil : speech }
     }
+    /// Set by `DriverCoach`: the coach speaks the distance warnings (no duplicate speech); the warning controller then
+    /// only gives haptics and the alert tone.
+    @ObservationIgnored var voiceWarningsHandledByCoach = false {
+        didSet { warnings.speech = voiceWarningsHandledByCoach ? nil : speech }
+    }
+
+    // MARK: Driver assistant (lanes, coaching cues, driving events)
+
+    /// Latest lane-marking estimate (≈ 5 Hz, heuristic); nil while lane detection is off or the camera is stopped.
+    private(set) var laneEstimate: LaneEstimate?
+    /// Side whose marking the car is currently drifting over (for the red lane line), nil when inside the lane.
+    private(set) var laneDepartureSide: LaneSide?
+    /// Camera-based driving events (tailgating, collision risk, lane departure, red-light running, STOP ignored), with
+    /// GPS coordinate and speed. Only NEW events (repeats within 8 s are collapsed). Called on the main actor.
+    @ObservationIgnored var onDrivingEvent: ((DrivingEvent) -> Void)?
+    /// Per-frame cues for `DriverCoach` (called on the main actor after every processed frame).
+    @ObservationIgnored var onAssistFrame: ((DriverAssistFrame) -> Void)?
 
     /// Own-lane corridor used to pick the lead vehicle (for drawing).
     var egoCorridor: EgoCorridor {
@@ -107,6 +124,11 @@ final class RecognitionPipeline {
     @ObservationIgnored private var generation = 0
     @ObservationIgnored private var lastRecordSetting: Bool
     @ObservationIgnored private let warnings = DistanceWarningController()
+    @ObservationIgnored private let assist = DriverAssistSettings.shared
+    @ObservationIgnored private var laneDeparture = LaneDepartureDetector()
+    @ObservationIgnored private let eventMonitor = CameraDrivingEventMonitor()
+    @ObservationIgnored private var lastLaneTimestamp: TimeInterval?
+    @ObservationIgnored private var lastLaneDepartureUptime: TimeInterval = -.infinity
     /// Uptime of the last frame-driven following-distance refresh (location updates skip theirs while frames flow).
     @ObservationIgnored private var lastFrameRefreshUptime: TimeInterval = -.infinity
     /// Last frame each track was seen on (display hold), by track id.
@@ -349,6 +371,57 @@ final class RecognitionPipeline {
         }
         if leadVehicle != lead { leadVehicle = lead }
         refreshFollowingDistance(fromFrame: true)
+        updateDriverAssist(output, now: now)
+    }
+
+    /// Lane departure, coaching cues and camera-based driving events for one processed frame.
+    private func updateDriverAssist(_ output: RecognitionWorker.Output, now: TimeInterval) {
+        let speed = location.speedKmh
+        let estimate = assist.laneDetectionNeeded ? output.laneEstimate : nil
+        if laneEstimate != estimate { laneEstimate = estimate }
+
+        // Lane departure: evaluated once per new lane estimate.
+        var departure: LaneSide?
+        if assist.laneDepartureEnabled, let estimate {
+            if estimate.timestamp != lastLaneTimestamp {
+                lastLaneTimestamp = estimate.timestamp
+                laneDeparture.config.minSpeedKmh = assist.laneWarningMinSpeedKmh
+                departure = laneDeparture.update(estimate, speedKmh: speed, timestamp: now)
+                if departure != nil { lastLaneDepartureUptime = now }
+            }
+        } else {
+            laneDeparture.reset()
+            lastLaneTimestamp = nil
+        }
+        // Keep the red line visible a moment after the warning even if the estimate jitters back.
+        let side = laneDeparture.activeSide
+            ?? (now - lastLaneDepartureUptime < 1.5 ? laneDepartureSide : nil)
+        if laneDepartureSide != side { laneDepartureSide = side }
+
+        let following = settings.followingDistanceEnabled
+        let assessment = following ? followingAssessment : nil
+        let fresh = output.tracks.filter { $0.missed == 0 }
+
+        if let onAssistFrame {
+            let coach = CoachFrameInput(timestamp: now, speedKmh: speed, assessment: assessment,
+                                        hasLead: leadVehicle != nil, collisionWarning: isForwardCollisionWarning,
+                                        laneDeparture: departure, light: ObservedTrafficLight.largest(in: fresh))
+            let stopIDs = fresh.filter { $0.kind == .stopSign && $0.isConfirmed }.map(\.id)
+            onAssistFrame(DriverAssistFrame(coach: coach, confirmedStopSignIDs: stopIDs))
+        }
+
+        let geometry = CameraGeometry(horizontalFOVDegrees: camera.horizontalFieldOfView,
+                                      imageWidth: Double(frameSize.width), imageHeight: Double(frameSize.height))
+        let input = CameraEventInput(timestamp: now, date: Date(), speedKmh: speed, coordinate: location.coordinate,
+                                     assessment: assessment, hasLead: leadVehicle != nil,
+                                     collisionWarning: isForwardCollisionWarning,
+                                     collisionThresholdSeconds: settings.followingDistancePolicy.collisionWarningSeconds,
+                                     laneDeparture: departure, laneOffset: estimate?.egoOffset,
+                                     tracks: fresh, geometry: geometry)
+        let events = eventMonitor.update(input)
+        if let onDrivingEvent {
+            for event in events { onDrivingEvent(event) }
+        }
     }
 
     /// Current tracks plus confirmed tracks missed for at most `trackHoldSeconds` (marked `missed ≥ 1`).
@@ -395,6 +468,11 @@ final class RecognitionPipeline {
             signals.cameraLightColor = nil
         }
         if leadVehicle != nil { leadVehicle = nil }
+        if laneEstimate != nil { laneEstimate = nil }
+        if laneDepartureSide != nil { laneDepartureSide = nil }
+        laneDeparture.reset()
+        lastLaneTimestamp = nil
+        eventMonitor.reset()
         warnings.reset()
         refreshFollowingDistance(fromFrame: false)
     }
@@ -464,7 +542,9 @@ final class RecognitionPipeline {
         let makeEnabled = settings.makeRecognitionEnabled
         let followingEnabled = settings.followingDistanceEnabled
         let horizon = settings.corridorHorizon
+        let lanes = assist.laneDetectionNeeded
         worker.update { inputs in
+            inputs.laneDetectionEnabled = lanes
             inputs.detection = options
             inputs.makeRecognitionEnabled = makeEnabled
             inputs.followingDistanceEnabled = followingEnabled
@@ -488,6 +568,8 @@ final class RecognitionPipeline {
             _ = settings.stoppedGapMeters
             _ = settings.reactionTimeSeconds
             _ = settings.roadSurfaceMode
+            _ = assist.laneDepartureEnabled
+            _ = assist.showLaneOverlay
         } onChange: { [weak self] in
             Task { @MainActor [weak self] in
                 guard let self else { return }

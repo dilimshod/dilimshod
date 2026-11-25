@@ -298,6 +298,7 @@ struct NavigatorView: View {
                     }
                 }
             }
+            idleShortcuts
             Button {
                 showSearch = true
             } label: {
@@ -315,6 +316,50 @@ struct NavigatorView: View {
             }
             .buttonStyle(.plain)
             .shadow(color: .black.opacity(0.25), radius: 6, y: 2)
+        }
+    }
+
+    /// Trip history and manual trip recording (the shell has no tabs; these are the entry points of the idle screen).
+    private var idleShortcuts: some View {
+        let recorder = app.tripRecorder
+        return HStack(spacing: 8) {
+            Button {
+                app.showTripHistory = true
+            } label: {
+                Label("Поездки", systemImage: "list.bullet.rectangle.portrait")
+                    .font(.footnote.weight(.semibold))
+                    .padding(.horizontal, 14)
+                    .frame(minHeight: 44)
+                    .background(.regularMaterial, in: Capsule())
+            }
+            .buttonStyle(.plain)
+            Button {
+                if recorder.isRecording {
+                    app.stopTripRecording()
+                } else {
+                    app.startTripRecording()
+                }
+            } label: {
+                Group {
+                    if recorder.isRecording, let started = recorder.startedAt {
+                        HStack(spacing: 6) {
+                            Image(systemName: "stop.fill")
+                            Text(started, style: .timer).monospacedDigit()
+                        }
+                        .foregroundStyle(RVTheme.recording)
+                    } else {
+                        Label("Записать поездку", systemImage: "record.circle")
+                    }
+                }
+                .font(.footnote.weight(.semibold))
+                .padding(.horizontal, 14)
+                .frame(minHeight: 44)
+                .background(.regularMaterial, in: Capsule())
+            }
+            .buttonStyle(.plain)
+            .disabled(recorder.isFinishing)
+            .accessibilityLabel(recorder.isRecording ? "Остановить запись поездки" : "Начать запись поездки")
+            Spacer(minLength: 0)
         }
     }
 

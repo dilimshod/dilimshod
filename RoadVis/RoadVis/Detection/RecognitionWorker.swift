@@ -27,6 +27,8 @@ final class RecognitionWorker: @unchecked Sendable {
         var followingDistanceEnabled = true
         /// Horizon of the own-lane corridor, fraction of the frame height (`settings.corridorHorizon`).
         var corridorHorizon = EgoCorridor.default.horizonY
+        /// Run the classical lane-marking detector (~5 Hz, on a downsampled copy of the frame).
+        var laneDetectionEnabled = true
     }
 
     /// Snapshot published after every processed frame.
@@ -50,6 +52,9 @@ final class RecognitionWorker: @unchecked Sendable {
         /// Closest confirmed vehicle in the own-lane corridor with a fused distance estimate (nil when none
         /// or when following distance is switched off).
         var leadVehicle: LeadVehicle?
+        /// Latest lane-marking estimate (refreshed ~5 Hz, repeated in between; nil while lane detection is off).
+        /// Its `timestamp` is the system uptime of the analysed frame.
+        var laneEstimate: LaneEstimate?
     }
 
     /// Load results of the two models.
@@ -75,6 +80,10 @@ final class RecognitionWorker: @unchecked Sendable {
 
     /// Upper bound of the processing rate (the camera delivers 30 fps).
     static let maxFramesPerSecond: Double = 15
+    /// Lane detection interval, seconds (≈ 5 Hz).
+    static let laneInterval: TimeInterval = 0.2
+    /// Width of the downsampled image analysed by the lane detector, pixels.
+    static let laneImageWidth = 160
 
     let queue = DispatchQueue(label: "recognition.processing", qos: .userInitiated)
     private let camera: CameraService
@@ -85,6 +94,9 @@ final class RecognitionWorker: @unchecked Sendable {
     private let tracker = ObjectTracker()
     private let estimator = MonocularSpeedEstimator()
     private let leadTracker = LeadVehicleTracker()
+    private let laneDetector = LaneDetector()
+    private var lastLaneUptime: TimeInterval = -.infinity
+    private var laneEstimate: LaneEstimate?
     private var generation = 0
     private var lastFrameTimestamp: TimeInterval?
     private var fpsEstimate: Double = 0
@@ -158,6 +170,8 @@ final class RecognitionWorker: @unchecked Sendable {
                 lastFrameTimestamp = nil
                 fpsEstimate = 0
                 leadTracker.reset()
+                laneDetector.reset()
+                laneEstimate = nil
             }
         }
     }
@@ -181,6 +195,8 @@ final class RecognitionWorker: @unchecked Sendable {
             tracker.reset()
             estimator.reset()
             leadTracker.reset()
+            laneDetector.reset()
+            laneEstimate = nil
             makeClassifier.reset()
             generation = newGeneration
             lastFrameTimestamp = nil
@@ -258,6 +274,7 @@ final class RecognitionWorker: @unchecked Sendable {
                                   geometry: geometry, timestamp: timestamp)
         let leadVehicle = updateLeadVehicle(tracks: tracks, inputs: frameInputs, geometry: geometry,
                                             timestamp: timestamp)
+        updateLanes(in: pixelBuffer, width: width, height: height, inputs: frameInputs)
 
         if frameInputs.makeRecognitionEnabled, makeClassifier.status.isReady {
             // Votes become visible in the tracks of the next frame.
@@ -285,7 +302,7 @@ final class RecognitionWorker: @unchecked Sendable {
         let output = Output(generation: generation, tracks: tracks, visibleCounts: visibleCounts,
                             uniqueCounts: uniqueCounts, fps: fpsEstimate, inferenceMs: inferenceEstimate,
                             lightColor: lightColor, frameSize: CGSize(width: width, height: height),
-                            processedFrames: processedFrames, leadVehicle: leadVehicle)
+                            processedFrames: processedFrames, leadVehicle: leadVehicle, laneEstimate: laneEstimate)
         outputHandler?(output)
     }
 
@@ -302,6 +319,39 @@ final class RecognitionWorker: @unchecked Sendable {
             leadTracker.corridor = EgoCorridor(horizonY: horizon)
         }
         return leadTracker.update(tracks: tracks, geometry: geometry, timestamp: timestamp)
+    }
+
+    /// Runs the lane detector at ≈ 5 Hz on a downsampled (≤ 160 px wide) marking-brightness copy of the locked BGRA
+    /// buffer (rows above the horizon are skipped). Between runs the previous estimate is repeated.
+    private func updateLanes(in pixelBuffer: CVPixelBuffer, width: Int, height: Int, inputs: Inputs) {
+        guard inputs.laneDetectionEnabled else {
+            if laneEstimate != nil {
+                laneDetector.reset()
+                laneEstimate = nil
+            }
+            return
+        }
+        let now = ProcessInfo.processInfo.systemUptime
+        guard now - lastLaneUptime >= Self.laneInterval * 0.9,
+              CVPixelBufferGetPixelFormatType(pixelBuffer) == kCVPixelFormatType_32BGRA,
+              !CVPixelBufferIsPlanar(pixelBuffer) else { return }
+        lastLaneUptime = now
+        let horizon = min(0.8, max(0.1, inputs.corridorHorizon))
+        if laneDetector.config.horizonY != horizon {
+            laneDetector.config.horizonY = horizon
+        }
+        guard CVPixelBufferLockBaseAddress(pixelBuffer, .readOnly) == kCVReturnSuccess else { return }
+        let image: LaneImage
+        if let base = CVPixelBufferGetBaseAddress(pixelBuffer) {
+            image = LaneImage.fromBGRA(base: UnsafeRawPointer(base), width: width, height: height,
+                                       bytesPerRow: CVPixelBufferGetBytesPerRow(pixelBuffer),
+                                       targetWidth: Self.laneImageWidth, roiTop: max(0, horizon - 0.02))
+        } else {
+            image = LaneImage(width: 0, height: 0)
+        }
+        _ = CVPixelBufferUnlockBaseAddress(pixelBuffer, .readOnly)
+        guard image.width > 0 else { return }
+        laneEstimate = laneDetector.process(image, timestamp: now)
     }
 
     /// Estimates the colour of every traffic light from the BGRA pixels inside its box.

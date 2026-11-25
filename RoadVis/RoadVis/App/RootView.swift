@@ -21,6 +21,12 @@ struct RootView: View {
         .sheet(isPresented: $app.showSettings) {
             SettingsView()
         }
+        .sheet(isPresented: $app.showTripHistory) {
+            TripHistorySheet()
+        }
+        .sheet(item: $app.presentedTrip) { trip in
+            TripReportSheet(trip: trip)
+        }
         .task {
             app.start()
         }

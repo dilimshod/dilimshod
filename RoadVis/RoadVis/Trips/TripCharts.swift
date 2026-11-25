@@ -53,14 +53,14 @@ struct TripChartData {
         let stride = max(1, Int((Double(points.count) / Double(Self.maxSamples)).rounded(.up)))
         let sampled = Swift.stride(from: 0, to: points.count, by: stride).map { points[$0] }
 
+        let limitSamples = Self.segments(sampled) { point in point.speedLimitKmh.map { Double($0) } }
         speed = sampled.enumerated().map { SpeedSample(id: $0.offset, date: $0.element.date, speedKmh: $0.element.speedKmh ?? 0) }
-        limits = Self.segments(sampled) { $0.speedLimitKmh.map(Double.init) }
-        leads = Self.segments(sampled) { $0.leadDistanceMeters }
-        recommended = Self.segments(sampled) { $0.leadDistanceMeters == nil ? nil : $0.recommendedGapMeters }
+        limits = limitSamples
+        leads = Self.segments(sampled) { point in point.leadDistanceMeters }
+        recommended = Self.segments(sampled) { point in point.leadDistanceMeters == nil ? nil : point.recommendedGapMeters }
 
         markers = trip.sortedEvents.compactMap { event in
-            let speed = event.speedKmh ?? Self.speed(at: event.date, in: points)
-            guard let speed else { return nil }
+            guard let speed = event.speedKmh ?? TripChartData.speed(at: event.date, in: points) else { return nil }
             return EventMarker(id: event.id, date: event.date, speedKmh: speed, kind: event.kind)
         }
         kindCounts = DrivingEventKind.allCases.compactMap { kind in
@@ -73,7 +73,7 @@ struct TripChartData {
             guard seconds > 0, total > 0 else { return nil }
             return BandShare(band: band, seconds: seconds, share: seconds / total)
         }
-        let limitMax = limits.map(\.value).max() ?? 0
+        let limitMax = limitSamples.map(\.value).max() ?? 0
         maxSpeed = max(stats.maxSpeedKmh, limitMax, 20)
     }
 

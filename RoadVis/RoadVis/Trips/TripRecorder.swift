@@ -115,7 +115,7 @@ final class TripRecorder {
         let id = newTrip.id
         if let origin = location.location {
             Task { [weak self] in
-                let name = await Self.placeName(for: origin)
+                let name = await TripRecorder.placeName(for: origin)
                 guard let self, var current = self.trip, current.id == id, current.origin.name == nil else { return }
                 current.origin.name = name
                 self.trip = current
@@ -150,10 +150,10 @@ final class TripRecorder {
         }
         // B gets an address only when it has no name (manual trips); the geocoder is given ≤ 4 s.
         if finished.destination?.name == nil, let coordinate = finished.destination?.coordinate {
-            finished.destination?.name = await Self.placeName(for: coordinate.clLocation, timeout: 4)
+            finished.destination?.name = await TripRecorder.placeName(for: coordinate.clLocation, timeout: 4)
         }
         if finished.origin.name == nil, let coordinate = finished.origin.coordinate {
-            finished.origin.name = await Self.placeName(for: coordinate.clLocation, timeout: 4)
+            finished.origin.name = await TripRecorder.placeName(for: coordinate.clLocation, timeout: 4)
         }
         if startedCameraCSV {
             startedCameraCSV = false
@@ -287,7 +287,7 @@ final class TripRecorder {
     // MARK: - Geocoding
 
     /// Street + house, else locality, else nil. Never throws; returns nil after `timeout` seconds.
-    static func placeName(for location: CLLocation, timeout: TimeInterval = 8) async -> String? {
+    nonisolated static func placeName(for location: CLLocation, timeout: TimeInterval = 8) async -> String? {
         await withTaskGroup(of: String?.self) { group in
             group.addTask {
                 let geocoder = CLGeocoder()
