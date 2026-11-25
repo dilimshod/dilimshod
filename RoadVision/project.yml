@@ -101,8 +101,6 @@ targets:
       path: Config/Info.plist
       properties:
         UIBackgroundModes: [location, audio]
-        NSAppTransportSecurity:
-          NSAllowsLocalNetworking: true
         UIFileSharingEnabled: true
         LSSupportsOpeningDocumentsInPlace: true
     settings:
@@ -116,9 +114,6 @@ targets:
         INFOPLIST_KEY_NSCameraUsageDescription: "Камера нужна для распознавания транспортных средств, светофоров и пешеходов на дороге."
         INFOPLIST_KEY_NSLocationWhenInUseUsageDescription: "Геопозиция нужна для скорости движения, навигации, данных о полосах и ограничениях скорости."
         INFOPLIST_KEY_NSLocationAlwaysAndWhenInUseUsageDescription: "Во время навигации геопозиция используется и в фоне, чтобы подсказки продолжали работать."
-        INFOPLIST_KEY_NSMicrophoneUsageDescription: "Микрофон нужен для голосового общения с ИИ‑помощником."
-        INFOPLIST_KEY_NSSpeechRecognitionUsageDescription: "Распознавание речи превращает ваши голосовые вопросы в текст для ИИ‑помощника."
-        INFOPLIST_KEY_NSLocalNetworkUsageDescription: "Доступ к локальной сети нужен, чтобы подключиться к ИИ‑модели (Ollama / LM Studio) на вашем Mac."
         INFOPLIST_KEY_UIApplicationSceneManifest_Generation: YES
         INFOPLIST_KEY_UILaunchScreen_Generation: YES
         INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents: YES

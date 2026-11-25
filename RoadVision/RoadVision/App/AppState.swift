@@ -15,7 +15,6 @@ enum AppMode: String {
 @MainActor
 final class AppState {
     var mode: AppMode = .camera
-    var showAssistant = false
     var showSettings = false
 
     let settings: AppSettings
@@ -27,7 +26,6 @@ final class AppState {
     let incidents: IncidentStore
     let navigation: NavigationService
     let recognition: RecognitionPipeline
-    let assistant: AssistantViewModel
 
     @ObservationIgnored private var started = false
 
@@ -42,7 +40,6 @@ final class AppState {
         let navigation = NavigationService(location: location, speech: speech, roadInfo: roadInfo,
                                            signals: signals, incidents: incidents, settings: settings)
         let recognition = RecognitionPipeline(location: location, settings: settings, signals: signals)
-        let assistant = AssistantViewModel(settings: settings, speech: speech)
 
         self.settings = settings
         self.location = location
@@ -53,12 +50,7 @@ final class AppState {
         self.incidents = incidents
         self.navigation = navigation
         self.recognition = recognition
-        self.assistant = assistant
 
-        speech.defaultLanguage = settings.speechLocaleIdentifier
-        assistant.contextProvider = { [weak self] in
-            self?.drivingContext() ?? DrivingContext()
-        }
         recognition.weatherProvider = { [weak weather] in weather?.current }
         recognition.speech = speech
     }
@@ -117,34 +109,5 @@ final class AppState {
         @unknown default:
             break
         }
-    }
-
-    /// Snapshot of the current driving situation for the AI assistant.
-    func drivingContext() -> DrivingContext {
-        var ctx = DrivingContext()
-        ctx.localTime = Date()
-        ctx.speedKmh = location.speedKmh
-        if let road = roadInfo.currentRoad {
-            ctx.roadName = road.name ?? road.ref
-            ctx.speedLimitKmh = road.speedLimit?.kmh
-            ctx.lanesInDirection = road.laneInfo.lanesInDirection
-            ctx.totalLanes = road.laneInfo.totalLanes
-        }
-        ctx.destinationName = navigation.destinationName
-        if let progress = navigation.progress {
-            ctx.remainingDistanceMeters = progress.remainingDistance
-            ctx.remainingTimeSeconds = progress.remainingTimeSeconds
-            ctx.nextInstruction = progress.nextInstruction
-        }
-        ctx.trafficDelaySeconds = navigation.selectedRouteOption?.traffic?.delaySeconds
-        if let progress = navigation.progress {
-            let ahead = signals.totalExpectedWait(fromDistance: progress.distanceAlong)
-            ctx.signalsAhead = ahead.count
-            ctx.expectedSignalWaitSeconds = ahead.seconds
-        }
-        ctx.weatherSummary = weather.current?.summary
-        ctx.vehiclesInView = recognition.visibleCounts
-        ctx.uniqueVehiclesCounted = recognition.totalUniqueVehicles
-        return ctx
     }
 }
