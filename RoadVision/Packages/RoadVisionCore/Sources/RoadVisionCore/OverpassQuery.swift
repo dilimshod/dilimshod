@@ -79,7 +79,8 @@ public enum OverpassQuery {
 
     /// Road features along a polyline (`around:R,lat1,lon1,lat2,lon2,…`): traffic signals, pedestrian crossings,
     /// speed cameras, stop / give-way signs, traffic calming, railway level crossings, highway=construction ways
-    /// (within `radius`) and schools / kindergartens (within 150 m), all with `out tags center qt`.
+    /// (within `radius`), schools / kindergartens (within 150 m), fuel stations (within 100 m) and public parking
+    /// (within 60 m), all with `out tags center qt`.
     ///
     /// A polyline longer than `maxPolylinePoints` vertices is simplified (Douglas–Peucker) to fit; split long routes
     /// into chunks with `Geo.chunk` first to keep the detail. An empty polyline yields a valid query with no results.
@@ -92,6 +93,8 @@ public enum OverpassQuery {
         let poly = coordinates(points)
         let r = meters(radius)
         let schoolRadius = meters(max(radius, 150))
+        let fuelRadius = meters(max(radius, 100))
+        let parkingRadius = meters(max(radius, 60))
         return """
         \(header)
         (
@@ -100,6 +103,8 @@ public enum OverpassQuery {
           node(around:\(r),\(poly))[railway=level_crossing];
           nwr(around:\(schoolRadius),\(poly))[amenity~"^(school|kindergarten)$"];
           way(around:\(r),\(poly))[highway=construction];
+          nwr(around:\(fuelRadius),\(poly))[amenity=fuel];
+          nwr(around:\(parkingRadius),\(poly))[amenity=parking][access!~"^(private|no|customers)$"];
         );
         out tags center qt;
         """

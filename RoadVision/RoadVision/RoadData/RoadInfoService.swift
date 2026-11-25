@@ -13,10 +13,16 @@ import Observation
 ///   not generate requests. Failed requests are retried with an exponential back-off.
 ///
 /// Route features
-/// - `loadRouteFeatures` simplifies the route to ≤ 400 vertices, splits it into chunks of
-///   `OverpassQuery.maxPolylinePoints` and runs one query per chunk, sequentially; results are merged by element key and
-///   projected onto the full original route. Features are published progressively as chunks arrive. Starting a new
-///   load (or `clearRouteFeatures`) cancels the previous one.
+/// - `loadRouteFeatures` plans chunks with `RouteQueryPlanner` (light 10 m simplification, ≤ 60 vertices AND ≤ 3 km
+///   per chunk, so long or winding routes are never silently thinned out) and runs one query per chunk, sequentially,
+///   with a 45 s client timeout (`[timeout:25]` on the server + queueing); results are merged by element key and
+///   projected onto the full original route. Features are published progressively as chunks arrive
+///   (`onRouteFeaturesChanged`). Anything not loaded (failed chunks, routes beyond the chunk cap) is reported in
+///   `routeFeaturesIncomplete` / `routeFeaturesCoverageNote`. Starting a new load (or `clearRouteFeatures`) cancels
+///   the previous one.
+///
+/// Travel direction (lanes, `maxspeed:forward/backward`): the GPS course while moving ≥ 5 km/h; below that the last
+/// valid course (kept for 60 s), and only then the compass, which is unreliable inside a car.
 ///
 /// OSM data is community-maintained: lane counts and limits may be missing or outdated (`LaneInfo.isEstimated`,
 /// `SpeedLimit.isImplicit` mark inferred values).
@@ -41,6 +47,10 @@ final class RoadInfoService {
     private(set) var isLoadingRouteFeatures = false
     /// True when some route chunks could not be loaded, i.e. `routeFeatures` is incomplete.
     private(set) var routeFeaturesIncomplete = false
+    /// Russian explanation of what part of the route has no OSM features loaded; nil when complete.
+    private(set) var routeFeaturesCoverageNote: String?
+    /// Called (on the main actor) whenever `routeFeatures` changes.
+    @ObservationIgnored var onRouteFeaturesChanged: (() -> Void)?
     /// True between `start()` and `stop()`.
     private(set) var isRunning = false
 
@@ -60,13 +70,25 @@ final class RoadInfoService {
     static let stationaryJitter: Double = 10
     /// Fixes less accurate than this are ignored for matching and querying, metres.
     static let maxUsableAccuracy: Double = 65
-    /// The previous road is kept while it is at most this much farther than the best candidate, metres.
-    static let matchStickiness: Double = 4
-    /// Maximum vertices of the simplified route used for feature queries.
-    static let maxRouteQueryPoints = 400
-    /// Default and maximum `around` radius for route feature queries, metres.
+    /// The previous road is kept while its match score (distance + heading penalty) is at most this much worse
+    /// than the best candidate's score.
+    static let matchStickiness: Double = 5
+    /// Radius of the current-road query AND the matcher's `maxDistance` (kept consistent), metres.
+    static let roadQueryRadius: Double = 40
+    /// Radius of the traffic-signal part of the current-road query, metres.
+    static let signalQueryRadius: Double = 80
+    /// A GPS course older than this is not used below 5 km/h, seconds.
+    static let courseMemory: TimeInterval = 60
+    /// Below this speed the GPS course is unreliable, km/h.
+    static let courseMinimumSpeedKmh: Double = 5
+    /// Default `around` radius for route feature queries, metres (widened by the planner tolerance).
     static let baseRouteQueryRadius: Double = 35
-    static let maxRouteQueryRadius: Double = 120
+    /// Route chunk limits (finding: long routes must not be thinned out silently).
+    static let maxRouteChunkPoints = 60
+    static let maxRouteChunkLength: Double = 3_000
+    static let routeSimplifyTolerance: Double = 10
+    /// At most this many chunk queries per route (≈ 300 km); the rest is reported as not loaded.
+    static let maxRouteChunks = 100
     /// Prefix of every network error shown to the user.
     static let errorPrefix = "Нет связи с OpenStreetMap (Overpass): "
 
@@ -87,6 +109,8 @@ final class RoadInfoService {
     @ObservationIgnored private var consecutiveFailures = 0
     @ObservationIgnored private var nextRequestAllowed: Date = .distantPast
     @ObservationIgnored private var roadErrorMessage: String?
+    @ObservationIgnored private var lastValidCourse: (degrees: Double, date: Date)?
+    @ObservationIgnored private var lastHeading: Double?
 
     @ObservationIgnored private var routeTask: Task<Void, Never>?
     @ObservationIgnored private var routeGeneration = 0
@@ -135,8 +159,9 @@ final class RoadInfoService {
         routeTask = nil
         routeGeneration &+= 1
         let generation = routeGeneration
-        routeFeatures = []
+        setRouteFeatures([])
         routeFeaturesIncomplete = false
+        routeFeaturesCoverageNote = nil
         routeErrorMessage = nil
 
         let route = polyline.filter { $0.isValid }
@@ -166,11 +191,39 @@ final class RoadInfoService {
         routeTask?.cancel()
         routeTask = nil
         routeGeneration &+= 1
-        routeFeatures = []
+        setRouteFeatures([])
         isLoadingRouteFeatures = false
         routeFeaturesIncomplete = false
+        routeFeaturesCoverageNote = nil
         routeErrorMessage = nil
         updateLastError()
+    }
+
+    private func setRouteFeatures(_ features: [RouteFeature]) {
+        guard features != routeFeatures else { return }
+        routeFeatures = features
+        onRouteFeaturesChanged?()
+    }
+
+    // MARK: - Travel direction
+
+    /// Direction used for lanes / speed limits: GPS course ≥ 5 km/h, else the last valid course (≤ 60 s old),
+    /// else the compass heading.
+    var travelHeading: Double? { lastHeading ?? location.travelDirection }
+
+    private func updateHeading(with fix: CLLocation) {
+        let speedKmh = fix.speed >= 0 ? fix.speed * 3.6 : 0
+        if fix.course >= 0, speedKmh >= Self.courseMinimumSpeedKmh {
+            lastValidCourse = (fix.course, fix.timestamp)
+            lastHeading = fix.course
+            return
+        }
+        if let course = lastValidCourse, fix.timestamp.timeIntervalSince(course.date) <= Self.courseMemory {
+            lastHeading = course.degrees
+            return
+        }
+        lastValidCourse = nil
+        lastHeading = location.heading ?? location.course
     }
 
     // MARK: - Current road
@@ -183,6 +236,7 @@ final class RoadInfoService {
         guard fix.horizontalAccuracy >= 0, fix.horizontalAccuracy <= Self.maxUsableAccuracy else { return }
         let position = GeoPoint(fix.coordinate)
         guard position.isValid else { return }
+        updateHeading(with: fix)
         lastGoodPosition = position
         rematch(at: position)
         if shouldRefresh(at: position, now: Date()) {
@@ -190,17 +244,22 @@ final class RoadInfoService {
         }
     }
 
-    /// Re-runs the matcher on the cached ways. Keeps the previous road while it is nearly as close as the best
-    /// candidate, which avoids flicker at junctions and between parallel carriageways.
+    /// Re-runs the matcher on the cached ways. Keeps the previous road while its match SCORE (distance + heading
+    /// penalty) is nearly as good as the best candidate's, which avoids flicker at junctions and between parallel
+    /// carriageways without sticking to a crossing road that merely happens to be close.
     private func rematch(at position: GeoPoint) {
         guard !cachedElements.isEmpty else { return }
-        let heading = location.travelDirection
-        var match = RoadMatcher.bestMatch(elements: cachedElements, position: position, heading: heading)
-        if let best = match, let previous = currentRoad, best.wayID != previous.wayID,
+        let heading = travelHeading
+        let radius = Self.roadQueryRadius
+        let best = RoadMatcher.scoredMatch(elements: cachedElements, position: position, heading: heading,
+                                           maxDistance: radius)
+        var match = best?.road
+        if let best, let previous = currentRoad, best.road.wayID != previous.wayID,
            let previousWay = cachedElements.first(where: { $0.type == .way && $0.id == previous.wayID }),
-           let sticky = RoadMatcher.bestMatch(elements: [previousWay], position: position, heading: heading),
-           sticky.distanceToRoad <= best.distanceToRoad + Self.matchStickiness {
-            match = sticky
+           let sticky = RoadMatcher.scoredMatch(elements: [previousWay], position: position, heading: heading,
+                                                maxDistance: radius),
+           sticky.score <= best.score + Self.matchStickiness {
+            match = sticky.road
         }
         if match != currentRoad {
             currentRoad = match
@@ -229,7 +288,8 @@ final class RoadInfoService {
     }
 
     private func startRoadRequest(at position: GeoPoint) {
-        let query = OverpassQuery.roadsAround(position)
+        let query = OverpassQuery.roadsAround(position, radius: Self.roadQueryRadius,
+                                              signalRadius: Self.signalQueryRadius)
         let endpoint = settings.overpassEndpoint
         let client = self.client
         roadRequestID &+= 1
@@ -309,28 +369,30 @@ final class RoadInfoService {
 
     private func performRouteLoad(route: [GeoPoint], endpoint: String, generation: Int) async {
         await client.setPrimaryEndpoint(endpoint)
-        let maxPoints = Self.maxRouteQueryPoints
-        let baseRadius = Self.baseRouteQueryRadius
-        let maxRadius = Self.maxRouteQueryRadius
-        let chunkSize = OverpassQuery.maxPolylinePoints
+        let maxPoints = Self.maxRouteChunkPoints
+        let maxLength = Self.maxRouteChunkLength
+        let tolerance = Self.routeSimplifyTolerance
+        let maxChunks = Self.maxRouteChunks
         let plan = await Task.detached(priority: .userInitiated) {
-            RouteQueryPlan(route: route, maxPoints: maxPoints, chunkSize: chunkSize,
-                           baseRadius: baseRadius, maxRadius: maxRadius)
+            RouteQueryPlan(route: route, maxPoints: maxPoints, maxLength: maxLength, tolerance: tolerance,
+                           maxChunks: maxChunks)
         }.value
         guard isCurrentRouteLoad(generation) else { return }
+        let queryRadius = Self.baseRouteQueryRadius + plan.plan.maxDeviation
 
         var collected: [OSMElement] = []
         var seenKeys = Set<String>()
         var failedChunks = 0
         var lastFailure: Error?
+        let chunks = plan.plan.chunks
 
-        for (index, chunk) in plan.chunks.enumerated() {
+        for (index, chunk) in chunks.enumerated() {
             guard isCurrentRouteLoad(generation) else { return }
             guard settings.roadDataEnabled else {
                 clearRouteFeatures()
                 return
             }
-            let query = OverpassQuery.featuresAlong(chunk, radius: plan.queryRadius)
+            let query = OverpassQuery.featuresAlong(chunk, radius: queryRadius)
             do {
                 let elements = try await runRouteQuery(query)
                 guard isCurrentRouteLoad(generation) else { return }
@@ -344,28 +406,38 @@ final class RoadInfoService {
                         RouteFeatureExtractor.extract(elements: snapshot, route: plan.route, cumulative: plan.cumulative)
                     }.value
                     guard isCurrentRouteLoad(generation) else { return }
-                    routeFeatures = features
+                    setRouteFeatures(features)
                 }
             } catch {
                 if error is CancellationError || !isCurrentRouteLoad(generation) { return }
                 failedChunks += 1
                 lastFailure = error
                 if case OverpassClientError.offline = error {
-                    failedChunks += plan.chunks.count - index - 1
+                    failedChunks += chunks.count - index - 1
                     break
                 }
                 if case OverpassClientError.noValidEndpoint = error {
-                    failedChunks += plan.chunks.count - index - 1
+                    failedChunks += chunks.count - index - 1
                     break
                 }
             }
         }
 
         guard isCurrentRouteLoad(generation) else { return }
-        routeFeaturesIncomplete = failedChunks > 0
+        var notes: [String] = []
+        if failedChunks > 0 {
+            notes.append("не загружено частей маршрута: \(failedChunks) из \(chunks.count)")
+        }
+        if !plan.plan.isComplete {
+            notes.append("объекты OSM загружены для первых \(RVFormat.distance(plan.plan.coveredLength)) из "
+                         + RVFormat.distance(plan.plan.totalLength))
+        }
+        routeFeaturesIncomplete = !notes.isEmpty
+        routeFeaturesCoverageNote = notes.isEmpty ? nil
+            : "Светофоры, камеры и опасности OSM неполные: " + notes.joined(separator: "; ") + "."
         if let lastFailure {
             routeErrorMessage = Self.describe(lastFailure)
-                + " (не загружено частей маршрута: \(failedChunks) из \(plan.chunks.count))"
+                + " (не загружено частей маршрута: \(failedChunks) из \(chunks.count))"
         } else {
             routeErrorMessage = nil
         }
@@ -377,10 +449,10 @@ final class RoadInfoService {
     /// Runs one route chunk query; when every server is rate limiting, waits (cancellably) and retries once.
     private func runRouteQuery(_ query: String) async throws -> [OSMElement] {
         do {
-            return try await client.run(query)
+            return try await client.run(query, timeout: OverpassClient.routeQueryTimeout)
         } catch OverpassClientError.rateLimited(let retryAfter) {
             try await Task.sleep(nanoseconds: UInt64(min(max(retryAfter, 1), 60) * 1_000_000_000))
-            return try await client.run(query)
+            return try await client.run(query, timeout: OverpassClient.routeQueryTimeout)
         }
     }
 
@@ -409,39 +481,13 @@ private struct RouteQueryPlan: Sendable {
     let route: [GeoPoint]
     /// `Geo.cumulativeDistances(route)`.
     let cumulative: [Double]
-    /// Chunks of the simplified route, one Overpass query each.
-    let chunks: [[GeoPoint]]
-    /// `around` radius large enough to cover the original route despite simplification.
-    let queryRadius: Double
+    /// Chunks (≤ 60 vertices, ≤ 3 km each) of the lightly simplified route.
+    let plan: RouteQueryPlanner.Plan
 
-    init(route: [GeoPoint], maxPoints: Int, chunkSize: Int, baseRadius: Double, maxRadius: Double) {
+    init(route: [GeoPoint], maxPoints: Int, maxLength: Double, tolerance: Double, maxChunks: Int) {
         self.route = route
         self.cumulative = Geo.cumulativeDistances(route)
-        let simplified = Geo.simplify(route, maxPoints: maxPoints)
-        self.chunks = Geo.chunk(simplified, maxPoints: max(2, chunkSize))
-        // Simplification moves the query line away from the real route by up to `deviation` metres; widen the search
-        // radius by that amount so features next to the real route are still found (the extractor filters by the
-        // distance to the full route afterwards).
-        let deviation = Self.maxDeviation(of: route, from: simplified)
-        self.queryRadius = min(maxRadius, max(baseRadius, (baseRadius + deviation).rounded(.up)))
-    }
-
-    /// Largest distance of an original vertex from the simplified line. Douglas–Peucker keeps a subsequence of the
-    /// original vertices, so each original vertex belongs to the simplified segment between the surrounding kept ones.
-    private static func maxDeviation(of route: [GeoPoint], from simplified: [GeoPoint]) -> Double {
-        guard simplified.count >= 2, route.count > simplified.count else { return 0 }
-        var segment = 0
-        var maximum = 0.0
-        for point in route {
-            if segment + 1 < simplified.count - 1, point == simplified[segment + 1] {
-                segment += 1
-                continue
-            }
-            let line = [simplified[segment], simplified[segment + 1]]
-            if let projection = Geo.project(point, onto: line) {
-                maximum = max(maximum, projection.distanceFromLine)
-            }
-        }
-        return maximum
+        self.plan = RouteQueryPlanner.plan(route: route, maxPointsPerChunk: maxPoints, maxChunkLength: maxLength,
+                                           tolerance: tolerance, maxChunks: maxChunks)
     }
 }

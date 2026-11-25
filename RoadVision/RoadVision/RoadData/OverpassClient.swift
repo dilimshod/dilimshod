@@ -47,8 +47,10 @@ enum OverpassClientError: LocalizedError, Equatable {
 actor OverpassClient {
     /// Identifies the app to Overpass operators (also used for Open-Meteo requests).
     static let userAgent = "RoadVision-iOS/1.0 (+https://github.com/dilimshod)"
-    /// Per-request timeout, seconds.
+    /// Default per-request timeout, seconds (current-road queries use `[timeout:15]`).
     static let requestTimeout: TimeInterval = 25
+    /// Timeout for route-feature queries: their server-side `[timeout:25]` plus queueing at the server.
+    static let routeQueryTimeout: TimeInterval = 45
     /// Cool-down applied to an endpoint after HTTP 429/406 when the server sends no `Retry-After`.
     static let rateLimitCooldown: TimeInterval = 30
     /// Lifetime of cached responses, seconds.
@@ -85,8 +87,9 @@ actor OverpassClient {
         self.primaryEndpoint = Self.normalized(primaryEndpoint)
         self.fallbackEndpoints = fallbacks.map { Self.normalized($0) }
         let configuration = URLSessionConfiguration.ephemeral
-        configuration.timeoutIntervalForRequest = Self.requestTimeout
-        configuration.timeoutIntervalForResource = Self.requestTimeout + 15
+        // Per-request timeouts are set on each URLRequest; the session limits only cap them.
+        configuration.timeoutIntervalForRequest = Self.routeQueryTimeout
+        configuration.timeoutIntervalForResource = Self.routeQueryTimeout + 30
         configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
         configuration.httpAdditionalHeaders = ["User-Agent": Self.userAgent]
         self.session = URLSession(configuration: configuration)
@@ -108,7 +111,8 @@ actor OverpassClient {
     ///
     /// Requests are queued: this call waits until every earlier request has finished. Cancelling the calling task
     /// cancels this request (also while it is still waiting in the queue) without disturbing the others.
-    func run(_ query: String) async throws -> [OSMElement] {
+    /// - Parameter timeout: client-side timeout of each HTTP attempt; must exceed the query's `[timeout:N]`.
+    func run(_ query: String, timeout: TimeInterval = OverpassClient.requestTimeout) async throws -> [OSMElement] {
         if let cached = cachedElements(for: query) { return cached }
         let previous = queueTail
         let job = Task { () async throws -> [OSMElement] in
@@ -116,7 +120,7 @@ actor OverpassClient {
             try Task.checkCancellation()
             // An identical query may have been answered while this one was waiting.
             if let cached = self.cachedElements(for: query) { return cached }
-            return try await self.fetchWithFallback(query)
+            return try await self.fetchWithFallback(query, timeout: timeout)
         }
         queueTail = Task { _ = await job.result }
         return try await withTaskCancellationHandler {
@@ -128,7 +132,7 @@ actor OverpassClient {
 
     // MARK: - Endpoint fallback
 
-    private func fetchWithFallback(_ query: String) async throws -> [OSMElement] {
+    private func fetchWithFallback(_ query: String, timeout: TimeInterval) async throws -> [OSMElement] {
         let endpoints = orderedEndpoints()
         guard !endpoints.isEmpty else { throw OverpassClientError.noValidEndpoint }
 
@@ -153,7 +157,7 @@ actor OverpassClient {
                 reasons.append("\(host): некорректный адрес")
                 continue
             }
-            switch try await attempt(url: url, endpoint: endpoint, body: body) {
+            switch try await attempt(url: url, endpoint: endpoint, body: body, timeout: timeout) {
             case .complete(let elements):
                 store(elements, for: query)
                 return elements
@@ -183,9 +187,9 @@ actor OverpassClient {
 
     /// One POST to one endpoint. Throws only for conditions where trying other endpoints is pointless
     /// (cancellation, no internet connection).
-    private func attempt(url: URL, endpoint: String, body: Data) async throws -> AttemptOutcome {
+    private func attempt(url: URL, endpoint: String, body: Data, timeout: TimeInterval) async throws -> AttemptOutcome {
         var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData,
-                                 timeoutInterval: Self.requestTimeout)
+                                 timeoutInterval: max(5, timeout))
         request.httpMethod = "POST"
         request.httpBody = body
         request.setValue(Self.userAgent, forHTTPHeaderField: "User-Agent")

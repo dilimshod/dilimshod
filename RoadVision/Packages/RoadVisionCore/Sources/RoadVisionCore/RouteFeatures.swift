@@ -3,7 +3,7 @@ import Foundation
 /// Kind of a road feature along the route (from OSM).
 public enum RouteFeatureKind: String, Codable, Hashable, Sendable, CaseIterable {
     case trafficSignals, pedestrianCrossing, speedCamera, trafficCalming, railwayCrossing,
-         school, kindergarten, construction, stopSign, giveWay
+         school, kindergarten, construction, stopSign, giveWay, fuel, parking
 
     /// Russian display name.
     public var displayName: String {
@@ -18,6 +18,8 @@ public enum RouteFeatureKind: String, Codable, Hashable, Sendable, CaseIterable 
         case .construction: return "Дорожные работы"
         case .stopSign: return "Знак STOP"
         case .giveWay: return "Уступите дорогу"
+        case .fuel: return "АЗС"
+        case .parking: return "Парковка"
         }
     }
 
@@ -34,6 +36,8 @@ public enum RouteFeatureKind: String, Codable, Hashable, Sendable, CaseIterable 
         case .construction: return "cone.fill"
         case .stopSign: return "octagon.fill"
         case .giveWay: return "arrowtriangle.down"
+        case .fuel: return "fuelpump.fill"
+        case .parking: return "parkingsign"
         }
     }
 
@@ -49,7 +53,14 @@ public enum RouteFeatureKind: String, Codable, Hashable, Sendable, CaseIterable 
         case .construction: return 500
         case .stopSign: return 200
         case .giveWay: return 150
+        case .fuel: return 500
+        case .parking: return 300
         }
+    }
+
+    /// Points of interest (fuel, parking) — informational, never announced as hazards.
+    public var isPointOfInterest: Bool {
+        self == .fuel || self == .parking
     }
 
     /// Features of the same kind closer than this along the route are merged into one (metres).
@@ -57,6 +68,8 @@ public enum RouteFeatureKind: String, Codable, Hashable, Sendable, CaseIterable 
         switch self {
         case .trafficSignals: return 60   // all signal heads of one intersection
         case .pedestrianCrossing: return 25
+        case .fuel: return 60
+        case .parking: return 80
         default: return 30
         }
     }
@@ -65,6 +78,8 @@ public enum RouteFeatureKind: String, Codable, Hashable, Sendable, CaseIterable 
     public func maxOffset(default value: Double) -> Double {
         switch self {
         case .school, .kindergarten: return max(value, 150)
+        case .fuel: return max(value, 100)
+        case .parking: return max(value, 60)
         default: return value
         }
     }
@@ -134,6 +149,10 @@ public enum RouteFeatureExtractor {
         switch tags["amenity"]?.lowercased() {
         case "school": return .school
         case "kindergarten": return .kindergarten
+        case "fuel": return .fuel
+        case "parking":
+            let access = tags["access"]?.lowercased() ?? ""
+            return ["private", "no", "customers"].contains(access) ? nil : .parking
         default: return nil
         }
     }

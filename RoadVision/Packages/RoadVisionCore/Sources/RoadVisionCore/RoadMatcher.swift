@@ -80,6 +80,13 @@ public enum RoadMatcher {
     /// - Returns: nil when no way is within `maxDistance` metres.
     public static func bestMatch(elements: [OSMElement], position: GeoPoint, heading: Double?,
                                  maxDistance: Double = 35) -> RoadSegmentInfo? {
+        scoredMatch(elements: elements, position: position, heading: heading, maxDistance: maxDistance)?.road
+    }
+
+    /// Like `bestMatch`, but also returns the match score (distance + heading / wrong-way / class penalties, metres;
+    /// lower is better). Use the score — not the raw distance — to compare candidates (e.g. for stickiness).
+    public static func scoredMatch(elements: [OSMElement], position: GeoPoint, heading: Double?,
+                                   maxDistance: Double = 35) -> (road: RoadSegmentInfo, score: Double)? {
         guard position.isValid else { return nil }
         let validHeading = heading.flatMap { $0.isFinite && $0 >= 0 ? Geo.normalizeDegrees($0) : nil }
         let excluded = Set(OverpassQuery.excludedHighwayValues)
@@ -123,7 +130,7 @@ public enum RoadMatcher {
         guard let match = best else { return nil }
         let tags = match.element.tags
         let name = nonEmpty(tags["name:ru"]) ?? nonEmpty(tags["name"])
-        return RoadSegmentInfo(wayID: match.element.id,
+        let road = RoadSegmentInfo(wayID: match.element.id,
                                name: name,
                                ref: nonEmpty(tags["ref"]),
                                highway: tags["highway"] ?? "road",
@@ -134,6 +141,7 @@ public enum RoadMatcher {
                                travelingForward: match.forward,
                                distanceToRoad: match.distance,
                                tags: tags)
+        return (road, match.score)
     }
 
     /// `lit=*` → Bool (yes / 24/7 / automatic / limited / interval → true; no / disused → false).

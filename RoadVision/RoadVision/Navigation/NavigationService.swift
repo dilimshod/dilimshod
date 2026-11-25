@@ -3,7 +3,7 @@ import Foundation
 import MapKit
 import Observation
 
-/// One route alternative of the route preview (engine-independent).
+/// One distinct route option of the preview (engine-independent), after merging the candidates of all engines.
 struct RouteOption: Identifiable, Hashable {
     let id: Int
     /// Engine-independent geometry, steps, distance, time, flags and advisories.
@@ -14,31 +14,48 @@ struct RouteOption: Identifiable, Hashable {
     var traffic: TrafficAssessment?
     /// Signalised intersections along the route (Valhalla trace_attributes, else Overpass); nil while unknown.
     var signalCount: Int?
+    /// Other engines that found (nearly) the same route, with their own estimates.
+    var alsoFoundBy: [RouteEstimate] = []
 
     var name: String { route.name }
     var distance: Double { route.distance }
     var expectedTravelTime: Double { route.expectedTravelTime }
     var source: RouteSource { route.source }
+    /// Every engine that found this route (representative first).
+    var sources: [RouteSource] {
+        var result = [route.source]
+        for estimate in alsoFoundBy where !result.contains(estimate.source) { result.append(estimate.source) }
+        return result
+    }
 }
 
-/// Values of `AppSettings.routingEngine`.
-enum RoutingEngineOption: String, CaseIterable, Identifiable {
-    /// MKDirections first; any error or an empty result → Valhalla (OpenStreetMap).
-    case auto
-    /// MKDirections only.
-    case apple
-    /// Valhalla (OpenStreetMap) only.
-    case valhalla
+/// Outcome of one routing engine for the last planning request.
+struct RoutingEngineReport: Identifiable, Hashable {
+    enum Status: Hashable {
+        case success(routes: Int)
+        case failed(String)
+        case notAttempted(String)
+    }
 
-    var id: String { rawValue }
+    let source: RouteSource
+    var status: Status
+    var id: String { source.rawValue }
 
-    /// Russian label for Settings.
-    var displayName: String {
-        switch self {
-        case .auto: return "Авто: Apple, при ошибке OSM"
-        case .apple: return "Только Apple Maps"
-        case .valhalla: return "Только OpenStreetMap (Valhalla)"
+    /// "Valhalla: 2 маршрута", "Apple: ошибка — …", "OSRM: не запрашивался (…)".
+    var summary: String {
+        switch status {
+        case .success(let count):
+            return "\(source.badge): \(count) \(RVFormat.plural(count, "маршрут", "маршрута", "маршрутов"))"
+        case .failed(let reason):
+            return "\(source.badge): ошибка — \(reason)"
+        case .notAttempted(let reason):
+            return "\(source.badge): не запрашивался (\(reason))"
         }
+    }
+
+    var isSuccess: Bool {
+        if case .success = status { return true }
+        return false
     }
 }
 
@@ -47,7 +64,7 @@ enum NavigationError: LocalizedError {
     case noLocation
     case invalidDestination
     case noRoutes
-    case allEnginesFailed(apple: String, osm: String)
+    case allEnginesFailed(String)
 
     var errorDescription: String? {
         switch self {
@@ -57,26 +74,30 @@ enum NavigationError: LocalizedError {
             return "У выбранного места нет координат."
         case .noRoutes:
             return "Маршрут не найден."
-        case .allEnginesFailed(let apple, let osm):
-            return "Маршрут не построен. Apple Maps: \(apple) OpenStreetMap: \(osm)"
+        case .allEnginesFailed(let details):
+            return "Маршрут не построен. \(details)"
         }
     }
 }
 
-/// Route planning and turn-by-turn guidance.
+/// Route planning and turn-by-turn guidance from several free sources.
 ///
-/// Routing follows `settings.routingEngine` (see `docs/CONTRACTS.md` 2.3): Apple's MKDirections does not work in
-/// Uzbekistan, so in "auto" mode ANY Apple error (or an empty result) falls back to Valhalla / OpenStreetMap and
-/// `routingNotice` says so.
+/// Routing (`settings.routingEngine`, see `docs/CONTRACTS.md` 2.3): "auto" queries Apple MKDirections (works only
+/// where Apple supports directions — not in Uzbekistan), Valhalla and OSRM (both FOSSGIS, OpenStreetMap) concurrently.
+/// Each HTTP client enforces its own ≤ 1 request/s spacing. Candidates are merged with `RouteComparison` (routes that
+/// overlap ≥ 85 % are folded together, keeping every engine's estimate), ranked by expected time; the fastest is
+/// selected. `engineReports` / `routingNotice` state each engine's actual outcome (success, error with reason, not
+/// attempted). "apple" / "valhalla" / "osrm" use one engine only.
 ///
-/// For the selected route the service loads (a) per-edge attributes from Valhalla `/trace_attributes` (speed limits,
-/// lanes per direction, typical speed, signals) and (b) hazards along the route from Overpass via `RoadInfoService`,
-/// which also feed `TrafficSignalService`. Both reload (debounced, previous loads cancelled) when the selection changes.
+/// For the selected route the service loads (a) per-edge attributes from Valhalla `/trace_attributes` regardless of
+/// the route's engine (edge_walk for Valhalla shapes, map_snap otherwise) — afterwards also for the other options so the
+/// comparison cards show limits / road classes / signals; (b) OSM features along the route via `RoadInfoService`
+/// (also feeding `TrafficSignalService`); (c) weather at the destination (+ midpoint for > 30 km) via
+/// `RouteWeatherService`. From all of it `timeline` (ordered events) and `speedLimitSegments` are built.
 ///
-/// During guidance every GPS fix updates `progress` (`RouteProgressTracker`), voice prompts (`VoicePromptScheduler`),
-/// the current edge, a live congestion estimate from the user's own speed (`CongestionEstimator` — one vehicle, not
-/// traffic data), hazards within 2 km with one-time voice alerts, and user-reported incidents on the route.
-/// Off-route triggers `recalculate()` (at most every 15 s); arrival stops background location updates.
+/// During guidance every GPS fix updates `progress`, voice prompts, the current edge, a live congestion estimate from
+/// the user's own speed (`CongestionEstimator` — one vehicle, not traffic data), hazards with one-time voice alerts and
+/// user-reported incidents. Off-route triggers `recalculate()` (at most every 15 s); arrival stops background updates.
 @Observable
 @MainActor
 final class NavigationService {
@@ -103,7 +124,7 @@ final class NavigationService {
     }
     private(set) var progress: RouteProgress?
     private(set) var errorMessage: String?
-    /// e.g. "Apple Maps не строит маршруты здесь — маршрут по данным OpenStreetMap (Valhalla)".
+    /// Actual outcome of engines that did not deliver (e.g. "Apple Maps не построил маршрут: …"), nil when all fine.
     private(set) var routingNotice: String?
     /// Valhalla edge attributes of the selected / active route (empty when unavailable or disabled).
     private(set) var routeEdges: [RouteEdgeAttributes] = []
@@ -132,9 +153,21 @@ final class NavigationService {
     private(set) var isWaitingAtSignal = false
     /// Distance to the next signalised intersection (Overpass or Valhalla), metres; nil when unknown.
     private(set) var distanceToNextSignal: Double?
+    /// Outcome of every engine for the last planning / reroute.
+    private(set) var engineReports: [RoutingEngineReport] = []
+    /// Russian notes explaining the comparison of the options.
+    private(set) var comparisonNotes: [String] = []
+    /// Valhalla edge attributes per option id (selected first, then the others), for the comparison cards.
+    private(set) var optionEdges: [Int: [RouteEdgeAttributes]] = [:]
+    /// Ordered events along the selected / active route (maneuvers, limits, lanes, signals, OSM features, incidents).
+    private(set) var timeline: [RouteTimelineEvent] = []
+    /// Speed-limit stretches of the selected / active route (route strip, map colouring).
+    private(set) var speedLimitSegments: [SpeedLimitSegment] = []
 
     /// Destination search (autocompletion, recents) shared by the navigator UI.
     let placeSearch: PlaceSearchService
+    /// Weather at the destination (+ midpoint) of the selected route.
+    let routeWeather = RouteWeatherService()
 
     // MARK: Tuning
 
@@ -147,11 +180,10 @@ final class NavigationService {
     static let minimumAveragingSpan: TimeInterval = 8
     static let signalStopRadius: Double = 60
     static let selectionDebounceNanoseconds: UInt64 = 400_000_000
-    /// Apple polylines are simplified to this many points before map matching.
+    /// Non-Valhalla polylines are simplified to this many points before map matching.
     static let attributesMaxPoints = 1_000
     /// trace_attributes is skipped for longer routes (public server limit ≈ 200 km).
     static let attributesMaxRouteLength: Double = 195_000
-    static let appleFallbackNotice = "Apple Maps не строит маршруты здесь — маршрут по данным OpenStreetMap (Valhalla)"
 
     // MARK: Dependencies & private state
 
@@ -162,6 +194,7 @@ final class NavigationService {
     @ObservationIgnored private let incidents: IncidentStore
     @ObservationIgnored private let settings: AppSettings
     @ObservationIgnored private let valhalla: ValhallaClient
+    @ObservationIgnored private let osrm: OSRMClient
 
     @ObservationIgnored private var tracker: RouteProgressTracker?
     @ObservationIgnored private var voiceScheduler = VoicePromptScheduler()
@@ -172,6 +205,8 @@ final class NavigationService {
     @ObservationIgnored private var listenerID: UUID?
     @ObservationIgnored private var planGeneration = 0
     @ObservationIgnored private var contextGeneration = 0
+    @ObservationIgnored private var rerouteGeneration = 0
+    @ObservationIgnored private var recalculationGeneration = 0
     @ObservationIgnored private var isApplyingRoutes = false
     @ObservationIgnored private var selectionTask: Task<Void, Never>?
     @ObservationIgnored private var attributesTask: Task<Void, Never>?
@@ -194,11 +229,40 @@ final class NavigationService {
         self.incidents = incidents
         self.settings = settings
         self.valhalla = ValhallaClient(endpoint: settings.valhallaEndpoint)
+        self.osrm = OSRMClient(endpoint: settings.osrmEndpoint)
         self.placeSearch = PlaceSearchService(location: location)
+        roadInfo.onRouteFeaturesChanged = { [weak self] in
+            self?.routeFeaturesDidChange()
+        }
     }
 
     /// The route currently selected (preview) or being followed (guidance).
     var activeRoute: NavRoute? { selectedRouteOption?.route }
+
+    /// Facts of an option for the comparison cards (limits / classes / signals once its attributes are loaded).
+    func facts(for option: RouteOption) -> RouteFacts {
+        RouteComparison.facts(for: option.route, edges: optionEdges[option.id] ?? [], signalCount: option.signalCount)
+    }
+
+    /// Distance along the active route (0 before the first fix / in the preview).
+    var distanceAlong: Double { progress?.distanceAlong ?? 0 }
+
+    /// Upcoming timeline events from the current position (all when `limit` is nil).
+    func upcomingEvents(limit: Int? = nil) -> [RouteTimelineEvent] {
+        RouteTimeline.upcoming(timeline, from: distanceAlong, limit: limit)
+    }
+
+    /// Estimated time until `event` is reached, seconds (typical-speed profile, scaled to the remaining time).
+    func timeUntil(_ event: RouteTimelineEvent) -> Double {
+        guard let option = selectedRouteOption else { return 0 }
+        let total = contextCumulative.last ?? option.distance
+        let remainingTime = progress?.remainingTimeSeconds ?? option.expectedTravelTime
+        return RouteTimeline.timeOffset(to: event.distanceAlongRoute, from: distanceAlong, remainingTime: remainingTime,
+                                        totalDistance: total, edges: routeEdges)
+    }
+
+    /// Length of the selected / active route polyline, metres.
+    var routeLength: Double { contextCumulative.last ?? selectedRouteOption?.distance ?? 0 }
 
     // MARK: - Planning
 
@@ -232,52 +296,156 @@ final class NavigationService {
 
     private struct PlannedRoutes {
         var options: [RouteOption]
+        var reports: [RoutingEngineReport]
+        var notes: [String]
         var notice: String?
     }
 
     private func applyPlannedRoutes(_ planned: PlannedRoutes, destination item: MKMapItem, generation: Int) {
-        isApplyingRoutes = true
-        routeOptions = planned.options
-        selectedRouteID = planned.options.first?.id
-        isApplyingRoutes = false
-        routingNotice = planned.notice
+        applyOptions(planned)
         state = .previewing
         reloadRouteContext()
         startIncidentLoop()
-        if planned.options.contains(where: { $0.source == .apple }) {
+        if planned.options.contains(where: { $0.sources.contains(.apple) }) {
             loadTrafficAssessment(to: item, generation: generation)
         }
     }
 
-    /// Routes according to `settings.routingEngine` ("auto" | "apple" | "valhalla").
+    /// Replaces the options (selection → the fastest) and the engine reports.
+    private func applyOptions(_ planned: PlannedRoutes) {
+        isApplyingRoutes = true
+        routeOptions = planned.options
+        optionEdges = [:]
+        selectedRouteID = planned.options.first?.id
+        isApplyingRoutes = false
+        engineReports = planned.reports
+        comparisonNotes = planned.notes
+        routingNotice = planned.notice
+    }
+
+    private enum EngineOutcome {
+        case routes([NavRoute], apple: [NavRoute: MKRoute])
+        case failed(Error)
+        case skipped(String)
+    }
+
+    /// Queries the engines of `settings.routingEngine` concurrently and merges their routes.
     private func computeRoutes(to item: MKMapItem) async throws -> PlannedRoutes {
         let engine = RoutingEngineOption(rawValue: settings.routingEngine) ?? .auto
-        switch engine {
-        case .apple:
-            let options = try await appleRoutes(to: item)
-            guard !options.isEmpty else { throw NavigationError.noRoutes }
-            return PlannedRoutes(options: options, notice: nil)
-        case .valhalla:
-            return PlannedRoutes(options: try await valhallaRoutes(to: item), notice: nil)
-        case .auto:
-            let appleFailure: Error
-            do {
-                let options = try await appleRoutes(to: item)
-                if !options.isEmpty { return PlannedRoutes(options: options, notice: nil) }
-                appleFailure = NavigationError.noRoutes
-            } catch is CancellationError {
-                throw CancellationError()
-            } catch {
-                appleFailure = error
+        let wanted = engine.sources
+        let target = GeoPoint(item.placemark.coordinate)
+        guard target.isValid, target.latitude != 0 || target.longitude != 0 else {
+            throw NavigationError.invalidDestination
+        }
+        let origin = location.coordinate
+        // The heading makes Valhalla start in the direction the car is moving. While standing still only the
+        // compass is available, which is unreliable inside a car, so it is passed only when moving (GPS course).
+        let heading = (location.speedKmh ?? 0) >= 5 ? location.travelDirection : nil
+        await valhalla.setEndpoint(settings.valhallaEndpoint)
+        await osrm.setEndpoint(settings.osrmEndpoint)
+
+        async let appleOutcome = runApple(item, enabled: wanted.contains(.apple))
+        async let valhallaOutcome = runValhalla(origin: origin, target: target, heading: heading,
+                                                enabled: wanted.contains(.valhalla))
+        async let osrmOutcome = runOSRM(origin: origin, target: target, enabled: wanted.contains(.osrm))
+        let outcomes: [(RouteSource, EngineOutcome)] = [(.apple, await appleOutcome),
+                                                         (.valhalla, await valhallaOutcome),
+                                                         (.osrm, await osrmOutcome)]
+        try Task.checkCancellation()
+
+        var all: [NavRoute] = []
+        var appleRoutes: [NavRoute: MKRoute] = [:]
+        var reports: [RoutingEngineReport] = []
+        var failures: [String] = []
+        for (source, outcome) in outcomes {
+            switch outcome {
+            case .routes(let routes, let apple):
+                all.append(contentsOf: routes)
+                appleRoutes.merge(apple) { first, _ in first }
+                reports.append(RoutingEngineReport(source: source, status: .success(routes: routes.count)))
+            case .failed(let error):
+                if error is CancellationError { throw CancellationError() }
+                let reason = Self.describe(error)
+                failures.append("\(source.badge): \(reason)")
+                reports.append(RoutingEngineReport(source: source, status: .failed(reason)))
+            case .skipped(let reason):
+                reports.append(RoutingEngineReport(source: source, status: .notAttempted(reason)))
             }
-            do {
-                let options = try await valhallaRoutes(to: item)
-                return PlannedRoutes(options: options, notice: Self.appleFallbackNotice)
-            } catch is CancellationError {
-                throw CancellationError()
-            } catch {
-                throw NavigationError.allEnginesFailed(apple: Self.describe(appleFailure), osm: Self.describe(error))
+        }
+        guard !all.isEmpty else {
+            if failures.count == 1, let only = outcomes.first(where: {
+                if case .failed = $0.1 { return true }
+                return false
+            }), case .failed(let error) = only.1 {
+                throw error
             }
+            throw NavigationError.allEnginesFailed(failures.joined(separator: " "))
+        }
+
+        let choices = await Task.detached(priority: .userInitiated) { RouteComparison.merge(all) }.value
+        let options = choices.enumerated().map { index, choice in
+            RouteOption(id: index, route: choice.route, mkRoute: appleRoutes[choice.route], traffic: nil,
+                        signalCount: nil, alsoFoundBy: choice.duplicates)
+        }
+        return PlannedRoutes(options: options, reports: reports, notes: RouteComparison.notes(for: choices),
+                             notice: Self.notice(for: reports))
+    }
+
+    /// Routing notice stating each failed engine's real reason (nil when every queried engine delivered).
+    static func notice(for reports: [RoutingEngineReport]) -> String? {
+        let failed = reports.filter {
+            if case .failed = $0.status { return true }
+            return false
+        }
+        guard !failed.isEmpty else { return nil }
+        let delivered = reports.filter(\.isSuccess).map(\.source.badge)
+        var text = failed.map(\.summary).joined(separator: "; ")
+        if !delivered.isEmpty {
+            text += ". Показаны маршруты: " + delivered.joined(separator: ", ")
+        }
+        return text + "."
+    }
+
+    private func runApple(_ item: MKMapItem, enabled: Bool) async -> EngineOutcome {
+        guard enabled else { return .skipped("выключен в настройках") }
+        do {
+            let routes = try await appleRoutes(to: item)
+            guard !routes.isEmpty else { return .failed(NavigationError.noRoutes) }
+            var map: [NavRoute: MKRoute] = [:]
+            for (navRoute, mkRoute) in routes { map[navRoute] = mkRoute }
+            return .routes(routes.map(\.0), apple: map)
+        } catch {
+            return .failed(error)
+        }
+    }
+
+    private func runValhalla(origin: GeoPoint?, target: GeoPoint, heading: Double?, enabled: Bool) async -> EngineOutcome {
+        guard enabled else { return .skipped("выключен в настройках") }
+        guard let origin, origin.isValid else { return .failed(NavigationError.noLocation) }
+        do {
+            let routes = try await valhalla.routes(from: origin, to: target, heading: heading,
+                                                   avoidTolls: settings.avoidTolls, avoidHighways: settings.avoidHighways)
+            return .routes(routes, apple: [:])
+        } catch {
+            return .failed(error)
+        }
+    }
+
+    private func runOSRM(origin: GeoPoint?, target: GeoPoint, enabled: Bool) async -> EngineOutcome {
+        guard enabled else { return .skipped("выключен в настройках") }
+        guard let origin, origin.isValid else { return .failed(NavigationError.noLocation) }
+        do {
+            let routes = try await osrm.routes(from: origin, to: target)
+            // OSRM's public car profile has no toll / highway avoidance: drop routes that violate the preference.
+            let filtered = routes.filter { route in
+                !(settings.avoidTolls && route.hasTolls) && !(settings.avoidHighways && route.hasHighways)
+            }
+            guard !filtered.isEmpty else {
+                return .skipped("все варианты OSRM нарушают «избегать платных / магистралей»")
+            }
+            return .routes(filtered, apple: [:])
+        } catch {
+            return .failed(error)
         }
     }
 
@@ -292,11 +460,11 @@ final class NavigationService {
         return request
     }
 
-    private func appleRoutes(to item: MKMapItem) async throws -> [RouteOption] {
+    private func appleRoutes(to item: MKMapItem) async throws -> [(NavRoute, MKRoute)] {
         let request = makeAppleRequest(to: item)
         request.requestsAlternateRoutes = true
         let response = try await MKDirections(request: request).calculate()
-        var options: [RouteOption] = []
+        var result: [(NavRoute, MKRoute)] = []
         for route in response.routes {
             let polyline = route.polyline.geoPoints
             guard polyline.count >= 2 else { continue }
@@ -309,45 +477,30 @@ final class NavigationService {
                                     expectedTravelTime: route.expectedTravelTime, steps: steps,
                                     hasTolls: route.hasTolls, hasHighways: route.hasHighways,
                                     advisories: route.advisoryNotices)
-            options.append(RouteOption(id: options.count, route: navRoute, mkRoute: route,
-                                       traffic: nil, signalCount: nil))
+            result.append((navRoute, route))
         }
-        return options
+        return result
     }
 
-    private func valhallaRoutes(to item: MKMapItem) async throws -> [RouteOption] {
-        guard let origin = location.coordinate, origin.isValid else { throw NavigationError.noLocation }
-        let target = GeoPoint(item.placemark.coordinate)
-        guard target.isValid, target.latitude != 0 || target.longitude != 0 else {
-            throw NavigationError.invalidDestination
-        }
-        // The heading makes Valhalla start in the direction the car is moving. While standing still only the
-        // compass is available, which is unreliable inside a car, so it is passed only when moving (GPS course).
-        let heading = (location.speedKmh ?? 0) >= 5 ? location.travelDirection : nil
-        await valhalla.setEndpoint(settings.valhallaEndpoint)
-        let routes = try await valhalla.routes(from: origin, to: target, heading: heading,
-                                               avoidTolls: settings.avoidTolls, avoidHighways: settings.avoidHighways)
-        return routes.enumerated().map { index, route in
-            RouteOption(id: index, route: route, mkRoute: nil, traffic: nil, signalCount: nil)
-        }
-    }
-
-    /// Apple only: compares the current ETA with the ETA for the next 03:00 departure (free flow) and stores a
-    /// `TrafficAssessment` on the Apple option whose distance matches the ETA response (within 3 %).
+    /// Apple only: two `calculateETA()` requests from separate `MKDirections` objects — departure now and at the next
+    /// 03:00 (free flow) — and a `TrafficAssessment` on each Apple option whose distance matches BOTH responses within
+    /// 3 %. Nothing is stored when either request fails (never faked).
     private func loadTrafficAssessment(to item: MKMapItem, generation: Int) {
         trafficTask?.cancel()
-        let request = makeAppleRequest(to: item, departure: TrafficDelay.nextOffPeakDate(after: Date()))
+        let nowRequest = makeAppleRequest(to: item, departure: Date())
+        let offPeakRequest = makeAppleRequest(to: item, departure: TrafficDelay.nextOffPeakDate(after: Date()))
         trafficTask = Task { [weak self] in
-            guard let eta = try? await MKDirections(request: request).calculateETA() else { return }
+            guard let now = try? await MKDirections(request: nowRequest).calculateETA(),
+                  !Task.isCancelled,
+                  let offPeak = try? await MKDirections(request: offPeakRequest).calculateETA() else { return }
             guard let self, !Task.isCancelled, generation == self.planGeneration else { return }
-            let freeFlow = eta.expectedTravelTime
-            let etaDistance = eta.distance
-            guard freeFlow > 0, etaDistance > 0 else { return }
+            let current = now.expectedTravelTime, freeFlow = offPeak.expectedTravelTime
+            guard current > 0, freeFlow > 0, now.distance > 0, offPeak.distance > 0 else { return }
             for index in self.routeOptions.indices where self.routeOptions[index].source == .apple {
-                let option = self.routeOptions[index]
-                guard abs(option.distance - etaDistance) / etaDistance <= 0.03 else { continue }
-                self.routeOptions[index].traffic = TrafficAssessment(currentSeconds: option.expectedTravelTime,
-                                                                     freeFlowSeconds: freeFlow)
+                let distance = self.routeOptions[index].distance
+                guard abs(distance - now.distance) / now.distance <= 0.03,
+                      abs(distance - offPeak.distance) / offPeak.distance <= 0.03 else { continue }
+                self.routeOptions[index].traffic = TrafficAssessment(currentSeconds: current, freeFlowSeconds: freeFlow)
             }
         }
     }
@@ -375,7 +528,9 @@ final class NavigationService {
         }
     }
 
-    /// Reloads Valhalla edge attributes, Overpass route features, signals and incidents for the selected route.
+    /// Reloads edge attributes, OSM features, signals, incidents, weather and the timeline for the selected route.
+    /// The previous route's features and signals are cleared synchronously, so a fix processed right after a reroute
+    /// never runs against the old route's data.
     private func reloadRouteContext() {
         selectionTask?.cancel()
         selectionTask = nil
@@ -386,8 +541,6 @@ final class NavigationService {
         contextGeneration &+= 1
         let generation = contextGeneration
 
-        routeEdges = []
-        edgeSignalDistances = []
         currentEdge = nil
         congestion = nil
         upcomingFeatures = []
@@ -395,82 +548,122 @@ final class NavigationService {
         routeAttributesError = nil
         isLoadingRouteAttributes = false
         syncedFeatureCount = -1
+        roadInfo.clearRouteFeatures()
         signals.setRouteSignals([])
 
         guard let option = selectedRouteOption else {
             contextOptionID = nil
             contextCumulative = []
             incidentsOnRoute = []
-            roadInfo.clearRouteFeatures()
+            routeEdges = []
+            edgeSignalDistances = []
+            routeWeather.clear()
+            rebuildTimeline()
             return
         }
         let polyline = option.route.polyline
         let optionID = option.id
         contextOptionID = optionID
         contextCumulative = Geo.cumulativeDistances(polyline)
+        let cached = optionEdges[optionID] ?? []
+        routeEdges = cached
+        edgeSignalDistances = Valhalla.signalDistances(in: cached)
         refreshIncidents()
+        routeWeather.load(route: option.route)
+        rebuildTimeline()
 
         if settings.routeAttributesEnabled {
-            let routeLength = contextCumulative.last ?? 0
-            if routeLength > Self.attributesMaxRouteLength {
+            if (contextCumulative.last ?? 0) > Self.attributesMaxRouteLength {
                 routeAttributesError = "Маршрут длиннее 200 км — полосы и ограничения по маршруту не загружаются."
             } else {
-                isLoadingRouteAttributes = true
-                let source = option.source
+                isLoadingRouteAttributes = cached.isEmpty
                 attributesTask = Task { [weak self] in
-                    await self?.loadAttributes(polyline: polyline, source: source, optionID: optionID,
-                                               generation: generation)
+                    await self?.loadAttributes(selectedID: optionID, generation: generation)
                 }
             }
         }
         featuresTask = Task { [weak self] in
-            await self?.loadFeatures(polyline: polyline, optionID: optionID, generation: generation)
+            await self?.loadFeatures(polyline: polyline, generation: generation)
         }
     }
 
-    private func loadAttributes(polyline: [GeoPoint], source: RouteSource, optionID: Int, generation: Int) async {
-        let edgeWalk = source == .valhalla
-        let input = edgeWalk ? polyline : Geo.simplify(polyline, maxPoints: Self.attributesMaxPoints)
-        await valhalla.setEndpoint(settings.valhallaEndpoint)
-        do {
-            let raw = try await valhalla.traceAttributes(polyline: input, edgeWalk: edgeWalk)
+    /// Valhalla trace_attributes for the selected option first, then for the other options (comparison cards).
+    private func loadAttributes(selectedID: Int, generation: Int) async {
+        let order = [selectedID] + routeOptions.map(\.id).filter { $0 != selectedID }
+        for id in order {
             guard generation == contextGeneration, !Task.isCancelled else { return }
-            let edges = Self.rescaled(raw, toLength: contextCumulative.last ?? Geo.polylineLength(polyline))
-            routeEdges = edges
-            edgeSignalDistances = Valhalla.signalDistances(in: edges)
-            isLoadingRouteAttributes = false
-            if let index = routeOptions.firstIndex(where: { $0.id == optionID }) {
-                routeOptions[index].signalCount = edgeSignalDistances.count
+            guard optionEdges[id] == nil, let option = routeOptions.first(where: { $0.id == id }) else { continue }
+            let polyline = option.route.polyline
+            let length = Geo.polylineLength(polyline)
+            guard length <= Self.attributesMaxRouteLength else { continue }
+            let edgeWalk = option.source == .valhalla
+            let input = edgeWalk ? polyline : Geo.simplify(polyline, maxPoints: Self.attributesMaxPoints)
+            await valhalla.setEndpoint(settings.valhallaEndpoint)
+            do {
+                let raw = try await valhalla.traceAttributes(polyline: input, edgeWalk: edgeWalk)
+                guard generation == contextGeneration, !Task.isCancelled else { return }
+                let edges = Self.rescaled(raw, toLength: length)
+                optionEdges[id] = edges
+                if let index = routeOptions.firstIndex(where: { $0.id == id }) {
+                    routeOptions[index].signalCount = Valhalla.signalDistances(in: edges).count
+                }
+                if id == selectedRouteOption?.id {
+                    routeEdges = edges
+                    edgeSignalDistances = Valhalla.signalDistances(in: edges)
+                    isLoadingRouteAttributes = false
+                    if let progress {
+                        currentEdge = Valhalla.attributes(at: progress.distanceAlong, in: edges)
+                    }
+                    rebuildTimeline()
+                }
+            } catch {
+                guard generation == contextGeneration else { return }
+                if error is CancellationError || Task.isCancelled { return }
+                if id == selectedRouteOption?.id {
+                    isLoadingRouteAttributes = false
+                    routeAttributesError = "Полосы, ограничения и светофоры по маршруту (Valhalla) недоступны. "
+                        + Self.describe(error)
+                }
             }
-            if let progress {
-                currentEdge = Valhalla.attributes(at: progress.distanceAlong, in: edges)
-            }
-        } catch {
-            guard generation == contextGeneration else { return }
-            isLoadingRouteAttributes = false
-            if error is CancellationError || Task.isCancelled { return }
-            routeAttributesError = "Полосы, ограничения и светофоры по маршруту (Valhalla) недоступны. "
-                + Self.describe(error)
         }
     }
 
-    private func loadFeatures(polyline: [GeoPoint], optionID: Int, generation: Int) async {
+    private func loadFeatures(polyline: [GeoPoint], generation: Int) async {
         await roadInfo.loadRouteFeatures(polyline: polyline)
         guard generation == contextGeneration, !Task.isCancelled else { return }
+        routeFeaturesDidChange()
+    }
+
+    /// Called whenever `roadInfo.routeFeatures` changes (progressively while loading).
+    private func routeFeaturesDidChange() {
+        guard state != .idle, state != .planning else { return }
         syncRouteSignals(force: true)
-        if let index = routeOptions.firstIndex(where: { $0.id == optionID }), routeOptions[index].signalCount == nil {
+        if let index = routeOptions.firstIndex(where: { $0.id == contextOptionID }),
+           optionEdges[routeOptions[index].id] == nil, !roadInfo.isLoadingRouteFeatures {
             let count = roadInfo.routeFeatures.filter { $0.kind == .trafficSignals }.count
             if count > 0 || roadInfo.lastError == nil {
                 routeOptions[index].signalCount = count
             }
         }
-        if let progress {
-            refreshUpcomingFeatures(distanceAlong: progress.distanceAlong)
+        refreshUpcomingFeatures(distanceAlong: distanceAlong)
+        rebuildTimeline()
+    }
+
+    private func rebuildTimeline() {
+        guard state != .idle, let option = selectedRouteOption else {
+            if !timeline.isEmpty { timeline = [] }
+            if !speedLimitSegments.isEmpty { speedLimitSegments = [] }
+            return
         }
+        let events = RouteTimeline.build(route: option.route, edges: routeEdges, features: roadInfo.routeFeatures,
+                                         incidents: incidentsOnRoute)
+        if events != timeline { timeline = events }
+        let segments = RouteTimeline.speedLimitSegments(edges: routeEdges, totalDistance: contextCumulative.last)
+        if segments != speedLimitSegments { speedLimitSegments = segments }
     }
 
     /// Stretches edge distances measured on the matched shape to the route polyline length (map matching of a
-    /// simplified Apple polyline gives a slightly different length). Only small corrections (± 20 %) are applied.
+    /// simplified polyline gives a slightly different length). Only small corrections (± 20 %) are applied.
     static func rescaled(_ edges: [RouteEdgeAttributes], toLength length: Double) -> [RouteEdgeAttributes] {
         guard let end = edges.last?.endDistance, end > 0, length > 0 else { return edges }
         let factor = length / end
@@ -499,7 +692,11 @@ final class NavigationService {
         }
         let polyline = option.route.polyline
         let cumulative = contextCumulative.count == polyline.count ? contextCumulative : nil
-        incidentsOnRoute = incidents.along(route: polyline, cumulative: cumulative)
+        let items = incidents.along(route: polyline, cumulative: cumulative)
+        if items != incidentsOnRoute {
+            incidentsOnRoute = items
+            rebuildTimeline()
+        }
     }
 
     private func startIncidentLoop() {
@@ -564,26 +761,31 @@ final class NavigationService {
         guard state == .navigating, let destination, !isRecalculating else { return }
         if let last = lastRerouteAt, Date().timeIntervalSince(last) < Self.minimumRerouteInterval { return }
         lastRerouteAt = Date()
+        recalculationGeneration &+= 1
+        let token = recalculationGeneration
         isRecalculating = true
-        defer { isRecalculating = false }
+        // A stale run (guidance ended / restarted meanwhile) must not clear the flag of a newer one.
+        defer {
+            if token == recalculationGeneration { isRecalculating = false }
+        }
         let generation = planGeneration
         if settings.voiceGuidanceEnabled {
             speech.speak("Перестраиваю маршрут", priority: .high)
         }
         do {
             let planned = try await computeRoutes(to: destination)
-            guard generation == planGeneration, state == .navigating, let first = planned.options.first else { return }
-            isApplyingRoutes = true
-            routeOptions = planned.options
-            isApplyingRoutes = false
-            routingNotice = planned.notice
+            guard generation == planGeneration, token == recalculationGeneration, state == .navigating,
+                  let first = planned.options.first else { return }
+            applyOptions(planned)
             beginGuidance(on: first)
+            // Clears the old route's features / signals synchronously before the first fix on the new route.
             reloadRouteContext()
             if let fix = location.location {
                 handleFix(fix)
             }
         } catch {
-            guard generation == planGeneration, state == .navigating, !(error is CancellationError) else { return }
+            guard generation == planGeneration, token == recalculationGeneration, state == .navigating,
+                  !(error is CancellationError) else { return }
             errorMessage = "Не удалось перестроить маршрут. " + Self.describe(error)
         }
     }
@@ -624,6 +826,8 @@ final class NavigationService {
         location.setBackgroundUpdates(false)
         rerouteTask?.cancel()
         rerouteTask = nil
+        rerouteGeneration &+= 1
+        recalculationGeneration &+= 1
         isRecalculating = false
         tracker = nil
         activeOptionID = nil
@@ -652,12 +856,17 @@ final class NavigationService {
         contextCumulative = []
         progress = nil
         routingNotice = nil
+        engineReports = []
+        comparisonNotes = []
+        optionEdges = [:]
         routeEdges = []
         edgeSignalDistances = []
         currentEdge = nil
         congestion = nil
         upcomingFeatures = []
         incidentsOnRoute = []
+        timeline = []
+        speedLimitSegments = []
         isLoadingRouteAttributes = false
         routeAttributesError = nil
         averageSpeedKmh = nil
@@ -669,6 +878,7 @@ final class NavigationService {
         syncedFeatureCount = -1
         roadInfo.clearRouteFeatures()
         signals.setRouteSignals([])
+        routeWeather.clear()
     }
 
     private func arrive() {
@@ -677,6 +887,7 @@ final class NavigationService {
         location.setBackgroundUpdates(false)
         rerouteTask?.cancel()
         rerouteTask = nil
+        rerouteGeneration &+= 1
         incidentLoopTask?.cancel()
         incidentLoopTask = nil
         congestion = nil
@@ -730,7 +941,8 @@ final class NavigationService {
 
     private func updateRoadContext(_ current: RouteProgress, speedKmh: Double?) {
         let along = current.distanceAlong
-        currentEdge = Valhalla.attributes(at: along, in: routeEdges)
+        let edge = Valhalla.attributes(at: along, in: routeEdges)
+        if edge != currentEdge { currentEdge = edge }
         refreshUpcomingFeatures(distanceAlong: along)
 
         var nextSignal = signals.upcoming(fromDistance: along, limit: 1).first?.distanceAhead
@@ -759,12 +971,17 @@ final class NavigationService {
         }
     }
 
+    /// Starts a reroute task. The task clears `rerouteTask` only if it is still the current one (a stale task finishing
+    /// after guidance was restarted must not clear the newer task).
     private func requestReroute() {
         guard !isRecalculating, rerouteTask == nil else { return }
         if let last = lastRerouteAt, Date().timeIntervalSince(last) < Self.minimumRerouteInterval { return }
+        rerouteGeneration &+= 1
+        let generation = rerouteGeneration
         rerouteTask = Task { [weak self] in
             await self?.recalculate()
-            self?.rerouteTask = nil
+            guard let self, self.rerouteGeneration == generation else { return }
+            self.rerouteTask = nil
         }
     }
 
@@ -818,7 +1035,7 @@ final class NavigationService {
         case .pedestrianCrossing: return speed > 40 ? "Пешеходный переход" : nil
         case .construction: return "Впереди дорожные работы"
         case .trafficCalming: return speed > 30 ? "Впереди искусственная неровность" : nil
-        case .trafficSignals, .stopSign, .giveWay: return nil
+        case .trafficSignals, .stopSign, .giveWay, .fuel, .parking: return nil
         }
     }
 
@@ -872,16 +1089,24 @@ final class NavigationService {
         if let valhallaError = error as? ValhallaClientError {
             return valhallaError.errorDescription ?? "Ошибка Valhalla."
         }
+        if let osrmError = error as? OSRMClientError {
+            return osrmError.errorDescription ?? "Ошибка OSRM."
+        }
         if let mkError = error as? MKError {
+            // State the actual error (code + system text) instead of guessing the cause.
+            let code = mkError.code.rawValue
+            let text = mkError.localizedDescription
             switch mkError.code {
-            case .placemarkNotFound, .directionsNotFound:
-                return "Apple Maps не строит маршруты в этом регионе."
+            case .directionsNotFound:
+                return "Apple Maps не построил маршрут (MKError \(code), «\(text)»)."
+            case .placemarkNotFound:
+                return "Apple Maps не нашёл точку старта или назначения (MKError \(code), «\(text)»)."
             case .loadingThrottled:
-                return "Apple Maps временно ограничил число запросов маршрутов. Подождите минуту."
+                return "Apple Maps временно ограничил число запросов маршрутов (MKError \(code)). Подождите минуту."
             case .serverFailure:
-                return "Сервер маршрутов Apple недоступен или нет интернета."
+                return "Сервер маршрутов Apple недоступен или нет интернета (MKError \(code), «\(text)»)."
             default:
-                return "Apple Maps: \(mkError.localizedDescription)"
+                return "Apple Maps: ошибка MKError \(code) — \(text)"
             }
         }
         if let urlError = error as? URLError {
