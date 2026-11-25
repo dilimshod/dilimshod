@@ -2,9 +2,11 @@ import CoreLocation
 import MapKit
 import SwiftUI
 
-/// Full-screen navigator: `MKMapView` map below everything, guidance banner + lanes + road strip on top, the live
-/// camera window (or a camera button) in the top-left corner, map / app buttons on the right, and a state-dependent
-/// bottom panel (search → planning → route options → trip info → arrival).
+/// Full-screen navigator: `MKMapView` map below everything; on top the guidance banner (with lanes and "затем"),
+/// the collapsible current-road card and a hazard chip; the live camera window (or a camera button) in the top-left
+/// corner; map buttons on the right (layers: Схема / Спутник / Гибрид, 3D, Apple traffic; recentre; report;
+/// settings); and a state-dependent bottom panel (search → planning → route options → trip info → arrival).
+/// Panels stay at the edges so the map centre (the car) is never covered.
 struct NavigatorView: View {
     @Environment(AppState.self) private var app
 
@@ -15,6 +17,8 @@ struct NavigatorView: View {
     @State private var showLongPressDialog = false
     @State private var topInset: CGFloat = 0
     @State private var bottomInset: CGFloat = 0
+    @AppStorage(NavigatorSettingsKeys.mapStyle) private var mapStyleRaw = NavigatorMapStyle.standard.rawValue
+    @AppStorage(NavigatorSettingsKeys.map3D) private var is3D = true
 
     private static let fixTheMapURL = URL(string: "https://www.openstreetmap.org/fixthemap")!
 
@@ -90,8 +94,11 @@ struct NavigatorView: View {
             selectedRouteID: nav.selectedRouteOption?.id,
             destination: nav.destination.map { GeoPoint($0.placemark.coordinate) },
             destinationTitle: nav.destinationName,
-            features: nav.state == .idle ? [] : app.roadInfo.routeFeatures,
+            events: nav.state == .idle ? [] : nav.timeline,
+            speedLimitSegments: nav.state == .idle ? [] : nav.speedLimitSegments,
             incidents: app.incidents.incidents,
+            mapStyle: NavigatorMapStyle(rawValue: mapStyleRaw) ?? .standard,
+            is3D: is3D,
             cameraMode: cameraMode(nav.state),
             showsTraffic: app.settings.showTrafficOnMap,
             trafficTileTemplate: app.settings.trafficTileTemplate,
@@ -122,11 +129,12 @@ struct NavigatorView: View {
     private func topSection(_ nav: NavigationService) -> some View {
         VStack(spacing: 6) {
             if nav.state == .navigating, let progress = nav.progress {
-                ManeuverBannerView(progress: progress, isRerouting: nav.isRecalculating)
-                laneGuidance(nav, progress: progress)
+                let lanes = laneGuidance(nav, progress: progress)
+                ManeuverBannerView(progress: progress, isRerouting: nav.isRecalculating,
+                                   lanes: lanes.lanes, recommendedLanes: lanes.recommended, laneSource: lanes.source)
             }
             if hasRoadInfo(nav) {
-                roadStrip(nav)
+                CurrentRoadCard(nextManeuver: nav.state == .navigating ? nav.progress?.nextManeuver : nil)
             }
             if nav.state == .navigating, let progress = nav.progress {
                 hazardChip(nav, progress: progress)
@@ -134,92 +142,23 @@ struct NavigatorView: View {
         }
     }
 
-    @ViewBuilder
-    private func laneGuidance(_ nav: NavigationService, progress: RouteProgress) -> some View {
+    /// Lanes for the banner: the routing engine's lanes at the next maneuver (≤ 1.5 km), else OSM `turn:lanes` of
+    /// the current road (≤ 600 m) with recommendations derived from the maneuver.
+    private func laneGuidance(_ nav: NavigationService, progress: RouteProgress)
+        -> (lanes: [Lane], recommended: [Bool], source: String?) {
         let distance = progress.distanceToNextManeuver ?? .infinity
-        if !progress.isOffRoute {
-            if !progress.nextLanes.isEmpty, distance <= 1_500 {
-                LaneGuidanceView(lanes: progress.nextLanes, recommended: progress.nextActiveLanes)
-            } else if let info = app.roadInfo.currentRoad?.laneInfo, !info.lanes.isEmpty, distance <= 600 {
-                LaneGuidanceView(laneInfo: info, maneuver: progress.nextManeuver)
-            }
+        guard !progress.isOffRoute else { return ([], [], nil) }
+        if !progress.nextLanes.isEmpty, distance <= 1_500 {
+            return (progress.nextLanes, progress.nextActiveLanes, nav.selectedRouteOption?.source.badge)
         }
+        if let info = app.roadInfo.currentRoad?.laneInfo, !info.lanes.isEmpty, distance <= 600 {
+            return (info.lanes, LaneGuidance.recommendedLanes(info.lanes, for: progress.nextManeuver), "OSM")
+        }
+        return ([], [], nil)
     }
 
     private func hasRoadInfo(_ nav: NavigationService) -> Bool {
         app.roadInfo.currentRoad != nil || nav.currentEdge != nil
-    }
-
-    private func speedLimit(_ nav: NavigationService) -> Int? {
-        nav.currentEdge?.speedLimitKmh ?? app.roadInfo.currentRoad?.speedLimit?.kmh
-    }
-
-    private func roadName(_ nav: NavigationService) -> String {
-        if let road = app.roadInfo.currentRoad { return road.displayName }
-        if let name = nav.currentEdge?.names.first, !name.isEmpty { return name }
-        return "Дорога"
-    }
-
-    /// "Полос: 3 из 6", "Полос: ≈2". Valhalla's per-direction count is preferred; a Valhalla value of 1 may mean
-    /// "not tagged", so then the OSM count (when it is not itself a guess) wins and a remaining 1 is marked "≈".
-    private func laneText(_ nav: NavigationService) -> String? {
-        let osm = app.roadInfo.currentRoad?.laneInfo
-        let osmCount = osm?.lanesInDirection
-        let osmEstimated = osm?.isEstimated ?? true
-        var count: Int?
-        var estimated = false
-        if let valhalla = nav.currentEdge?.laneCount, valhalla > 1 || osmCount == nil || osmEstimated {
-            count = valhalla
-            estimated = valhalla == 1
-        } else if let osmCount {
-            count = osmCount
-            estimated = osmEstimated
-        }
-        guard let count else { return nil }
-        var text = "Полос: " + (estimated ? "≈" : "") + "\(count)"
-        if let total = osm?.totalLanes, total > count {
-            text += " из \(total)"
-        }
-        return text
-    }
-
-    private func roadStrip(_ nav: NavigationService) -> some View {
-        let limit = speedLimit(nav)
-        return HStack(spacing: 8) {
-            VStack(alignment: .leading, spacing: 1) {
-                Text(roadName(nav))
-                    .font(.subheadline.weight(.semibold))
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.8)
-                HStack(spacing: 5) {
-                    if let lanes = laneText(nav) {
-                        Label(lanes, systemImage: "road.lanes")
-                            .font(.caption.weight(.semibold))
-                            .monospacedDigit()
-                    }
-                    Text("OSM")
-                        .font(.system(size: 8, weight: .bold))
-                        .padding(.horizontal, 4)
-                        .padding(.vertical, 1)
-                        .overlay(Capsule().stroke(Color.white.opacity(0.5), lineWidth: 1))
-                        .foregroundStyle(.white.opacity(0.7))
-                        .accessibilityLabel("Данные OpenStreetMap")
-                }
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            // Shows the speed and, when known, the limit sign (`SpeedLimitSignView`); turns red above
-            // limit + tolerance when the speed warning is enabled.
-            SpeedometerView(speedKmh: app.location.speedKmh,
-                            limitKmh: limit,
-                            warningTolerance: app.settings.speedWarningTolerance,
-                            compact: true,
-                            warningEnabled: app.settings.speedWarningEnabled)
-        }
-        .foregroundStyle(.white)
-        .padding(.leading, 12)
-        .padding(.trailing, 4)
-        .padding(.vertical, 4)
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
     }
 
     /// Nearest hazard (not a signal) inside its warning distance, shown as a glanceable chip.
@@ -227,7 +166,8 @@ struct NavigatorView: View {
     private func hazardChip(_ nav: NavigationService, progress: RouteProgress) -> some View {
         let hazard = nav.upcomingFeatures.first { feature in
             let ahead = feature.distanceAlongRoute - progress.distanceAlong
-            return feature.kind != .trafficSignals && ahead >= 0 && ahead <= feature.kind.alertDistance
+            return feature.kind != .trafficSignals && !feature.kind.isPointOfInterest
+                && ahead >= 0 && ahead <= feature.kind.alertDistance
         }
         if let hazard {
             HStack(spacing: 6) {
@@ -243,19 +183,9 @@ struct NavigatorView: View {
             .foregroundStyle(.white)
             .padding(.horizontal, 10)
             .frame(minHeight: 30)
-            .background(hazardTint(hazard.kind), in: Capsule())
+            .background(Color(uiColor: NavigatorStyle.featureUIColor(hazard.kind)).opacity(0.9), in: Capsule())
             .frame(maxWidth: .infinity, alignment: .leading)
             .accessibilityElement(children: .combine)
-        }
-    }
-
-    private func hazardTint(_ kind: RouteFeatureKind) -> Color {
-        switch kind {
-        case .speedCamera: return .purple
-        case .school, .kindergarten: return Color(red: 0.75, green: 0.55, blue: 0)
-        case .railwayCrossing: return .gray
-        case .pedestrianCrossing: return .blue
-        default: return .orange
         }
     }
 
@@ -270,25 +200,50 @@ struct NavigatorView: View {
                     SpeedometerView(speedKmh: app.location.speedKmh, limitKmh: nil, compact: true)
                 }
                 if !isFollowing {
-                    GlassIconButton(systemName: "location.fill", label: "Центр", size: 44, tint: .blue) {
+                    GlassIconButton(systemName: "location.fill", label: "Центр", size: RVTheme.HUD.button, tint: .blue) {
                         isFollowing = true
                     }
                 }
-                GlassIconButton(systemName: app.settings.showTrafficOnMap ? "car.2.fill" : "car.2",
-                                label: "Пробки",
-                                size: 44,
-                                tint: app.settings.showTrafficOnMap ? .orange : .white) {
-                    app.settings.showTrafficOnMap.toggle()
-                }
-                GlassIconButton(systemName: "exclamationmark.bubble.fill", label: "Сообщить", size: 44) {
+                layersMenu
+                GlassIconButton(systemName: "exclamationmark.bubble.fill", label: "Сообщить", size: RVTheme.HUD.button) {
                     incidentTarget = IncidentReportTarget(coordinate: nil)
                 }
-                GlassIconButton(systemName: "gearshape.fill", label: "Настройки", size: 44) {
+                GlassIconButton(systemName: "gearshape.fill", label: "Настройки", size: RVTheme.HUD.button) {
                     app.showSettings = true
                 }
-                AssistantButton(size: 44)
             }
         }
+    }
+
+    /// Map layer switcher: Схема / Спутник / Гибрид, 3D, Apple traffic layer.
+    private var layersMenu: some View {
+        @Bindable var settings = app.settings
+        let style = NavigatorMapStyle(rawValue: mapStyleRaw) ?? .standard
+        return Menu {
+            Picker("Слой карты", selection: $mapStyleRaw) {
+                ForEach(NavigatorMapStyle.allCases) { option in
+                    Label(option.displayName, systemImage: option.symbolName).tag(option.rawValue)
+                }
+            }
+            Toggle(isOn: $is3D) {
+                Label("3D (рельеф, наклон)", systemImage: "view.3d")
+            }
+            Toggle(isOn: $settings.showTrafficOnMap) {
+                Label("Пробки Apple (где есть данные)", systemImage: "car.2.fill")
+            }
+        } label: {
+            Image(systemName: style.symbolName)
+                .font(.system(size: RVTheme.HUD.button * 0.42, weight: .semibold, design: .rounded))
+                .symbolRenderingMode(.hierarchical)
+                .foregroundStyle(.white)
+                .frame(width: RVTheme.HUD.button, height: RVTheme.HUD.button)
+                .background(.ultraThinMaterial, in: Circle())
+                .overlay(Circle().strokeBorder(Color.white.opacity(0.22), lineWidth: 1))
+                .shadow(color: .black.opacity(0.35), radius: 6, x: 0, y: 2)
+                .frame(width: GlassIconButton.minimumHitSize, height: GlassIconButton.minimumHitSize)
+                .contentShape(Rectangle())
+        }
+        .accessibilityLabel("Слои карты: \(style.displayName)\(is3D ? ", 3D" : "")")
     }
 
     @ViewBuilder
@@ -297,7 +252,7 @@ struct NavigatorView: View {
             // Live camera with recognition boxes; it sizes and styles itself and returns to the camera on tap.
             CameraPiPView(pipeline: app.recognition)
         } else {
-            GlassIconButton(systemName: "camera.fill", label: "Камера", size: 44) {
+            GlassIconButton(systemName: "camera.fill", label: "Камера", size: RVTheme.HUD.button) {
                 app.switchTo(.camera)
             }
         }
@@ -457,9 +412,9 @@ struct NavigatorView: View {
 
     @ViewBuilder
     private func attributionFooter(_ nav: NavigationService) -> some View {
-        let showsOSM = nav.routeOptions.contains { $0.source == .valhalla } || !nav.routeEdges.isEmpty
-            || app.roadInfo.currentRoad != nil || !app.roadInfo.routeFeatures.isEmpty
-        let showsWeather = nav.state == .navigating && app.weather.current != nil
+        let showsOSM = nav.routeOptions.contains { $0.sources.contains(where: \.usesOpenStreetMap) }
+            || !nav.routeEdges.isEmpty || app.roadInfo.currentRoad != nil || !app.roadInfo.routeFeatures.isEmpty
+        let showsWeather = (nav.state == .navigating && app.weather.current != nil) || !nav.routeWeather.points.isEmpty
         if showsOSM || showsWeather {
             HStack(spacing: 12) {
                 if showsOSM {

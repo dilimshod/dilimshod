@@ -538,13 +538,17 @@ normalized boxes map onto the buffer; the overlay maps them onto the aspect-fill
     private(set) var lastError: String?
     private(set) var routeFeatures: [RouteFeature]        // for the active route
     private(set) var isLoadingRouteFeatures: Bool
-    func start(); func stop()                             // refresh ≈ every 10 s or 60 m, max 1 request in flight
-    func loadRouteFeatures(polyline: [GeoPoint]) async    // simplify + chunk, one Overpass request per chunk, sequential
+    private(set) var routeFeaturesIncomplete: Bool; private(set) var routeFeaturesCoverageNote: String?   // added
+    var onRouteFeaturesChanged: (() -> Void)?             // added (NavigationService rebuilds its timeline)
+    var travelHeading: Double? { get }                    // added: GPS course ≥ 5 km/h, else last course ≤ 60 s, else compass
+    func start(); func stop()                             // refresh ≈ every 10 s or 60 m, max 1 request in flight;
+                                                          // roadsAround radius 40 m (= matcher maxDistance), signals 80 m
+    func loadRouteFeatures(polyline: [GeoPoint]) async    // RouteQueryPlanner chunks (≤ 60 pts, ≤ 3 km), sequential, 45 s timeout
     func clearRouteFeatures()
 }
-actor OverpassClient {                                     // endpoint fallback, 429/504 back-off, 25 s timeout, User-Agent
-    init(primaryEndpoint: String)
-    func run(_ query: String) async throws -> [OSMElement]
+actor OverpassClient {                                     // endpoint fallback, 429/504 back-off, User-Agent
+    init(primaryEndpoint: String, fallbacks: [String])
+    func run(_ query: String, timeout: TimeInterval = 25) async throws -> [OSMElement]   // route queries: routeQueryTimeout = 45
 }
 @Observable @MainActor final class WeatherService {
     init(location: LocationService)
@@ -573,64 +577,111 @@ actor OverpassClient {                                     // endpoint fallback,
 }
 ```
 
-### 2.3 Navigator (folder Navigation/)
+### 2.3 Navigator (folder Navigation/) — navigator v2 (multi-source)
 Routing facts: Apple's feature-availability page lists Uzbekistan only for "Maps: Satellite" (no Turn-by-Turn/Traffic/Lane
-Guidance/Speed Limits); MKDirections may fail there ("Directions Not Available", MKError .placemarkNotFound=4 / .directionsNotFound=5).
-Therefore routing = `settings.routingEngine`: "auto" (MKDirections first, ANY error → Valhalla), "apple", "valhalla".
-Valhalla (core `Valhalla.swift`, already written & tested on a real Tashkent route) gives Russian instructions, maneuver types,
-lane arrows + recommended lanes, alternates; `/trace_attributes` gives per-edge speed limit, lanes per direction, typical speed,
-traffic signals along ANY route polyline (edge_walk for Valhalla shapes, map_snap for Apple shapes simplified to ≤ 1000 pts).
-FOSSGIS policy: ≤ 1 request/s, identifying User-Agent, OSM attribution + link https://www.openstreetmap.org/fixthemap, URL configurable.
-No free real-time traffic source covers Tashkent (MapKit traffic layer where Apple has data; optional user-supplied raster tile
-template `settings.trafficTileTemplate`; live "congestion on current segment" = CongestionEstimator(own GPS speed vs typical speed)).
+Guidance/Speed Limits); MKDirections may fail there (MKError .placemarkNotFound=4 / .directionsNotFound=5).
+`settings.routingEngine`: "auto" (Apple + Valhalla + OSRM queried CONCURRENTLY, each client ≤ 1 req/s; routes merged and
+ranked, fastest auto-selected), "apple", "valhalla", "osrm". All sources are free and keyless: Valhalla FOSSGIS
+(`Valhalla.defaultEndpoint`: Russian instructions, lanes, alternates, `/trace_attributes`), OSRM FOSSGIS (`OSRM.defaultEndpoint`
+= https://routing.openstreetmap.de/routed-car; no text instructions → Russian ones built in core), Overpass (OSM features),
+Open-Meteo (weather). FOSSGIS policy: ≤ 1 request/s, identifying User-Agent, OSM attribution + link
+https://www.openstreetmap.org/fixthemap, URLs configurable. No free real-time traffic exists for Tashkent — never faked
+(MapKit traffic layer where Apple has data; optional user tile template, **https only**; live "congestion on current segment"
+= CongestionEstimator(own GPS speed vs typical speed)).
+
+Core additions (Foundation only, tested in `NavigatorV2Tests`):
 ```swift
-actor ValhallaClient {                                  // URLSession, UA "RoadVision-iOS/1.0", ≥ 1.1 s between requests, 25 s timeout
-    init(endpoint: String)
-    func routes(from: GeoPoint, to: GeoPoint, heading: Double?, avoidTolls: Bool, avoidHighways: Bool) async throws -> [NavRoute]
-    func traceAttributes(polyline: [GeoPoint], edgeWalk: Bool) async throws -> [RouteEdgeAttributes]
-}
+// Valhalla.swift (changed, compatible)
+public enum RouteSource: String, Codable, Hashable, Sendable, CaseIterable { case apple, valhalla, osrm
+    var displayName   // "Apple Maps", "OpenStreetMap (Valhalla)", "OpenStreetMap (OSRM)"
+    var badge         // "Apple", "Valhalla", "OSRM"
+    var mayIncludeTraffic: Bool; var usesOpenStreetMap: Bool }
+RouteEdgeAttributes += surface: String?, use: String?, isToll, isTunnel, isBridge (init params defaulted), length, isPrimaryRoad,
+    static roadClassDisplayName(_:), static surfaceDisplayName(_:)      // trace filters += edge.surface/use/toll/tunnel/bridge
+Valhalla.arrivalInstruction(instruction:alert:)   // .arrive: verbal_transition_alert_instruction, else "Вы прибыли"→"Вы прибудете"
+// OSRM.swift
+public struct OSRMError: Error { code: String?; message; russianDescription }
+public enum OSRM { defaultEndpoint; routeURL(endpoint:from:to:alternatives:) -> URL?   // polyline6, steps, alternatives, annotations
+    parseRoutes(_ data: Data) throws -> [NavRoute]       // source .osrm; step 0 instruction blanked; lanes = intersections[0].lanes
+    maneuverType(type:modifier:) -> ManeuverType; instruction(type:modifier:name:exit:rotaryName:) -> String   // Russian
+    laneTurn(_ indication:) -> LaneTurn; lanes(from: [OSRMLane]) -> (lanes, valid) }                          // recommended = valid
+// RouteComparison.swift
+public struct RouteEstimate { source; expectedTravelTime; distance }
+public struct RouteChoice { route: NavRoute; duplicates: [RouteEstimate]; sources; timeRange }
+public struct RouteFacts { distance, expectedTravelTime, averageSpeedKmh, signalCount, maxSpeedLimitKmh, averageSpeedLimitKmh,
+    speedLimitCoverage, primaryRoadShare, unpavedShare, hasTolls, hasHighways, maneuverCount, tunnelCount, bridgeCount }
+public enum RouteComparison { samples(_:spacing:); overlap(_:_:spacing:tolerance:); similarity(_:_:tolerance:)
+    merge(_ routes:threshold: 0.85, tolerance: 30) -> [RouteChoice]   // fastest first; duplicates folded into the faster one
+    facts(for:edges:signalCount:) -> RouteFacts; delayText(_:comparedTo:) -> String?; notes(for:) -> [String] }
+// RouteTimeline.swift
+public enum RouteTimelineKind { maneuver(ManeuverType), speedLimit(Int?), lanes(from:to:), trafficSignal,
+    feature(RouteFeatureKind), incident(RoadIncidentKind), destination; var category: String }
+public struct RouteTimelineEvent: Identifiable { id; distanceAlongRoute; kind; title; detail; symbolName; source; coordinate }
+public struct SpeedLimitSegment { start; end; limitKmh: Int? }
+public enum RouteTimeline { maneuverDistances(steps:totalLength:); build(route:edges:features:incidents:) -> [RouteTimelineEvent]
+    upcoming(_:from:limit:); speedLimitSegments(edges:totalDistance:); timeOffset(to:from:remainingTime:totalDistance:edges:) }
+// RouteQueryPlanner.swift — Overpass chunks: 10 m simplification, ≤ 60 points AND ≤ 3 km per chunk; maxChunks → droppedChunks
+public enum RouteQueryPlanner { plan(route:maxPointsPerChunk:maxChunkLength:tolerance:maxChunks:) -> Plan; chunks(_:maxPoints:maxLength:) }
+// RouteFeatures.swift: RouteFeatureKind += .fuel ("АЗС"), .parking ("Парковка"); isPointOfInterest (never announced as hazards)
+// OverpassQuery.featuresAlong += nwr[amenity=fuel] (100 m), nwr[amenity=parking][access!~private|no|customers] (60 m)
+// RoadMatcher.scoredMatch(elements:position:heading:maxDistance:) -> (road, score)   // stickiness compares scores
+```
+
+App layer:
+```swift
+actor ValhallaClient { init(endpoint:); setEndpoint(_:); static url(endpoint:path:); static userAgent
+    func routes(from:to:heading:avoidTolls:avoidHighways:) async throws -> [NavRoute]
+    func traceAttributes(polyline:edgeWalk:) async throws -> [RouteEdgeAttributes] }
+actor OSRMClient { init(endpoint:); setEndpoint(_:); func routes(from:to:) async throws -> [NavRoute] }   // ≥ 1.1 s spacing, UA
+enum OSRMClientError: LocalizedError                                                                        // Russian
 struct RouteOption: Identifiable, Hashable {
-    let id: Int
-    var route: NavRoute                    // engine-independent (polyline, steps, distance, time, flags, advisories)
-    var mkRoute: MKRoute?                  // only for Apple routes
-    var traffic: TrafficAssessment?        // nil unless a traffic-aware estimate exists (do NOT fake it)
-    var signalCount: Int?                  // signalised intersections along the route (trace_attributes / Overpass)
-    var name: String { get }; var distance: Double { get }; var expectedTravelTime: Double { get }
+    let id: Int; var route: NavRoute; var mkRoute: MKRoute?
+    var traffic: TrafficAssessment?   // Apple only: calculateETA() now vs next 03:00 (two MKDirections), both distances within 3 %
+    var signalCount: Int?; var alsoFoundBy: [RouteEstimate]
+    var name, distance, expectedTravelTime, source: RouteSource, sources: [RouteSource] { get }
 }
+struct RoutingEngineReport: Identifiable { source; status: .success(routes:) | .failed(String) | .notAttempted(String); summary; isSuccess }
+enum RoutingEngineOption: String { auto, apple, valhalla, osrm; displayName; sources }
+enum NavigatorMapStyle: String { standard, satellite, hybrid; displayName ("Схема"/"Спутник"/"Гибрид"); symbolName }
+enum NavigatorSettingsKeys { osrmEndpoint = "rv.osrmEndpoint", mapStyle = "rv.mapStyle", map3D = "rv.map3D" }
+extension AppSettings { var osrmEndpoint: String; var navigatorMapStyle: NavigatorMapStyle }   // UserDefaults (NavigatorSettings.swift)
 @Observable @MainActor final class NavigationService {
     enum State: Equatable { case idle, planning, previewing, navigating, arrived }
-    init(location: LocationService, speech: SpeechService, roadInfo: RoadInfoService,
-         signals: TrafficSignalService, incidents: IncidentStore, settings: AppSettings)
-    private(set) var state: State
-    private(set) var destination: MKMapItem?
-    var destinationName: String? { get }
-    private(set) var routeOptions: [RouteOption]
-    var selectedRouteID: Int?
-    var selectedRouteOption: RouteOption? { get }
-    private(set) var progress: RouteProgress?
-    private(set) var errorMessage: String?
-    private(set) var routingNotice: String?                // e.g. "Apple Maps не строит маршруты в этом регионе — маршрут OpenStreetMap (Valhalla)"
-    private(set) var routeEdges: [RouteEdgeAttributes]     // for the selected/active route
-    private(set) var currentEdge: RouteEdgeAttributes?     // edge at the current position (speed limit, lanes, typical speed)
-    private(set) var congestion: CongestionLevel?          // live estimate on the current edge
-    private(set) var upcomingFeatures: [RouteFeature]      // next hazards within 2 km (from roadInfo.routeFeatures)
-    private(set) var incidentsOnRoute: [IncidentOnRoute]
-    func planRoutes(to item: MKMapItem) async
-    func startNavigation(); func stopNavigation()
-    func recalculate() async                               // reroute from the current position (off-route, ≥ 15 s apart)
+    init(location:speech:roadInfo:signals:incidents:settings:)
+    private(set) var state, destination, routeOptions, progress, errorMessage, routeEdges, currentEdge, congestion,
+                     upcomingFeatures, incidentsOnRoute, edgeSignalDistances, isLoadingRouteAttributes, routeAttributesError,
+                     isRecalculating, averageSpeedKmh, isWaitingAtSignal, distanceToNextSignal
+    var destinationName: String? { get }; var selectedRouteID: Int?; var selectedRouteOption: RouteOption? { get }
+    private(set) var routingNotice: String?   // actual reason per failed engine, e.g. "Apple: ошибка — … (MKError 5, «…»)"
+    private(set) var engineReports: [RoutingEngineReport]; private(set) var comparisonNotes: [String]
+    private(set) var optionEdges: [Int: [RouteEdgeAttributes]]   // trace_attributes per option (selected first, then others)
+    private(set) var timeline: [RouteTimelineEvent]; private(set) var speedLimitSegments: [SpeedLimitSegment]
+    let placeSearch: PlaceSearchService; let routeWeather: RouteWeatherService
+    var activeRoute: NavRoute? { get }; var distanceAlong: Double { get }; var routeLength: Double { get }
+    func facts(for: RouteOption) -> RouteFacts; func upcomingEvents(limit: Int? = nil) -> [RouteTimelineEvent]
+    func timeUntil(_ event: RouteTimelineEvent) -> Double
+    func planRoutes(to item: MKMapItem) async; func startNavigation(); func stopNavigation()
+    func recalculate() async      // generation-checked: a stale run never clears the newer rerouteTask / isRecalculating
+    func refreshIncidents(); func dismissError()
 }
-@Observable @MainActor final class PlaceSearchService { var query: String; private(set) var completions: [MKLocalSearchCompletion]; func resolve(_ c: MKLocalSearchCompletion) async throws -> MKMapItem; func search(_ text: String) async throws -> [MKMapItem] }
-struct NavigatorView: View            // full-screen MKMapView-based map; corner camera button / CameraPiPView returns to camera
-struct LaneGuidanceView: View { init(lanes: [Lane], recommended: [Bool]) }   // plus convenience init(laneInfo: LaneInfo, maneuver: ManeuverType?)
+@Observable @MainActor final class RouteWeatherService { struct Point { label; coordinate; distanceAlongRoute; snapshot; error }
+    private(set) var points: [Point]; private(set) var isLoading: Bool; func load(route: NavRoute); func clear() }   // destination (+ midpoint > 30 km)
+@Observable @MainActor final class PlaceSearchService   // unchanged: query, completions, resolve, search, recents API
+struct NavigatorView: View; struct NavigationMapView: UIViewRepresentable   // + events, speedLimitSegments, mapStyle, is3D
+struct ManeuverBannerView: View { init(progress:isRerouting:lanes:recommendedLanes:laneSource:) }
+struct CurrentRoadCard: View { init(nextManeuver: ManeuverType?) }        // collapsible, every value with its source
+struct RouteStripView: View { init(totalDistance:distanceAlong:segments:events:showsPosition:height:) }
+struct TripInfoPanel: View; struct RouteOptionsView: View; struct RouteComparisonSheet: View; struct TimelineRow: View
+struct LaneGuidanceView: View { init(lanes:recommended:); init(laneInfo:maneuver:) }
+struct NavigationSettingsSection: View   // «Маршрутизация» (engine, Valhalla + OSRM servers, attributes), «Пробки» (https tiles)
 ```
-Settings used: routingEngine, valhallaEndpoint, routeAttributesEnabled, trafficTileTemplate, showTrafficOnMap, voiceGuidanceEnabled,
-avoidTolls, avoidHighways, showCameraPiP, speedWarningEnabled, speedWarningTolerance.
-Additions (navigator slice, nothing above changed): `NavigationService.placeSearch: PlaceSearchService` (single shared instance,
-`PlaceSearchService(location:)`, recents API `recents / addRecent / mapItem(for:) / removeRecent / clearRecents`),
-`refreshIncidents()`, `dismissError()`, `edgeSignalDistances`, `distanceToNextSignal`, `isWaitingAtSignal`, `isRecalculating`,
-`isLoadingRouteAttributes`, `routeAttributesError`; `RouteOption.source`; `enum RoutingEngineOption` (auto/apple/valhalla labels);
-`ValhallaClient.setEndpoint(_:)`, `static ValhallaClient.url(endpoint:path:)`; `struct NavigationMapView` (UIViewRepresentable);
-`struct NavigationSettingsSection: View` (Form sections «Маршрутизация», «Пробки», embedded by SettingsView).
+Behaviour notes: the selected route always gets Valhalla trace_attributes (edge_walk for Valhalla shapes, map_snap on ≤ 1000
+simplified points otherwise); after a reroute the old route's OSM features / signals are cleared synchronously before the
+first fix; the signal-wait source reads "по вашим поездкам" only for `.learned`, "частично по поездкам" for `.blended`,
+else "модель"; the Overpass client timeout (45 s) exceeds the route query's `[timeout:25]`.
+Settings used: routingEngine, valhallaEndpoint, rv.osrmEndpoint, rv.mapStyle, rv.map3D, routeAttributesEnabled,
+trafficTileTemplate, showTrafficOnMap, voiceGuidanceEnabled, avoidTolls, avoidHighways, showCameraPiP, speedWarningEnabled,
+speedWarningTolerance, signalAssumptions.
 
 ### 2.4 Settings (folder Settings/)
 ```swift

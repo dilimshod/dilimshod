@@ -5,10 +5,14 @@ import UIKit
 /// Full-screen `MKMapView` for the navigator (UIKit map instead of SwiftUI `Map` for tile overlays, custom renderers
 /// and precise camera control).
 ///
-/// - Routes: the selected route is drawn as a blue 8 pt line over a white 11 pt casing; alternatives are gray.
+/// - Layers: `mapStyle` (Схема / Спутник / Гибрид via `MKStandardMapConfiguration` / `MKImageryMapConfiguration` /
+///   `MKHybridMapConfiguration`) and `is3D` (realistic elevation + pitched guidance camera, else flat).
+/// - Routes: the selected route is drawn over a white casing, coloured by speed-limit segments when known
+///   (`MKGradientPolylineRenderer`, palette `NavigatorStyle.speedLimitUIColor`), else blue; alternatives are gray.
 ///   Tapping near an alternative (≤ 30 pt) calls `onSelectRoute` when `allowsRouteSelection` is true.
-/// - Optional raster traffic tiles from `trafficTileTemplate` (`{z}/{x}/{y}`), drawn below the routes.
-/// - Annotations: destination, OSM route features (glyph = `RouteFeatureKind.symbolName`) and user-reported incidents.
+/// - Optional raster traffic tiles from `trafficTileTemplate` (`https://…{z}/{x}/{y}` only — ATS), below the routes.
+/// - Annotations: destination, every timeline event of the route (maneuvers, limit changes, signals, cameras, schools,
+///   crossings, fuel, parking … clustered per category) and user-reported incidents.
 /// - Camera: `.navigating` + following → a pitched camera that follows the user's course (distance scaled by speed);
 ///   `.overview` → fits all routes; `.idle` + following → MapKit's follow mode. Any pan / pinch / rotate gesture stops
 ///   following (`isFollowing = false`) so the navigator can show a "recenter" button.
@@ -30,8 +34,13 @@ struct NavigationMapView: UIViewRepresentable {
     var selectedRouteID: Int?
     var destination: GeoPoint?
     var destinationTitle: String?
-    var features: [RouteFeature]
+    /// Timeline events of the selected / active route (map markers).
+    var events: [RouteTimelineEvent]
+    /// Speed-limit stretches of the selected route (route colouring); empty → plain blue.
+    var speedLimitSegments: [SpeedLimitSegment] = []
     var incidents: [RoadIncident]
+    var mapStyle: NavigatorMapStyle = .standard
+    var is3D: Bool = true
     var cameraMode: CameraMode
     var showsTraffic: Bool
     var trafficTileTemplate: String
@@ -56,8 +65,9 @@ struct NavigationMapView: UIViewRepresentable {
         map.showsScale = true
         map.isPitchEnabled = true
         map.isRotateEnabled = true
-        map.preferredConfiguration = Coordinator.configuration(showsTraffic: showsTraffic)
-        context.coordinator.appliedShowsTraffic = showsTraffic
+        map.preferredConfiguration = Coordinator.configuration(style: mapStyle, is3D: is3D, showsTraffic: showsTraffic)
+        context.coordinator.appliedConfiguration = Coordinator.ConfigurationKey(style: mapStyle, is3D: is3D,
+                                                                                showsTraffic: showsTraffic)
         context.coordinator.install(on: map)
         return map
     }
@@ -73,14 +83,16 @@ struct NavigationMapView: UIViewRepresentable {
         }
         coordinator.mapInsets = mapInsets
 
-        if coordinator.appliedShowsTraffic != showsTraffic {
-            coordinator.appliedShowsTraffic = showsTraffic
-            map.preferredConfiguration = Coordinator.configuration(showsTraffic: showsTraffic)
+        let configurationKey = Coordinator.ConfigurationKey(style: mapStyle, is3D: is3D, showsTraffic: showsTraffic)
+        if coordinator.appliedConfiguration != configurationKey {
+            coordinator.appliedConfiguration = configurationKey
+            map.preferredConfiguration = Coordinator.configuration(style: mapStyle, is3D: is3D, showsTraffic: showsTraffic)
         }
+        coordinator.is3D = is3D
         coordinator.updateTileOverlay(on: map, template: trafficTileTemplate)
-        coordinator.updateRoutes(on: map, routes: routes, selectedID: selectedRouteID)
+        coordinator.updateRoutes(on: map, routes: routes, selectedID: selectedRouteID, segments: speedLimitSegments)
         coordinator.updateAnnotations(on: map, destination: destination, destinationTitle: destinationTitle,
-                                      features: features, incidents: incidents)
+                                      events: events, incidents: incidents)
         coordinator.updateCamera(on: map, mode: cameraMode, following: isFollowing, routes: routes)
     }
 
@@ -95,10 +107,12 @@ struct NavigationMapView: UIViewRepresentable {
         case casing, main, alternative
     }
 
-    /// Route polyline carrying its route id and drawing role.
+    /// Route polyline carrying its route id, drawing role and (main line) speed-limit colouring.
     final class RoutePolyline: MKPolyline {
         var routeID = 0
         var role: RouteRole = .main
+        /// Gradient stops (colour, fraction of the route length); empty → plain colour.
+        var colorStops: [(UIColor, CGFloat)] = []
     }
 
     /// Destination pin.
@@ -112,18 +126,18 @@ struct NavigationMapView: UIViewRepresentable {
         }
     }
 
-    /// OSM feature along the route (signal, camera, school …).
-    final class FeatureAnnotation: NSObject, MKAnnotation {
-        let feature: RouteFeature
+    /// Timeline event along the route (maneuver, limit change, signal, camera, school, fuel …).
+    final class EventAnnotation: NSObject, MKAnnotation {
+        let event: RouteTimelineEvent
         let coordinate: CLLocationCoordinate2D
         let title: String?
         let subtitle: String?
 
-        init(feature: RouteFeature) {
-            self.feature = feature
-            self.coordinate = feature.coordinate.coordinate
-            self.title = feature.kind.displayName
-            self.subtitle = feature.name.map { "\($0) · OSM" } ?? "OpenStreetMap"
+        init(event: RouteTimelineEvent, coordinate: GeoPoint) {
+            self.event = event
+            self.coordinate = coordinate.coordinate
+            self.title = event.title
+            self.subtitle = [event.detail, event.source].compactMap { $0 }.joined(separator: " · ")
         }
     }
 
@@ -151,7 +165,14 @@ struct NavigationMapView: UIViewRepresentable {
         var onLongPress: ((CLLocationCoordinate2D) -> Void)?
         var allowsRouteSelection = false
         var mapInsets: UIEdgeInsets = .zero
-        var appliedShowsTraffic = false
+        var appliedConfiguration: ConfigurationKey?
+        var is3D = true
+
+        struct ConfigurationKey: Equatable {
+            let style: NavigatorMapStyle
+            let is3D: Bool
+            let showsTraffic: Bool
+        }
 
         private var routeOverlays: [String: RoutePolyline] = [:]
         private var routeSignature: [String] = []
@@ -172,12 +193,25 @@ struct NavigationMapView: UIViewRepresentable {
 
         // MARK: Setup
 
-        /// Map style: realistic elevation, Apple traffic layer on/off, only fuel / parking / EV charging POIs.
-        static func configuration(showsTraffic: Bool) -> MKStandardMapConfiguration {
-            let configuration = MKStandardMapConfiguration(elevationStyle: .realistic, emphasisStyle: .default)
-            configuration.showsTraffic = showsTraffic
-            configuration.pointOfInterestFilter = MKPointOfInterestFilter(including: [.gasStation, .parking, .evCharger])
-            return configuration
+        /// Map layer: Схема (standard), Спутник (imagery) or Гибрид; 3D = realistic elevation; Apple traffic layer on/off
+        /// (standard / hybrid); only fuel / parking / EV charging Apple POIs (OSM POIs come as timeline markers).
+        static func configuration(style: NavigatorMapStyle, is3D: Bool, showsTraffic: Bool) -> MKMapConfiguration {
+            let elevation: MKMapConfiguration.ElevationStyle = is3D ? .realistic : .flat
+            let filter = MKPointOfInterestFilter(including: [.gasStation, .parking, .evCharger])
+            switch style {
+            case .standard:
+                let configuration = MKStandardMapConfiguration(elevationStyle: elevation, emphasisStyle: .default)
+                configuration.showsTraffic = showsTraffic
+                configuration.pointOfInterestFilter = filter
+                return configuration
+            case .satellite:
+                return MKImageryMapConfiguration(elevationStyle: elevation)
+            case .hybrid:
+                let configuration = MKHybridMapConfiguration(elevationStyle: elevation)
+                configuration.showsTraffic = showsTraffic
+                configuration.pointOfInterestFilter = filter
+                return configuration
+            }
         }
 
         func install(on map: MKMapView) {
@@ -223,10 +257,9 @@ struct NavigationMapView: UIViewRepresentable {
             map.insertOverlay(overlay, at: 0, level: .aboveRoads)
         }
 
-        /// http(s) URL template containing `{z}`, `{x}` and `{y}`.
+        /// https URL template containing `{z}`, `{x}` and `{y}` (plain http is blocked by App Transport Security).
         static func isValidTileTemplate(_ template: String) -> Bool {
-            let lower = template.lowercased()
-            guard lower.hasPrefix("https://") || lower.hasPrefix("http://") else { return false }
+            guard template.lowercased().hasPrefix("https://") else { return false }
             return template.contains("{z}") && template.contains("{x}") && template.contains("{y}")
         }
 
@@ -239,17 +272,33 @@ struct NavigationMapView: UIViewRepresentable {
                 + String(format: "%.5f,%.5f>%.5f,%.5f", first.latitude, first.longitude, last.latitude, last.longitude)
         }
 
-        func updateRoutes(on map: MKMapView, routes: [RouteOption], selectedID: Int?) {
+        /// Gradient stops for the speed-limit segments: two stops at every boundary give sharp colour changes.
+        private static func colorStops(_ segments: [SpeedLimitSegment], length: Double) -> [(UIColor, CGFloat)] {
+            guard length > 0, !segments.isEmpty else { return [] }
+            var stops: [(UIColor, CGFloat)] = []
+            for segment in segments {
+                let color = NavigatorStyle.speedLimitUIColor(segment.limitKmh)
+                let start = CGFloat(max(0, min(1, segment.start / length)))
+                let end = CGFloat(max(0, min(1, segment.end / length)))
+                stops.append((color, start))
+                stops.append((color, max(start, end - 0.0001)))
+            }
+            return stops
+        }
+
+        func updateRoutes(on map: MKMapView, routes: [RouteOption], selectedID: Int?, segments: [SpeedLimitSegment]) {
             let effectiveSelected = selectedID ?? routes.first?.id
             var desired: [(key: String, option: RouteOption, role: RouteRole)] = []
             // Alternatives first (bottom), then the selected casing and line (top).
             for option in routes where option.id != effectiveSelected {
                 desired.append((Self.routeKey(option) + "#alt", option, .alternative))
             }
+            let segmentKey = segments.isEmpty ? "" : "|sl\(segments.count)|\(Int(segments.last?.end ?? 0))|"
+                + segments.map { "\($0.limitKmh ?? 0)" }.joined(separator: ",")
             if let selected = routes.first(where: { $0.id == effectiveSelected }) {
                 let key = Self.routeKey(selected)
                 desired.append((key + "#casing", selected, .casing))
-                desired.append((key + "#main", selected, .main))
+                desired.append((key + "#main" + segmentKey, selected, .main))
             }
             let signature = desired.map(\.key)
             guard signature != routeSignature else { return }
@@ -268,6 +317,9 @@ struct NavigationMapView: UIViewRepresentable {
                     overlay = RoutePolyline(coordinates: coordinates, count: coordinates.count)
                     overlay.routeID = entry.option.id
                     overlay.role = entry.role
+                    if entry.role == .main {
+                        overlay.colorStops = Self.colorStops(segments, length: Geo.polylineLength(entry.option.route.polyline))
+                    }
                 }
                 routeOverlays[entry.key] = overlay
                 map.addOverlay(overlay, level: .aboveRoads)
@@ -277,14 +329,17 @@ struct NavigationMapView: UIViewRepresentable {
         // MARK: Annotations
 
         func updateAnnotations(on map: MKMapView, destination: GeoPoint?, destinationTitle: String?,
-                               features: [RouteFeature], incidents: [RoadIncident]) {
+                               events: [RouteTimelineEvent], incidents: [RoadIncident]) {
             var desired: [String: () -> MKAnnotation] = [:]
             if let destination, destination.isValid {
                 let key = "dest|" + destination.description + "|" + (destinationTitle ?? "")
                 desired[key] = { DestinationAnnotation(coordinate: destination.coordinate, title: destinationTitle) }
             }
-            for feature in features where feature.coordinate.isValid {
-                desired["f|\(feature.kind.rawValue)|\(feature.id)"] = { FeatureAnnotation(feature: feature) }
+            for event in events where event.kind != .destination {
+                guard let coordinate = event.coordinate, coordinate.isValid else { continue }
+                desired["e|\(event.id)|\(event.kind.category)|\(Int(event.distanceAlongRoute))|\(event.title)"] = {
+                    EventAnnotation(event: event, coordinate: coordinate)
+                }
             }
             for incident in incidents where incident.coordinate.isValid {
                 let key = "i|\(incident.id.uuidString)|\(incident.coordinate.description)|\(incident.date.timeIntervalSince1970)"
@@ -403,7 +458,7 @@ struct NavigationMapView: UIViewRepresentable {
                 lastCameraHeading = location.course
             }
             let distance = min(900, max(600, 600 + speedKmh * 4))
-            let pitch: CGFloat = speedKmh > 60 ? 45 : 52
+            let pitch: CGFloat = is3D ? (speedKmh > 60 ? 45 : 52) : 0
             let camera = MKMapCamera(lookingAtCenter: location.coordinate, fromDistance: distance,
                                      pitch: pitch, heading: lastCameraHeading)
             setProgrammatic { map.setCamera(camera, animated: animated) }
@@ -510,6 +565,14 @@ struct NavigationMapView: UIViewRepresentable {
                     renderer.strokeColor = .white
                     renderer.lineWidth = 11
                 case .main:
+                    if !route.colorStops.isEmpty {
+                        let gradient = MKGradientPolylineRenderer(polyline: route)
+                        gradient.setColors(route.colorStops.map { $0.0 }, locations: route.colorStops.map { $0.1 })
+                        gradient.lineCap = .round
+                        gradient.lineJoin = .round
+                        gradient.lineWidth = 8
+                        return gradient
+                    }
                     renderer.strokeColor = UIColor.systemBlue
                     renderer.lineWidth = 8
                 case .alternative:
@@ -528,8 +591,8 @@ struct NavigationMapView: UIViewRepresentable {
                 let view = (mapView.dequeueReusableAnnotationView(withIdentifier: Self.clusterReuseID) as? MKMarkerAnnotationView)
                     ?? MKMarkerAnnotationView(annotation: cluster, reuseIdentifier: Self.clusterReuseID)
                 view.annotation = cluster
-                let kind = (cluster.memberAnnotations.first as? FeatureAnnotation)?.feature.kind
-                view.markerTintColor = kind.map(Self.color(for:)) ?? .systemGray
+                let kind = (cluster.memberAnnotations.first as? EventAnnotation)?.event.kind
+                view.markerTintColor = kind.map(NavigatorStyle.eventUIColor) ?? .systemGray
                 view.glyphImage = nil
                 view.glyphText = "\(cluster.memberAnnotations.count)"
                 view.displayPriority = .defaultLow
@@ -548,16 +611,33 @@ struct NavigationMapView: UIViewRepresentable {
                 return view
             }
 
-            if let feature = annotation as? FeatureAnnotation {
+            if let item = annotation as? EventAnnotation {
                 let view = (mapView.dequeueReusableAnnotationView(withIdentifier: Self.featureReuseID) as? MKMarkerAnnotationView)
-                    ?? MKMarkerAnnotationView(annotation: feature, reuseIdentifier: Self.featureReuseID)
-                view.annotation = feature
-                let kind = feature.feature.kind
-                view.markerTintColor = Self.color(for: kind)
-                view.glyphImage = UIImage(systemName: kind.symbolName)
-                view.glyphTintColor = Self.glyphColor(for: kind)
-                view.displayPriority = kind == .speedCamera ? .defaultHigh : .defaultLow
-                view.clusteringIdentifier = "rv.feature." + kind.rawValue
+                    ?? MKMarkerAnnotationView(annotation: item, reuseIdentifier: Self.featureReuseID)
+                view.annotation = item
+                let kind = item.event.kind
+                view.markerTintColor = NavigatorStyle.eventUIColor(kind)
+                view.glyphText = nil
+                view.glyphImage = UIImage(systemName: item.event.symbolName)
+                view.glyphTintColor = .white
+                switch kind {
+                case .speedLimit(let kmh):
+                    view.glyphImage = nil
+                    view.glyphText = kmh.map(String.init) ?? "?"
+                case .feature(let feature):
+                    view.glyphTintColor = NavigatorStyle.featureGlyphUIColor(feature)
+                default:
+                    break
+                }
+                switch kind {
+                case .feature(.speedCamera), .feature(.school), .feature(.kindergarten), .incident:
+                    view.displayPriority = .defaultHigh
+                case .maneuver, .lanes:
+                    view.displayPriority = .init(rawValue: 200)
+                default:
+                    view.displayPriority = .defaultLow
+                }
+                view.clusteringIdentifier = "rv.event." + Self.clusterCategory(kind)
                 view.canShowCallout = true
                 view.titleVisibility = .hidden
                 view.subtitleVisibility = .hidden
@@ -591,26 +671,14 @@ struct NavigationMapView: UIViewRepresentable {
             }
         }
 
-        // MARK: Colours
+        // MARK: Clustering
 
-        static func color(for kind: RouteFeatureKind) -> UIColor {
+        /// Markers cluster only with markers of the same category (so a cluster colour means one kind).
+        static func clusterCategory(_ kind: RouteTimelineKind) -> String {
             switch kind {
-            case .trafficSignals: return .systemOrange
-            case .speedCamera: return .systemPurple
-            case .school, .kindergarten: return .systemYellow
-            case .pedestrianCrossing: return .systemBlue
-            case .railwayCrossing: return .systemGray
-            case .construction: return .systemOrange
-            case .trafficCalming: return .systemBrown
-            case .stopSign: return .systemRed
-            case .giveWay: return .systemPink
-            }
-        }
-
-        static func glyphColor(for kind: RouteFeatureKind) -> UIColor {
-            switch kind {
-            case .school, .kindergarten: return .black
-            default: return .white
+            case .feature(let feature): return "f." + feature.rawValue
+            case .incident(let incident): return "i." + incident.rawValue
+            default: return kind.category
             }
         }
     }

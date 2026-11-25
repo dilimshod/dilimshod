@@ -4,6 +4,7 @@ import SwiftUI
 /// meant to be placed inside the `Form` of `SettingsView`.
 struct NavigationSettingsSection: View {
     @Environment(AppState.self) private var app
+    @AppStorage(NavigatorSettingsKeys.osrmEndpoint) private var osrmEndpoint = OSRM.defaultEndpoint
 
     var body: some View {
         @Bindable var settings = app.settings
@@ -34,8 +35,33 @@ struct NavigationSettingsSection: View {
             .padding(.vertical, 4)
 
             if settings.valhallaEndpoint != Valhalla.defaultEndpoint {
-                Button("Вернуть сервер по умолчанию (FOSSGIS)") {
+                Button("Вернуть сервер Valhalla по умолчанию (FOSSGIS)") {
                     settings.valhallaEndpoint = Valhalla.defaultEndpoint
+                }
+                .frame(minHeight: 44)
+            }
+
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Сервер OSRM")
+                    .font(.subheadline.weight(.semibold))
+                TextField(OSRM.defaultEndpoint, text: $osrmEndpoint)
+                    .keyboardType(.URL)
+                    .textContentType(.URL)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .font(.body.monospaced())
+                if OSRM.routeURL(endpoint: osrmEndpoint, from: GeoPoint(41.3, 69.2), to: GeoPoint(41.31, 69.21)) == nil {
+                    Label("Некорректный адрес: нужен http(s)-адрес сервера OSRM (…/routed-car)",
+                          systemImage: "exclamationmark.triangle.fill")
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                }
+            }
+            .padding(.vertical, 4)
+
+            if osrmEndpoint != OSRM.defaultEndpoint {
+                Button("Вернуть сервер OSRM по умолчанию (FOSSGIS)") {
+                    osrmEndpoint = OSRM.defaultEndpoint
                 }
                 .frame(minHeight: 44)
             }
@@ -46,11 +72,13 @@ struct NavigationSettingsSection: View {
         } header: {
             Text("Маршрутизация")
         } footer: {
-            Text("В Узбекистане Apple Maps не строит маршруты, поэтому в режиме «Авто» при ошибке Apple маршрут строится "
-                 + "по данным OpenStreetMap через Valhalla. Публичный сервер FOSSGIS (valhalla1.openstreetmap.de) "
-                 + "предназначен для лёгкого некоммерческого использования: приложение отправляет не больше одного "
-                 + "запроса в секунду и указывает источник — © участники OpenStreetMap. Для частого использования "
-                 + "укажите собственный сервер Valhalla.")
+            Text("«Авто» запрашивает одновременно Apple Maps (где Apple поддерживает маршруты — по данным Apple, "
+                 + "в Узбекистане нет), Valhalla и OSRM, объединяет совпадающие маршруты (≥ 85 % общего пути), "
+                 + "сравнивает варианты и выбирает самый быстрый; причина неудачи каждого источника показывается. "
+                 + "Публичные серверы FOSSGIS (valhalla1.openstreetmap.de, routing.openstreetmap.de) бесплатны и "
+                 + "предназначены для лёгкого некоммерческого использования: приложение отправляет каждому не больше "
+                 + "одного запроса в секунду и указывает источник — © участники OpenStreetMap. Для частого "
+                 + "использования укажите собственные серверы.")
         }
 
         Section {
@@ -95,7 +123,10 @@ struct NavigationSettingsSection: View {
         let trimmed = template.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
         let lower = trimmed.lowercased()
-        if !(lower.hasPrefix("https://") || lower.hasPrefix("http://")) {
+        if lower.hasPrefix("http://") {
+            return "Незащищённые адреса http:// запрещены iOS (App Transport Security) — нужен https://"
+        }
+        if !lower.hasPrefix("https://") {
             return "Адрес должен начинаться с https://"
         }
         let missing = ["{z}", "{x}", "{y}"].filter { !trimmed.contains($0) }

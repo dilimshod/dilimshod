@@ -382,7 +382,8 @@ final class NavigationService {
             throw NavigationError.allEnginesFailed(failures.joined(separator: " "))
         }
 
-        let choices = await Task.detached(priority: .userInitiated) { RouteComparison.merge(all) }.value
+        let candidates = all
+        let choices = await Task.detached(priority: .userInitiated) { RouteComparison.merge(candidates) }.value
         let options = choices.enumerated().map { index, choice in
             RouteOption(id: index, route: choice.route, mkRoute: appleRoutes[choice.route], traffic: nil,
                         signalCount: nil, alsoFoundBy: choice.duplicates)
@@ -413,7 +414,7 @@ final class NavigationService {
             guard !routes.isEmpty else { return .failed(NavigationError.noRoutes) }
             var map: [NavRoute: MKRoute] = [:]
             for (navRoute, mkRoute) in routes { map[navRoute] = mkRoute }
-            return .routes(routes.map(\.0), apple: map)
+            return .routes(routes.map { $0.0 }, apple: map)
         } catch {
             return .failed(error)
         }
