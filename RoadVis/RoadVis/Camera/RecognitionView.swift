@@ -93,6 +93,7 @@ struct RecognitionView: View {
                         SpeedHUD()
                         RoadLine(road: app.roadInfo.currentRoad)
                     }
+                    NavigationMiniBanner()
                     if showsDistanceHUD {
                         FollowingDistanceSlot(pipeline: pipeline, settings: app.settings,
                                               style: isLandscape ? .mini : .full) {

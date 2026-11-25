@@ -50,5 +50,6 @@ struct RootView: View {
         }
         .statusBarHidden(app.mode == .camera)
         .persistentSystemOverlays(.hidden)
+        .appLocale()
     }
 }

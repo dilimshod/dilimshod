@@ -34,6 +34,8 @@ final class AppState {
     let recognition: RecognitionPipeline
     let trips: TripStore
     let tripRecorder: TripRecorder
+    /// Voice coach for beginner drivers (distance, lights, signs, lane departure).
+    let coach: DriverCoach
 
     @ObservationIgnored private var started = false
     /// Last app-wide lifecycle state handled by `handleScenePhase` (dedupes per-scene / repeated notifications).
@@ -65,6 +67,8 @@ final class AppState {
         self.recognition = recognition
         self.trips = trips
         self.tripRecorder = tripRecorder
+        self.coach = DriverCoach(recognition: recognition, location: location, speech: speech,
+                                 roadInfo: roadInfo, navigation: navigation, settings: settings)
 
         recognition.weatherProvider = { [weak weather] in weather?.current }
         recognition.speech = speech
