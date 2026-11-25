@@ -80,21 +80,21 @@ final class RecognitionPipeline {
         self.lastRecordSetting = settings.recordExperimentLog
 
         worker.outputHandler = { [weak self] output in
-            DispatchQueue.main.async {
+            DispatchQueue.main.async { [weak self] in
                 MainActor.assumeIsolated {
                     self?.apply(output)
                 }
             }
         }
         worker.statusHandler = { [weak self] statuses in
-            DispatchQueue.main.async {
+            DispatchQueue.main.async { [weak self] in
                 MainActor.assumeIsolated {
                     self?.applyModelStatuses(statuses)
                 }
             }
         }
         camera.stateHandler = { [weak self] running, interrupted in
-            DispatchQueue.main.async {
+            DispatchQueue.main.async { [weak self] in
                 MainActor.assumeIsolated {
                     self?.applyCameraState(running: running, interrupted: interrupted)
                 }
@@ -160,7 +160,7 @@ final class RecognitionPipeline {
         worker.setActive(true)
         camera.start { [weak self] error in
             let message = error?.localizedDescription
-            DispatchQueue.main.async {
+            DispatchQueue.main.async { [weak self] in
                 MainActor.assumeIsolated {
                     self?.cameraDidStart(errorMessage: message)
                 }
@@ -233,12 +233,13 @@ final class RecognitionPipeline {
             recordingStartedAt = nil
         }
         let endedAt = Date()
-        let log = finished.log
-        let counts = finished.uniqueCounts
+        // The worker no longer references the finished log, so it can be handed to a background queue.
+        let handoff = FinishedRecording(log: finished.log, uniqueCounts: finished.uniqueCounts)
         let result: Result<[URL], Error> = await withCheckedContinuation { continuation in
             DispatchQueue.global(qos: .userInitiated).async {
                 do {
-                    continuation.resume(returning: .success(try Self.write(log: log, uniqueCounts: counts, endedAt: endedAt)))
+                    let urls = try Self.write(log: handoff.log, uniqueCounts: handoff.uniqueCounts, endedAt: endedAt)
+                    continuation.resume(returning: .success(urls))
                 } catch {
                     continuation.resume(returning: .failure(error))
                 }
@@ -356,4 +357,10 @@ final class RecognitionPipeline {
             }
         }
     }
+}
+
+/// A finished research log handed to a background queue for writing (exclusive ownership transfer).
+private struct FinishedRecording: @unchecked Sendable {
+    let log: ExperimentLog
+    let uniqueCounts: [VehicleKind: Int]
 }

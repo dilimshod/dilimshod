@@ -216,8 +216,10 @@ final class RecognitionWorker: @unchecked Sendable {
         lastAcceptedUptime = now
         lock.unlock()
 
+        // The buffer is handed over to the processing queue exclusively (the camera never touches it again).
+        let frame = UncheckedFrame(pixelBuffer: pixelBuffer)
         queue.async { [self] in
-            process(pixelBuffer, time: time)
+            process(frame.pixelBuffer, time: time)
             locked { isBusy = false }
         }
     }
@@ -281,7 +283,7 @@ final class RecognitionWorker: @unchecked Sendable {
               CVPixelBufferGetPixelFormatType(pixelBuffer) == kCVPixelFormatType_32BGRA,
               !CVPixelBufferIsPlanar(pixelBuffer) else { return }
         guard CVPixelBufferLockBaseAddress(pixelBuffer, .readOnly) == kCVReturnSuccess else { return }
-        defer { CVPixelBufferUnlockBaseAddress(pixelBuffer, .readOnly) }
+        defer { _ = CVPixelBufferUnlockBaseAddress(pixelBuffer, .readOnly) }
         guard let base = CVPixelBufferGetBaseAddress(pixelBuffer) else { return }
         let bytesPerRow = CVPixelBufferGetBytesPerRow(pixelBuffer)
         for index in detections.indices where detections[index].kind == .trafficLight {
@@ -351,4 +353,9 @@ final class RecognitionWorker: @unchecked Sendable {
         defer { lock.unlock() }
         return body()
     }
+}
+
+/// Hands a pixel buffer from the camera queue to the processing queue (exclusive ownership transfer).
+private struct UncheckedFrame: @unchecked Sendable {
+    let pixelBuffer: CVPixelBuffer
 }

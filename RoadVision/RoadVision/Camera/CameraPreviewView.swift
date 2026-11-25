@@ -119,7 +119,7 @@ struct CameraPreviewView: UIViewRepresentable {
             // The camera device is added to the session on the session queue; once the session runs, the device
             // is known and the coordinator can be (re)built.
             runningObservation = Self.observeRunning(of: session) { [weak self] in
-                DispatchQueue.main.async {
+                DispatchQueue.main.async { [weak self] in
                     MainActor.assumeIsolated {
                         self?.rebuildRotationCoordinator()
                     }
@@ -162,7 +162,7 @@ struct CameraPreviewView: UIViewRepresentable {
             rotationCoordinator = coordinator
             applyRotation(coordinator.videoRotationAngleForHorizonLevelPreview)
             rotationObservation = Self.observePreviewAngle(of: coordinator) { [weak self] angle in
-                DispatchQueue.main.async {
+                DispatchQueue.main.async { [weak self] in
                     MainActor.assumeIsolated {
                         self?.applyRotation(angle)
                     }

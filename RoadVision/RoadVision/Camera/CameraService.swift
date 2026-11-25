@@ -246,15 +246,15 @@ final class CameraService: NSObject, @unchecked Sendable {
             applyOutputRotation(coordinator.videoRotationAngleForHorizonLevelPreview)
             rotationObservation = coordinator.observe(\.videoRotationAngleForHorizonLevelPreview,
                                                       options: [.new]) { [weak self] _, change in
-                guard let angle = change.newValue else { return }
-                self?.sessionQueue.async { self?.applyOutputRotation(angle) }
+                guard let self, let angle = change.newValue else { return }
+                self.sessionQueue.async { [weak self] in self?.applyOutputRotation(angle) }
             }
         } else {
             applyOutputRotation(coordinator.videoRotationAngleForHorizonLevelCapture)
             rotationObservation = coordinator.observe(\.videoRotationAngleForHorizonLevelCapture,
                                                       options: [.new]) { [weak self] _, change in
-                guard let angle = change.newValue else { return }
-                self?.sessionQueue.async { self?.applyOutputRotation(angle) }
+                guard let self, let angle = change.newValue else { return }
+                self.sessionQueue.async { [weak self] in self?.applyOutputRotation(angle) }
             }
         }
     }
@@ -291,7 +291,8 @@ final class CameraService: NSObject, @unchecked Sendable {
         // A preview layer was attached to / detached from this session → rebuild the rotation coordinator.
         let token = NotificationCenter.default.addObserver(forName: .cameraPreviewLayerDidChange,
                                                            object: session, queue: nil) { [weak self] _ in
-            self?.sessionQueue.async { self?.refreshRotationCoordinator() }
+            guard let self else { return }
+            self.sessionQueue.async { [weak self] in self?.refreshRotationCoordinator() }
         }
         notificationTokens.append(token)
     }
