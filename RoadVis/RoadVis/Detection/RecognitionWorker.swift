@@ -269,7 +269,8 @@ final class RecognitionWorker: @unchecked Sendable {
 
         updateStatistics(timestamp: timestamp, inferenceMs: result.inferenceMs)
         let uniqueCounts = tracker.uniqueCounts
-        record(tracks: tracks, inputs: frameInputs, countsBeforeUpdate: countsBeforeUpdate, countsNow: uniqueCounts)
+        record(tracks: tracks, inputs: frameInputs, countsBeforeUpdate: countsBeforeUpdate, countsNow: uniqueCounts,
+               leadTrackID: leadVehicle?.trackID)
 
         var visibleCounts: [VehicleKind: Int] = [:]
         var largestLight: TrackedObject?
@@ -344,7 +345,8 @@ final class RecognitionWorker: @unchecked Sendable {
 
     /// Appends one record per visible track to the active research log.
     private func record(tracks: [TrackedObject], inputs: Inputs,
-                        countsBeforeUpdate: [VehicleKind: Int], countsNow: [VehicleKind: Int]) {
+                        countsBeforeUpdate: [VehicleKind: Int], countsNow: [VehicleKind: Int],
+                        leadTrackID: Int? = nil) {
         recordingLock.lock()
         defer { recordingLock.unlock() }
         guard let recording else { return }
@@ -369,7 +371,8 @@ final class RecognitionWorker: @unchecked Sendable {
                 confidence: track.confidence, box: track.box, make: track.make, makeConfidence: track.makeConfidence,
                 distanceMeters: track.distanceMeters, estimatedSpeedKmh: track.estimatedSpeedKmh,
                 lightColor: track.lightColor, latitude: inputs.latitude, longitude: inputs.longitude,
-                ownSpeedKmh: inputs.ownSpeedKmh))
+                ownSpeedKmh: inputs.ownSpeedKmh, isConfirmed: track.isConfirmed, trackHits: track.hits,
+                isLead: track.id == leadTrackID))
         }
     }
 

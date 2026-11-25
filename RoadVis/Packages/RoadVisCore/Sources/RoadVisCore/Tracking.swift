@@ -60,17 +60,37 @@ public struct TrackedObject: Identifiable, Hashable, Sendable {
 /// So `uniqueCounts` are tracked objects, while `frameDetectionCount` counts raw per-frame detections.
 public final class ObjectTracker {
     public struct Config: Sendable {
+        /// IoU above which a detection always matches a predicted track box.
         public var iouThreshold: Double
+        /// Confirmed tracks survive this many frames without a detection (predicted meanwhile).
         public var maxMissed: Int
+        /// Detections needed before a track is confirmed (and counted).
         public var minHits: Int
         /// Weight of the new box when smoothing (1 = no smoothing).
         public var boxSmoothing: Double
+        /// Centre-distance gate for matching fast-moving objects when IoU is low, in units of the box size
+        /// (sqrt of the larger box area). 0 disables centre matching (pure IoU tracker).
+        public var centerGate: Double
+        /// Maximum area ratio between a track box and a detection for a centre-distance match.
+        public var maxAreaRatio: Double
+        /// Unconfirmed (tentative) tracks are dropped after this many missed frames.
+        public var maxMissedTentative: Int
+        /// Per-class minimum detector confidence applied before tracking (classes not listed: no extra filter).
+        public var minConfidence: [VehicleKind: Double]
 
-        public init(iouThreshold: Double = 0.3, maxMissed: Int = 8, minHits: Int = 3, boxSmoothing: Double = 0.6) {
+        public static let defaultMinConfidence: [VehicleKind: Double] = [.trafficLight: 0.5, .stopSign: 0.5, .person: 0.4]
+
+        public init(iouThreshold: Double = 0.3, maxMissed: Int = 8, minHits: Int = 3, boxSmoothing: Double = 0.6,
+                    centerGate: Double = 1.0, maxAreaRatio: Double = 2.5, maxMissedTentative: Int = 2,
+                    minConfidence: [VehicleKind: Double] = Config.defaultMinConfidence) {
             self.iouThreshold = iouThreshold
             self.maxMissed = maxMissed
             self.minHits = minHits
             self.boxSmoothing = boxSmoothing
+            self.centerGate = centerGate
+            self.maxAreaRatio = maxAreaRatio
+            self.maxMissedTentative = maxMissedTentative
+            self.minConfidence = minConfidence
         }
     }
 
@@ -79,8 +99,9 @@ public final class ObjectTracker {
         var kindVotes: [VehicleKind: Double] = [:]
         var makeVotes: [String: (count: Int, confidenceSum: Double)] = [:]
         var colorHistory: [TrafficLightColor] = []
-        /// Box velocity per second (for prediction while missed).
+        /// Rates per second of centre x/y and width/height (constant-velocity motion model).
         var velocity: (dx: Double, dy: Double) = (0, 0)
+        var sizeRate: (dw: Double, dh: Double) = (0, 0)
         var counted = false
     }
 
@@ -117,29 +138,51 @@ public final class ObjectTracker {
     public func update(detections: [Detection], timestamp: TimeInterval) -> [TrackedObject] {
         frameDetectionCount += detections.count
 
-        // Predict current positions of existing tracks.
-        var predicted: [BBox] = states.map { st in
+        // Per-class confidence filter (e.g. traffic lights / stop signs are noisy near the global threshold).
+        let detections = detections.filter { d in
+            guard let minimum = config.minConfidence[d.kind] else { return true }
+            return d.confidence >= minimum
+        }
+
+        // Predict current boxes of existing tracks with the constant-velocity model (position and size).
+        let predicted: [BBox] = states.map { st in
             let dt = max(0, timestamp - st.object.lastSeen)
             var b = st.object.box
-            if dt > 0 && dt < 1.0 {
-                b.x += st.velocity.dx * dt
-                b.y += st.velocity.dy * dt
-            }
+            guard dt > 0, dt < 1.0 else { return b }
+            let w = max(0.002, b.width + st.sizeRate.dw * dt)
+            let h = max(0.002, b.height + st.sizeRate.dh * dt)
+            let cx = b.midX + st.velocity.dx * dt
+            let cy = b.midY + st.velocity.dy * dt
+            b = BBox(x: cx - w / 2, y: cy - h / 2, width: w, height: h)
             return b
         }
 
-        // Candidate pairs sorted by IoU (greedy assignment).
-        var pairs: [(track: Int, det: Int, iou: Double)] = []
+        // Candidate pairs: IoU match, or centre-distance match for fast objects whose boxes no longer overlap.
+        var pairs: [(track: Int, det: Int, score: Double)] = []
         for (ti, st) in states.enumerated() {
+            let p = predicted[ti]
             for (di, d) in detections.enumerated() where Self.compatible(st.object.kind, d.kind) {
-                let iou = predicted[ti].iou(d.box)
+                let iou = p.iou(d.box)
                 let penalty = st.object.kind == d.kind ? 0 : 0.05
+                var score = -1.0
                 if iou - penalty >= config.iouThreshold {
-                    pairs.append((ti, di, iou - penalty))
+                    score = 1 + iou - penalty
+                } else if config.centerGate > 0 {
+                    let scale = sqrt(max(p.area, d.box.area))
+                    let dx = p.midX - d.box.midX, dy = p.midY - d.box.midY
+                    let dist = scale > 0 ? sqrt(dx * dx + dy * dy) / scale : .infinity
+                    let ratio = max(p.area, d.box.area) / max(1e-9, min(p.area, d.box.area))
+                    // A track without a velocity estimate yet (1 hit) gets a wider gate: its prediction is just the
+                    // last box, while a fast object may already have moved more than one box width.
+                    let gate = config.centerGate * (st.object.hits < 2 ? 1.6 : 1.0)
+                    if dist <= gate, ratio <= config.maxAreaRatio {
+                        score = (1 - dist / gate) * 0.9 + iou - penalty
+                    }
                 }
+                if score > 0 { pairs.append((ti, di, score)) }
             }
         }
-        pairs.sort { $0.iou > $1.iou }
+        pairs.sort { $0.score > $1.score }
 
         var trackMatched = [Bool](repeating: false, count: states.count)
         var detMatched = [Bool](repeating: false, count: detections.count)
@@ -149,12 +192,15 @@ public final class ObjectTracker {
             apply(detection: detections[p.det], to: p.track, timestamp: timestamp)
         }
 
-        // Unmatched tracks: age them.
+        // Unmatched tracks: age them. Their box stays at the last observation; the prediction above extrapolates
+        // from `lastSeen`, so a confirmed track can be re-acquired a few frames later where the object moved.
         for i in states.indices where !trackMatched[i] {
             states[i].object.missed += 1
         }
-        states.removeAll { $0.object.missed > config.maxMissed }
-        predicted.removeAll()
+        states.removeAll { st in
+            st.object.missed > (st.object.isConfirmed ? config.maxMissed : config.maxMissedTentative)
+        }
+
 
         // Unmatched detections: new tracks.
         for (di, d) in detections.enumerated() where !detMatched[di] {
@@ -186,10 +232,15 @@ public final class ObjectTracker {
         let dt = timestamp - st.object.lastSeen
         let w = min(1, max(0, config.boxSmoothing))
         let newBox = old.lerp(to: d.box, t: w)
-        if dt > 0 {
-            let vx = (newBox.midX - old.midX) / dt
-            let vy = (newBox.midY - old.midY) / dt
-            st.velocity = (st.velocity.dx * 0.5 + vx * 0.5, st.velocity.dy * 0.5 + vy * 0.5)
+        if dt > 0, dt < 1.5 {
+            // Alpha-beta style velocity update from the raw detection (not the smoothed box) for responsiveness.
+            let vx = (d.box.midX - old.midX) / dt
+            let vy = (d.box.midY - old.midY) / dt
+            let vw = (d.box.width - old.width) / dt
+            let vh = (d.box.height - old.height) / dt
+            let beta = st.object.hits < 2 ? 1.0 : 0.4
+            st.velocity = (st.velocity.dx + beta * (vx - st.velocity.dx), st.velocity.dy + beta * (vy - st.velocity.dy))
+            st.sizeRate = (st.sizeRate.dw + beta * (vw - st.sizeRate.dw), st.sizeRate.dh + beta * (vh - st.sizeRate.dh))
         }
         st.object.box = newBox
         st.object.confidence = d.confidence
