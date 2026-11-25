@@ -36,6 +36,10 @@ enum CoachPhrases {
         switch m {
         case .collisionRisk:
             return text("coach.collision")
+        case .pedestrianDanger:
+            return text("coach.pedestrian.danger")
+        case .pedestrianCaution:
+            return text("coach.pedestrian.caution")
         case .redLightAhead:
             return text("coach.redLight")
         case .laneDeparture(let side):

@@ -10,6 +10,7 @@ enum TripStyle {
         case .laneDeparture: return Color(red: 0.98, green: 0.85, blue: 0.2)
         case .redLightRunning: return Color(red: 0.8, green: 0.05, blue: 0.1)
         case .stopSignIgnored: return Color(red: 0.75, green: 0.35, blue: 1.0)
+        case .pedestrianNotYielded: return Color(red: 1.0, green: 0.1, blue: 0.1)
         case .harshBraking: return Color(red: 0.2, green: 0.6, blue: 1.0)
         case .harshAcceleration: return Color(red: 0.2, green: 0.85, blue: 0.85)
         }
@@ -69,6 +70,10 @@ enum TripStyle {
             var text = event.value.map { "\(n($0, 1)) \(L("event.unit.harshBraking"))" } ?? "—"
             if let limit = event.limit { text += " (" + L("tripval.threshold", n(limit, 1)) + ")" }
             return text
+        case .pedestrianNotYielded:
+            var text = event.value.map { "≈ \(n($0)) \(RVFormat.appMeters)" } ?? "≈ " + L("fd.cameraEstimate")
+            if let speed = event.speedKmh { text += " " + L("tripval.atSpeed", n(speed)) }
+            return text + " (" + L("common.estimate") + ")"
         case .laneDeparture, .redLightRunning, .stopSignIgnored:
             let speed = event.speedKmh.map { " " + L("tripval.atSpeed", n($0)) } ?? ""
             return "≈ " + L("fd.cameraEstimate") + speed

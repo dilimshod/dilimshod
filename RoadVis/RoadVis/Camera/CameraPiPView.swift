@@ -2,7 +2,8 @@ import SwiftUI
 
 /// Small live camera window with recognition boxes, used on top of the navigator.
 /// Shows the traffic-light colour, the number of visible vehicles and — when a lead vehicle is tracked — a badge with
-/// the ≈ gap to it in the status colour. Tapping it switches back to the full-screen camera.
+/// the ≈ gap to it in the status colour; a pedestrian on / about to enter the roadway shows a small red (orange for
+/// caution) walking-figure badge at the top. Tapping it switches back to the full-screen camera.
 struct CameraPiPView: View {
     let pipeline: RecognitionPipeline
     @Environment(AppState.self) private var app
@@ -52,6 +53,14 @@ struct CameraPiPView: View {
             }
         }
         .animation(RVTheme.snappy, value: pipeline.leadVehicle == nil)
+        .overlay(alignment: .top) {
+            if isLive, let hazard = pipeline.topPedestrianHazard {
+                PedestrianHazardBadge(hazard: hazard)
+                    .padding(.top, 5)
+                    .transition(.scale(scale: 0.8).combined(with: .opacity))
+            }
+        }
+        .animation(RVTheme.snappy, value: pipeline.topPedestrianHazard == nil)
         .overlay(alignment: .topTrailing) {
             if pipeline.isRecording {
                 Circle()
@@ -97,6 +106,9 @@ struct CameraPiPView: View {
         if let color = pipeline.currentLightColor {
             text += L("pip.a11y.light", color.localizedName.lowercased())
         }
+        if pipeline.topPedestrianHazard != nil {
+            text += L("pip.a11y.pedestrian")
+        }
         if let lead = pipeline.leadVehicle {
             let d = lead.distanceMeters
             text += L("pip.a11y.lead", RVFormat.appSpokenMeters(d))
@@ -118,7 +130,8 @@ private struct PiPDetectionLayer: View {
         DetectionOverlayView(tracks: pipeline.tracks, imageSize: pipeline.frameSize,
                              showDistance: false, showSpeed: false, showLabels: false,
                              lead: lead,
-                             leadStatus: lead == nil ? .unknown : (pipeline.followingAssessment?.status ?? .unknown))
+                             leadStatus: lead == nil ? .unknown : (pipeline.followingAssessment?.status ?? .unknown),
+                             pedestrianHazards: DetectionOverlayView.hazardLevels(pipeline.pedestrianHazards))
     }
 }
 

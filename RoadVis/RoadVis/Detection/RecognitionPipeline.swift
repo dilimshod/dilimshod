@@ -88,6 +88,11 @@ final class RecognitionPipeline {
     private(set) var laneEstimate: LaneEstimate?
     /// Side whose marking the car is currently drifting over (for the red lane line), nil when inside the lane.
     private(set) var laneDepartureSide: LaneSide?
+    /// Pedestrians on / about to enter the roadway ahead, most urgent first (danger, then nearest). Empty while
+    /// pedestrian warnings or pedestrian detection are off. Heuristic (monocular, own-lane corridor).
+    private(set) var pedestrianHazards: [PedestrianHazard] = []
+    /// The most urgent pedestrian hazard (for the banner / PiP badge).
+    var topPedestrianHazard: PedestrianHazard? { pedestrianHazards.first }
     /// Camera-based driving events (tailgating, collision risk, lane departure, red-light running, STOP ignored), with
     /// GPS coordinate and speed. Only NEW events (repeats within 8 s are collapsed). Called on the main actor.
     @ObservationIgnored var onDrivingEvent: ((DrivingEvent) -> Void)?
@@ -135,11 +140,14 @@ final class RecognitionPipeline {
     @ObservationIgnored private var recentTracks: [Int: (track: TrackedObject, seen: TimeInterval)] = [:]
     /// Uptime when the worker last reported a lead vehicle.
     @ObservationIgnored private var lastLeadUptime: TimeInterval = -.infinity
+    @ObservationIgnored private var lastPedestrianUptime: TimeInterval = -.infinity
 
     /// How long a confirmed track missed by the detector stays on screen, seconds.
     static let trackHoldSeconds: TimeInterval = 0.3
     /// How long the lead vehicle (distance line, HUD number) survives frames without it, seconds.
     static let leadHoldSeconds: TimeInterval = 0.5
+    /// Pedestrian hazards are kept this long after they vanish from a frame (no blinking banner on a missed frame).
+    static let pedestrianHoldSeconds: TimeInterval = 0.6
 
     init(location: LocationService, settings: AppSettings, signals: TrafficSignalService) {
         self.location = location
@@ -371,6 +379,13 @@ final class RecognitionPipeline {
             lead = held   // bridge a few frames without the lead (missed detection) instead of blinking the line/HUD
         }
         if leadVehicle != lead { leadVehicle = lead }
+        var hazards = assist.pedestrianWarningsEnabled ? output.pedestrianHazards : []
+        if !hazards.isEmpty {
+            lastPedestrianUptime = now
+        } else if assist.pedestrianWarningsEnabled, now - lastPedestrianUptime < Self.pedestrianHoldSeconds {
+            hazards = pedestrianHazards
+        }
+        if pedestrianHazards != hazards { pedestrianHazards = hazards }
         refreshFollowingDistance(fromFrame: true)
         updateDriverAssist(output, now: now)
     }
@@ -418,7 +433,8 @@ final class RecognitionPipeline {
                                      collisionWarning: isForwardCollisionWarning,
                                      collisionThresholdSeconds: settings.followingDistancePolicy.collisionWarningSeconds,
                                      laneDeparture: departure, laneOffset: estimate?.egoOffset,
-                                     tracks: fresh, geometry: geometry)
+                                     tracks: fresh, geometry: geometry,
+                                     pedestrianHazards: assist.pedestrianWarningsEnabled ? output.pedestrianHazards : [])
         let events = eventMonitor.update(input)
         if let onDrivingEvent {
             for event in events { onDrivingEvent(event) }
@@ -461,6 +477,7 @@ final class RecognitionPipeline {
     private func clearVisibleState() {
         recentTracks.removeAll()
         lastLeadUptime = -.infinity
+        lastPedestrianUptime = -.infinity
         if !tracks.isEmpty { tracks = [] }
         if !visibleCounts.isEmpty { visibleCounts = [:] }
         if fps != 0 { fps = 0 }
@@ -471,6 +488,7 @@ final class RecognitionPipeline {
         if leadVehicle != nil { leadVehicle = nil }
         if laneEstimate != nil { laneEstimate = nil }
         if laneDepartureSide != nil { laneDepartureSide = nil }
+        if !pedestrianHazards.isEmpty { pedestrianHazards = [] }
         laneDeparture.reset()
         lastLaneTimestamp = nil
         eventMonitor.reset()
@@ -544,8 +562,10 @@ final class RecognitionPipeline {
         let followingEnabled = settings.followingDistanceEnabled
         let horizon = settings.corridorHorizon
         let lanes = assist.laneDetectionNeeded
+        let pedestrians = assist.pedestrianWarningsEnabled
         worker.update { inputs in
             inputs.laneDetectionEnabled = lanes
+            inputs.pedestrianWarningsEnabled = pedestrians
             inputs.detection = options
             inputs.makeRecognitionEnabled = makeEnabled
             inputs.followingDistanceEnabled = followingEnabled
@@ -571,6 +591,7 @@ final class RecognitionPipeline {
             _ = settings.roadSurfaceMode
             _ = assist.laneDepartureEnabled
             _ = assist.showLaneOverlay
+            _ = assist.pedestrianWarningsEnabled
         } onChange: { [weak self] in
             Task { @MainActor [weak self] in
                 guard let self else { return }

@@ -126,6 +126,7 @@
 			knownRegions = (
 				ru,
 				en,
+				uz,
 				Base,
 			);
 			mainGroup = 8A5D3C1E2EC6000000000002;

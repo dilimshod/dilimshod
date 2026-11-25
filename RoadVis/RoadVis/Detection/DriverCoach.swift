@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import UIKit
 
 /// Per-frame cues the recognition pipeline hands to the coach (`RecognitionPipeline.onAssistFrame`).
 struct DriverAssistFrame: Sendable {
@@ -8,7 +9,8 @@ struct DriverAssistFrame: Sendable {
     var confirmedStopSignIDs: [Int]
 }
 
-/// Voice coach for beginner drivers: following distance, red / green traffic light, lane departure and road signs.
+/// Voice coach for beginner drivers: following distance, pedestrians on the roadway, red / green traffic light, lane
+/// departure and road signs. A pedestrian danger (pedestrian in the own lane ahead) also gives a warning haptic.
 ///
 /// Inputs: camera cues from `RecognitionPipeline` (every processed frame), own speed from `LocationService`, the current
 /// road's speed limit (`RoadInfoService`) and — while navigating — the OSM features and speed limits along the route
@@ -43,6 +45,10 @@ final class DriverCoach {
     @ObservationIgnored private let signs = SignAnnouncer()
     @ObservationIgnored private var locationListener: UUID?
     @ObservationIgnored private var lastRouteKey: String?
+    /// Last pedestrian-danger haptic per pedestrian track (uptime).
+    @ObservationIgnored private var pedestrianHaptics: [Int: TimeInterval] = [:]
+    /// Same pedestrian track: at most one haptic per this many seconds.
+    static let pedestrianHapticCooldown: TimeInterval = 6
 
     init(recognition: RecognitionPipeline, location: LocationService, speech: SpeechService,
          roadInfo: RoadInfoService, navigation: NavigationService, settings: AppSettings,
@@ -72,6 +78,7 @@ final class DriverCoach {
     func resetAnnouncements() {
         signs.reset()
         engine.reset()
+        pedestrianHaptics.removeAll()
     }
 
     // MARK: - Inputs
@@ -82,6 +89,9 @@ final class DriverCoach {
         var input = frame.coach
         input.timestamp = now
         engine.update(input)
+        let hazards = assist.pedestrianWarningsEnabled ? recognition.pedestrianHazards : []
+        engine.updatePedestrians(hazards, speedKmh: input.speedKmh, now: now)
+        pedestrianHaptic(hazards, now: now)
         if engine.toggles.signs {
             for id in frame.confirmedStopSignIDs {
                 if let event = signs.cameraStopSign(trackID: id, timestamp: now) {
@@ -128,7 +138,17 @@ final class DriverCoach {
         return CoachToggles(distance: settings.followingDistanceEnabled && settings.distanceWarningsEnabled,
                             laneDeparture: voice && assist.laneDepartureEnabled,
                             signs: voice && assist.signAnnouncementsEnabled,
-                            trafficLights: voice && assist.trafficLightHintsEnabled)
+                            trafficLights: voice && assist.trafficLightHintsEnabled,
+                            pedestrians: voice && assist.pedestrianWarningsEnabled)
+    }
+
+    /// Warning haptic when a pedestrian danger appears (once per track per `pedestrianHapticCooldown`).
+    private func pedestrianHaptic(_ hazards: [PedestrianHazard], now: TimeInterval) {
+        pedestrianHaptics = pedestrianHaptics.filter { now - $0.value < Self.pedestrianHapticCooldown }
+        guard let danger = hazards.first(where: { $0.level == .danger }),
+              pedestrianHaptics[danger.trackID] == nil else { return }
+        pedestrianHaptics[danger.trackID] = now
+        UINotificationFeedbackGenerator().notificationOccurred(.warning)
     }
 
     // MARK: - Output

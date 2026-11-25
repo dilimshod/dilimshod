@@ -19,6 +19,7 @@ final class DriverAssistSettings {
         static let signAnnouncementsEnabled = "rv.signAnnouncements"
         static let trafficLightHintsEnabled = "rv.trafficLightHints"
         static let laneWarningMinSpeedKmh = "rv.laneWarningMinSpeedKmh"
+        static let pedestrianWarningsEnabled = "rv.pedestrianWarnings"
     }
 
     /// Master switch of the spoken coaching (lane, signs, traffic lights).
@@ -31,6 +32,10 @@ final class DriverAssistSettings {
     var signAnnouncementsEnabled: Bool { didSet { defaults.set(signAnnouncementsEnabled, forKey: Keys.signAnnouncementsEnabled) } }
     /// "Red light ahead" / "green, you can go".
     var trafficLightHintsEnabled: Bool { didSet { defaults.set(trafficLightHintsEnabled, forKey: Keys.trafficLightHintsEnabled) } }
+    /// Pedestrian on the roadway: red / orange box and banner, voice, haptic and trip events.
+    var pedestrianWarningsEnabled: Bool {
+        didSet { defaults.set(pedestrianWarningsEnabled, forKey: Keys.pedestrianWarningsEnabled) }
+    }
     /// Lane-departure warnings only at or above this GPS speed, km/h.
     var laneWarningMinSpeedKmh: Double { didSet { defaults.set(laneWarningMinSpeedKmh, forKey: Keys.laneWarningMinSpeedKmh) } }
 
@@ -49,6 +54,7 @@ final class DriverAssistSettings {
         showLaneOverlay = bool(Keys.showLaneOverlay, true)
         signAnnouncementsEnabled = bool(Keys.signAnnouncementsEnabled, true)
         trafficLightHintsEnabled = bool(Keys.trafficLightHintsEnabled, true)
+        pedestrianWarningsEnabled = bool(Keys.pedestrianWarningsEnabled, true)
         let speed = defaults.object(forKey: Keys.laneWarningMinSpeedKmh) == nil
             ? 40 : defaults.double(forKey: Keys.laneWarningMinSpeedKmh)
         laneWarningMinSpeedKmh = min(90, max(20, speed))
@@ -63,6 +69,9 @@ struct DriverAssistSettingsSection: View {
         Section {
             Toggle(isOn: $settings.voiceCoachingEnabled) {
                 Label(L("assist.voice"), systemImage: "person.wave.2.fill")
+            }
+            Toggle(isOn: $settings.pedestrianWarningsEnabled) {
+                Label(L("assist.pedestrians"), systemImage: "figure.walk")
             }
             Toggle(isOn: $settings.trafficLightHintsEnabled) {
                 Label(L("assist.lights"),

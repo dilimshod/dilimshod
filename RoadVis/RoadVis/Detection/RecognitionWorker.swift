@@ -29,6 +29,8 @@ final class RecognitionWorker: @unchecked Sendable {
         var corridorHorizon = EgoCorridor.default.horizonY
         /// Run the classical lane-marking detector (~5 Hz, on a downsampled copy of the frame).
         var laneDetectionEnabled = true
+        /// Run the pedestrian-on-the-roadway check (`DriverAssistSettings.pedestrianWarningsEnabled`).
+        var pedestrianWarningsEnabled = true
     }
 
     /// Snapshot published after every processed frame.
@@ -55,6 +57,8 @@ final class RecognitionWorker: @unchecked Sendable {
         /// Latest lane-marking estimate (refreshed ~5 Hz, repeated in between; nil while lane detection is off).
         /// Its `timestamp` is the system uptime of the analysed frame.
         var laneEstimate: LaneEstimate?
+        /// Pedestrians on / about to enter the roadway, most urgent first (empty when the feature is off).
+        var pedestrianHazards: [PedestrianHazard]
     }
 
     /// Load results of the two models.
@@ -95,6 +99,7 @@ final class RecognitionWorker: @unchecked Sendable {
     private let estimator = MonocularSpeedEstimator()
     private let leadTracker = LeadVehicleTracker()
     private let laneDetector = LaneDetector()
+    private let pedestrianDetector = PedestrianHazardDetector()
     private var lastLaneUptime: TimeInterval = -.infinity
     private var laneEstimate: LaneEstimate?
     private var generation = 0
@@ -171,6 +176,7 @@ final class RecognitionWorker: @unchecked Sendable {
                 fpsEstimate = 0
                 leadTracker.reset()
                 laneDetector.reset()
+                pedestrianDetector.reset()
                 laneEstimate = nil
             }
         }
@@ -196,6 +202,7 @@ final class RecognitionWorker: @unchecked Sendable {
             estimator.reset()
             leadTracker.reset()
             laneDetector.reset()
+            pedestrianDetector.reset()
             laneEstimate = nil
             makeClassifier.reset()
             generation = newGeneration
@@ -274,6 +281,8 @@ final class RecognitionWorker: @unchecked Sendable {
                                   geometry: geometry, timestamp: timestamp)
         let leadVehicle = updateLeadVehicle(tracks: tracks, inputs: frameInputs, geometry: geometry,
                                             timestamp: timestamp)
+        let pedestrianHazards = updatePedestrians(tracks: tracks, inputs: frameInputs, geometry: geometry,
+                                                  timestamp: timestamp)
         updateLanes(in: pixelBuffer, width: width, height: height, inputs: frameInputs)
 
         if frameInputs.makeRecognitionEnabled, makeClassifier.status.isReady {
@@ -302,7 +311,8 @@ final class RecognitionWorker: @unchecked Sendable {
         let output = Output(generation: generation, tracks: tracks, visibleCounts: visibleCounts,
                             uniqueCounts: uniqueCounts, fps: fpsEstimate, inferenceMs: inferenceEstimate,
                             lightColor: lightColor, frameSize: CGSize(width: width, height: height),
-                            processedFrames: processedFrames, leadVehicle: leadVehicle, laneEstimate: laneEstimate)
+                            processedFrames: processedFrames, leadVehicle: leadVehicle, laneEstimate: laneEstimate,
+                            pedestrianHazards: pedestrianHazards)
         outputHandler?(output)
     }
 
@@ -319,6 +329,21 @@ final class RecognitionWorker: @unchecked Sendable {
             leadTracker.corridor = EgoCorridor(horizonY: horizon)
         }
         return leadTracker.update(tracks: tracks, geometry: geometry, timestamp: timestamp)
+    }
+
+    /// Pedestrians on / about to enter the roadway ahead (own-lane corridor with the same horizon as the lead tracker).
+    private func updatePedestrians(tracks: [TrackedObject], inputs: Inputs, geometry: CameraGeometry,
+                                   timestamp: TimeInterval) -> [PedestrianHazard] {
+        guard inputs.pedestrianWarningsEnabled, inputs.detection.trackPedestrians else {
+            pedestrianDetector.reset()
+            return []
+        }
+        let horizon = min(0.8, max(0.1, inputs.corridorHorizon))
+        if pedestrianDetector.corridor.horizonY != horizon {
+            pedestrianDetector.corridor = EgoCorridor(horizonY: horizon)
+        }
+        return pedestrianDetector.update(tracks: tracks, ownSpeedKmh: inputs.ownSpeedKmh, geometry: geometry,
+                                         timestamp: timestamp)
     }
 
     /// Runs the lane detector at ≈ 5 Hz on a downsampled (≤ 160 px wide) marking-brightness copy of the locked BGRA

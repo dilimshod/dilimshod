@@ -8,6 +8,8 @@ import UIKit
 ///   following-distance pill (tap → details);
 /// - top-right edge: settings, status dot (→ status sheet with к/с · мс · model), counters button with the total
 ///   (tap → per-kind counters with reset), traffic-light indicator;
+/// - a compact red / orange pedestrian warning ("Yield to the pedestrian!") centred under the top row while a pedestrian
+///   is on / about to enter the roadway ahead;
 /// - compact banners under the top row (model problems hide themselves after a few seconds);
 /// - bottom row (44 pt translucent buttons): research recording, navigator.
 ///
@@ -118,6 +120,8 @@ struct RecognitionView: View {
                 .layoutPriority(1)
             }
 
+            PedestrianBannerSlot(pipeline: pipeline)
+
             // Per-kind counters only on demand (counters button), right-aligned under the top row.
             if countersExpanded {
                 CountersPanel(pipeline: pipeline, showPedestrians: app.settings.trackPedestrians)
@@ -204,7 +208,8 @@ private struct LiveDetectionLayer: View {
             }
             DetectionOverlayView(tracks: pipeline.tracks, imageSize: pipeline.frameSize,
                                  showDistance: settings.showDistanceEstimates, showSpeed: settings.showSpeedEstimates,
-                                 lead: lead, leadStatus: status, selectedTrackID: selectedTrackID)
+                                 lead: lead, leadStatus: status, selectedTrackID: selectedTrackID,
+                                 pedestrianHazards: DetectionOverlayView.hazardLevels(pipeline.pedestrianHazards))
             if let lead {
                 LeadDistanceOverlay(lead: lead, assessment: assessment, imageSize: pipeline.frameSize,
                                     labelInsets: labelInsets)
@@ -256,6 +261,24 @@ private struct TrackDetailLayer: View {
                 selectedTrackID = nil
             }
         }
+    }
+}
+
+/// Pedestrian warning capsule bound to the pipeline (separate view: it re-renders with every processed frame).
+private struct PedestrianBannerSlot: View {
+    let pipeline: RecognitionPipeline
+
+    var body: some View {
+        let hazard = pipeline.topPedestrianHazard
+        ZStack {
+            if let hazard {
+                PedestrianHazardBanner(hazard: hazard)
+                    .transition(.scale(scale: 0.85).combined(with: .opacity))
+            }
+        }
+        .frame(maxWidth: 360)
+        .animation(RVTheme.snappy, value: hazard?.level)
+        .animation(RVTheme.snappy, value: hazard == nil)
     }
 }
 

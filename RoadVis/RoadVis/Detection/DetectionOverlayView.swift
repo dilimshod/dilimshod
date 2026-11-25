@@ -13,6 +13,9 @@ import SwiftUI
 /// Estimates ("≈ 23 м · ≈ 54 км/ч", when enabled) are added to the same line only on large (near) boxes, so far-away
 /// traffic stays uncluttered; the tap-to-open detail card always has them. Percentages are detector *confidence*.
 ///
+/// A pedestrian on / about to enter the roadway (`pedestrianHazards`) gets a thicker glowing bracket in red (danger)
+/// or orange (caution) that pulses gently.
+///
 /// This view never takes touches; `TrackHitLayer` provides the tappable areas.
 struct DetectionOverlayView: View {
     let tracks: [TrackedObject]
@@ -27,9 +30,12 @@ struct DetectionOverlayView: View {
     let leadStatus: DistanceStatus
     /// Track whose detail card is open (drawn with a white outline).
     let selectedTrackID: Int?
+    /// Pedestrian hazard level per track ID (pedestrians on / about to enter the roadway).
+    let pedestrianHazards: [Int: PedestrianHazardLevel]
 
     init(tracks: [TrackedObject], imageSize: CGSize, showDistance: Bool, showSpeed: Bool, showLabels: Bool = true,
-         lead: LeadVehicle? = nil, leadStatus: DistanceStatus = .unknown, selectedTrackID: Int? = nil) {
+         lead: LeadVehicle? = nil, leadStatus: DistanceStatus = .unknown, selectedTrackID: Int? = nil,
+         pedestrianHazards: [Int: PedestrianHazardLevel] = [:]) {
         self.tracks = tracks
         self.imageSize = imageSize
         self.showDistance = showDistance
@@ -38,6 +44,16 @@ struct DetectionOverlayView: View {
         self.lead = lead
         self.leadStatus = leadStatus
         self.selectedTrackID = selectedTrackID
+        self.pedestrianHazards = pedestrianHazards
+    }
+
+    /// Hazard level per track of `hazards` (the most urgent level when a track appears twice).
+    static func hazardLevels(_ hazards: [PedestrianHazard]) -> [Int: PedestrianHazardLevel] {
+        var result: [Int: PedestrianHazardLevel] = [:]
+        for hazard in hazards {
+            result[hazard.trackID] = max(result[hazard.trackID] ?? hazard.level, hazard.level)
+        }
+        return result
     }
 
     var body: some View {
@@ -52,6 +68,7 @@ struct DetectionOverlayView: View {
                                  thin: !showLabels,
                                  isLead: isLead,
                                  leadStatus: leadStatus,
+                                 hazard: pedestrianHazards[track.id],
                                  isSelected: selectedTrackID == track.id,
                                  showLabel: showLabels && track.isConfirmed,
                                  secondaryText: showLabels && !isLead && Self.showsInlineEstimate(for: mapping.rect(for: track.box))
@@ -187,6 +204,8 @@ private struct TrackBoxView: View {
     let thin: Bool
     let isLead: Bool
     let leadStatus: DistanceStatus
+    /// Pedestrian hazard of this track (red / orange highlighted bracket).
+    let hazard: PedestrianHazardLevel?
     let isSelected: Bool
     let showLabel: Bool
     let secondaryText: String?
@@ -195,32 +214,44 @@ private struct TrackBoxView: View {
     @State private var appeared: Bool
 
     init(track: TrackedObject, rect: CGRect, containerSize: CGSize, thin: Bool, isLead: Bool,
-         leadStatus: DistanceStatus, isSelected: Bool, showLabel: Bool, secondaryText: String?) {
+         leadStatus: DistanceStatus, hazard: PedestrianHazardLevel?, isSelected: Bool, showLabel: Bool,
+         secondaryText: String?) {
         self.track = track
         self.rect = rect
         self.containerSize = containerSize
         self.thin = thin
         self.isLead = isLead
         self.leadStatus = leadStatus
+        self.hazard = hazard
         self.isSelected = isSelected
         self.showLabel = showLabel
         self.secondaryText = secondaryText
         _appeared = State(initialValue: track.hits > 3)
     }
 
+    /// Highlighted like the lead vehicle (thicker glowing bracket, stronger fill).
+    private var isEmphasized: Bool { isLead || hazard != nil }
+
     private var color: Color {
-        isLead && leadStatus != .unknown ? RVTheme.statusColor(leadStatus) : RVTheme.kindColor(track.kind)
+        if let hazard { return RVTheme.pedestrianColor(hazard) }
+        return isLead && leadStatus != .unknown ? RVTheme.statusColor(leadStatus) : RVTheme.kindColor(track.kind)
     }
 
     private var lineWidth: CGFloat {
-        if thin { return isLead ? 2 : RVTheme.Stroke.tentative }
+        if thin { return isEmphasized ? 2 : RVTheme.Stroke.tentative }
+        if hazard != nil { return RVTheme.Stroke.lead + 0.5 }
         if isLead { return RVTheme.Stroke.lead }
         if isSelected { return RVTheme.Stroke.selected }
         return track.isConfirmed ? RVTheme.Stroke.box : RVTheme.Stroke.tentative
     }
 
     private var pulses: Bool {
-        isLead && (leadStatus == .caution || leadStatus == .danger)
+        hazard != nil || (isLead && (leadStatus == .caution || leadStatus == .danger))
+    }
+
+    private var pulsePeriod: Double {
+        if let hazard { return hazard == .danger ? 0.8 : 1.3 }
+        return leadStatus == .danger ? 0.7 : 1.3
     }
 
     var body: some View {
@@ -233,16 +264,16 @@ private struct TrackBoxView: View {
 
         ZStack {
             if confirmed && !thin {
-                shape.fill(color.opacity(isLead ? 0.07 : 0.03))
-                shape.stroke(color.opacity(isLead ? 0.3 : 0.12), lineWidth: 0.5)
+                shape.fill(color.opacity(hazard == .danger ? 0.12 : (isEmphasized ? 0.07 : 0.03)))
+                shape.stroke(color.opacity(isEmphasized ? 0.3 : 0.12), lineWidth: 0.5)
             }
             CornerBracketShape(armFraction: confirmed ? 0.22 : 0.16, cornerRadius: radius)
                 .stroke(color.opacity(confirmed ? 0.95 : 0.4),
                         style: StrokeStyle(lineWidth: lineWidth, lineCap: .round, lineJoin: .round,
                                            dash: confirmed ? [] : [3, 4]))
-                .shadow(color: isLead ? color.opacity(0.7) : .black.opacity(confirmed ? 0.35 : 0),
-                        radius: isLead ? (thin ? 3 : 5) : 1.5)
-                .rvPulse(pulses, minOpacity: 0.55, period: leadStatus == .danger ? 0.7 : 1.3)
+                .shadow(color: isEmphasized ? color.opacity(0.7) : .black.opacity(confirmed ? 0.35 : 0),
+                        radius: isEmphasized ? (thin ? 3 : 5) : 1.5)
+                .rvPulse(pulses, minOpacity: 0.55, period: pulsePeriod)
             if isSelected && !thin {
                 shape.stroke(Color.white.opacity(0.85), lineWidth: 1)
                     .padding(-3)
@@ -252,7 +283,8 @@ private struct TrackBoxView: View {
         .overlay(alignment: alignTrailing ? .topTrailing : .topLeading) {
             if showLabel {
                 // Fixed-width slot: the chip hugs its text and truncates beyond the maximum width.
-                TrackLabelChip(track: track, color: color, isLead: isLead, secondaryText: secondaryText)
+                TrackLabelChip(track: track, color: color, isLead: isLead, isEmphasized: isEmphasized,
+                               secondaryText: secondaryText)
                     .frame(width: RVTheme.HUD.maxLabelWidth, alignment: alignTrailing ? .trailing : .leading)
                     .fixedSize(horizontal: false, vertical: true)
                     .alignmentGuide(.top) { dimensions in
@@ -279,6 +311,8 @@ private struct TrackLabelChip: View {
     let track: TrackedObject
     let color: Color
     let isLead: Bool
+    /// Lead vehicle or pedestrian hazard: stronger outline.
+    let isEmphasized: Bool
     let secondaryText: String?
 
     var body: some View {
@@ -311,7 +345,7 @@ private struct TrackLabelChip: View {
                 Capsule(style: .continuous).fill(Color.black.opacity(0.18))
             }
         }
-        .overlay(Capsule(style: .continuous).strokeBorder(color.opacity(isLead ? 0.7 : 0.35), lineWidth: 0.5))
+        .overlay(Capsule(style: .continuous).strokeBorder(color.opacity(isEmphasized ? 0.7 : 0.35), lineWidth: 0.5))
     }
 }
 

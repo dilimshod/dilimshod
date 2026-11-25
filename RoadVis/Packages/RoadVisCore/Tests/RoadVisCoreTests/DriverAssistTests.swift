@@ -340,11 +340,99 @@ final class CoachRulesTests: XCTestCase {
         XCTAssertEqual(CoachMessage.collisionRisk.urgency, .high)
         XCTAssertEqual(CoachMessage.redLightAhead.urgency, .high)
         XCTAssertEqual(CoachMessage.greenLightGo.urgency, .low)
+        XCTAssertTrue(CoachCategory.collision > CoachCategory.pedestrian)
+        XCTAssertTrue(CoachCategory.pedestrian > CoachCategory.redLight)
         XCTAssertTrue(CoachCategory.collision > CoachCategory.redLight)
         XCTAssertTrue(CoachCategory.redLight > CoachCategory.laneDeparture)
         XCTAssertTrue(CoachCategory.laneDeparture > CoachCategory.tailgating)
         XCTAssertTrue(CoachCategory.tailgating > CoachCategory.sign)
         XCTAssertTrue(CoachCategory.sign > CoachCategory.greenLight)
+    }
+}
+
+final class PedestrianCoachTests: XCTestCase {
+    private func hazard(_ id: Int, _ level: PedestrianHazardLevel, distance: Double = 12,
+                        inLane: Bool = true) -> PedestrianHazard {
+        PedestrianHazard(trackID: id, box: BBox(x: 0.48, y: 0.5, width: 0.04, height: 0.15), level: level,
+                         distanceMeters: distance, inOwnLane: inLane, onRoadway: true, approaching: false)
+    }
+
+    func testPedestrianPriorityBetweenCollisionAndRedLight() {
+        var r = CoachRules()
+        r.offer(.redLightAhead, now: 0)
+        r.offer(.pedestrianDanger(trackID: 3), now: 0)
+        r.offer(.collisionRisk, now: 0)
+        XCTAssertEqual(r.next(now: 0), .collisionRisk)
+        XCTAssertEqual(r.next(now: 0.1), .pedestrianDanger(trackID: 3), "pedestrian danger bypasses the global gap")
+        XCTAssertNil(r.next(now: 0.2), "red light waits for the global gap")
+        XCTAssertEqual(r.next(now: 3.1), nil, "red light expired (ttl 3 s)")
+
+        var q = CoachRules()
+        q.offer(.redLightAhead, now: 0)
+        q.offer(.pedestrianCaution(trackID: 1), now: 0)
+        XCTAssertEqual(q.next(now: 0), .pedestrianCaution(trackID: 1))
+        XCTAssertNil(q.next(now: 1), "caution does not bypass the global gap")
+        XCTAssertEqual(q.next(now: 2.9), nil)
+    }
+
+    func testPedestrianUrgencyAndCategory() {
+        XCTAssertEqual(CoachMessage.pedestrianDanger(trackID: 1).urgency, .high)
+        XCTAssertEqual(CoachMessage.pedestrianCaution(trackID: 1).urgency, .normal)
+        XCTAssertEqual(CoachMessage.pedestrianCaution(trackID: 1).category, .pedestrian)
+        XCTAssertTrue(CoachMessage.pedestrianDanger(trackID: 1).bypassesGlobalGap)
+        XCTAssertFalse(CoachMessage.pedestrianCaution(trackID: 1).bypassesGlobalGap)
+    }
+
+    func testPerTrackCooldownAndEscalation() {
+        let e = DriverCoachEngine()
+        e.updatePedestrians([hazard(7, .caution, inLane: false)], speedKmh: 30, now: 0)
+        XCTAssertEqual(e.next(now: 0), .pedestrianCaution(trackID: 7))
+        e.updatePedestrians([hazard(7, .caution, inLane: false)], speedKmh: 30, now: 3)
+        XCTAssertNil(e.next(now: 3), "same track, same level within 6 s")
+        e.updatePedestrians([hazard(7, .danger)], speedKmh: 30, now: 3.5)
+        XCTAssertEqual(e.next(now: 3.5), .pedestrianDanger(trackID: 7), "escalation to danger is spoken")
+        e.updatePedestrians([hazard(7, .danger)], speedKmh: 30, now: 5)
+        XCTAssertNil(e.next(now: 5))
+        e.updatePedestrians([hazard(7, .danger)], speedKmh: 30, now: 9.6)
+        XCTAssertEqual(e.next(now: 9.6), .pedestrianDanger(trackID: 7), "again after the 6 s track cooldown")
+    }
+
+    func testCautionNeedsMovingDangerAlways() {
+        let e = DriverCoachEngine()
+        e.updatePedestrians([hazard(1, .caution, inLane: false)], speedKmh: 2, now: 0)
+        XCTAssertNil(e.next(now: 0))
+        e.updatePedestrians([hazard(1, .danger)], speedKmh: 0, now: 0.5)
+        XCTAssertEqual(e.next(now: 0.5), .pedestrianDanger(trackID: 1))
+        e.toggles.pedestrians = false
+        e.updatePedestrians([hazard(2, .danger)], speedKmh: 40, now: 10)
+        XCTAssertNil(e.next(now: 10))
+    }
+
+    func testPedestrianNotYieldedEvent() {
+        let monitor = CameraDrivingEventMonitor()
+        var all: [DrivingEvent] = []
+        for i in 0...10 {
+            let t = Double(i) * 0.1
+            all += monitor.update(CameraEventInput(timestamp: t, speedKmh: 30,
+                                                   pedestrianHazards: [hazard(4, .danger, distance: 14 - Double(i) * 0.5)]))
+        }
+        XCTAssertEqual(all.map(\.kind), [.pedestrianNotYielded])
+        XCTAssertEqual(all.first?.severity, .violation)
+        XCTAssertLessThanOrEqual(all.first?.value ?? 99, 12)
+
+        let slow = CameraDrivingEventMonitor()
+        let far = CameraDrivingEventMonitor()
+        let side = CameraDrivingEventMonitor()
+        for i in 0...10 {
+            let t = Double(i) * 0.1
+            XCTAssertTrue(slow.update(CameraEventInput(timestamp: t, speedKmh: 10,
+                                                       pedestrianHazards: [hazard(1, .danger)])).isEmpty)
+            XCTAssertTrue(far.update(CameraEventInput(timestamp: t, speedKmh: 40,
+                                                      pedestrianHazards: [hazard(1, .danger, distance: 25)])).isEmpty)
+            XCTAssertTrue(side.update(CameraEventInput(timestamp: t, speedKmh: 40,
+                                                       pedestrianHazards: [hazard(1, .danger, inLane: false)])).isEmpty)
+        }
+        XCTAssertEqual(DrivingEventKind.pedestrianNotYielded.symbolName, "figure.walk")
     }
 }
 

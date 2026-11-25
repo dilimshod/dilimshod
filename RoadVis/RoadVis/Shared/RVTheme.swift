@@ -18,6 +18,13 @@ enum RVTheme {
     static let accent = Color(red: 0.1, green: 0.48, blue: 1.0)
     /// Recording indicator.
     static let recording = Color(red: 1.0, green: 0.23, blue: 0.19)
+    /// Pedestrian on the roadway, caution — orange.
+    static let pedestrianCaution = Color(red: 1.0, green: 0.55, blue: 0.1)
+
+    /// Box / banner colour of a pedestrian hazard: red (danger) or orange (caution).
+    static func pedestrianColor(_ level: PedestrianHazardLevel) -> Color {
+        level == .danger ? danger : pedestrianCaution
+    }
 
     static func statusColor(_ status: DistanceStatus) -> Color {
         switch status {
