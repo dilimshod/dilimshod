@@ -470,7 +470,7 @@ struct NavigatorView: View {
             }
             .font(.system(size: 10))
             .foregroundStyle(.white.opacity(0.75))
-            .tint(.white.opacity(0.85))
+            .tint(Color.white.opacity(0.85))
             .padding(.horizontal, 6)
         }
     }

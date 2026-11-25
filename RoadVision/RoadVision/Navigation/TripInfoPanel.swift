@@ -123,7 +123,7 @@ struct TripInfoPanel: View {
                 Label("Стоим у светофора — оценка загруженности приостановлена", systemImage: "pause.circle")
                     .font(.subheadline)
             } else {
-                Label("Загруженность: недостаточно данных для оценки", systemImage: "gauge.with.dots.needle.33percent")
+                Label("Загруженность: недостаточно данных для оценки", systemImage: "speedometer")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
             }

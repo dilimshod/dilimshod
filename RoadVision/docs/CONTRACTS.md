@@ -612,6 +612,12 @@ struct LaneGuidanceView: View { init(lanes: [Lane], recommended: [Bool]) }   // 
 ```
 Settings used: routingEngine, valhallaEndpoint, routeAttributesEnabled, trafficTileTemplate, showTrafficOnMap, voiceGuidanceEnabled,
 avoidTolls, avoidHighways, showCameraPiP, speedWarningEnabled, speedWarningTolerance.
+Additions (navigator slice, nothing above changed): `NavigationService.placeSearch: PlaceSearchService` (single shared instance,
+`PlaceSearchService(location:)`, recents API `recents / addRecent / mapItem(for:) / removeRecent / clearRecents`),
+`refreshIncidents()`, `dismissError()`, `edgeSignalDistances`, `distanceToNextSignal`, `isWaitingAtSignal`, `isRecalculating`,
+`isLoadingRouteAttributes`, `routeAttributesError`; `RouteOption.source`; `enum RoutingEngineOption` (auto/apple/valhalla labels);
+`ValhallaClient.setEndpoint(_:)`, `static ValhallaClient.url(endpoint:path:)`; `struct NavigationMapView` (UIViewRepresentable);
+`struct NavigationSettingsSection: View` (Form sections «Маршрутизация», «Пробки», embedded by SettingsView).
 
 ### 2.4 Assistant + settings (folders Assistant/, Settings/)
 ```swift
