@@ -3,6 +3,9 @@ import Foundation
 /// Russian UI strings (keys — see `Strings+en.swift`).
 enum RuStrings {
     static let table: [String: String] = [
+        // MARK: Splash
+        "splash.tagline": "Помощник начинающего водителя",
+
         // MARK: Common
         "common.done": "Готово",
         "common.cancel": "Отмена",

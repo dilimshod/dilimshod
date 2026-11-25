@@ -4,6 +4,9 @@ import Foundation
 /// (`Strings+uz.swift`, `Strings+ru.swift`). English is also the fallback for a key missing elsewhere.
 enum EnStrings {
     static let table: [String: String] = [
+        // MARK: Splash
+        "splash.tagline": "Road assistant for new drivers",
+
         // MARK: Common
         "common.done": "Done",
         "common.cancel": "Cancel",

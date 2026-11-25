@@ -4,6 +4,9 @@ import Foundation
 /// Letters o‘ / g‘ are written with U+2018 (‘), the tutuq belgisi with U+2019 (’).
 enum UzStrings {
     static let table: [String: String] = [
+        // MARK: Splash
+        "splash.tagline": "Yangi haydovchilar uchun yo‘l yordamchisi",
+
         // MARK: Common
         "common.done": "Tayyor",
         "common.cancel": "Bekor qilish",

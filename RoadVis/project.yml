@@ -115,7 +115,7 @@ targets:
         INFOPLIST_KEY_NSLocationWhenInUseUsageDescription: "Геопозиция нужна для скорости движения, навигации, данных о полосах и ограничениях скорости."
         INFOPLIST_KEY_NSLocationAlwaysAndWhenInUseUsageDescription: "Во время навигации геопозиция используется и в фоне, чтобы подсказки продолжали работать."
         INFOPLIST_KEY_UIApplicationSceneManifest_Generation: YES
-        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+        INFOPLIST_KEY_UILaunchScreen_Generation: NO
         INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents: YES
         INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone: "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight"
         INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad: "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight"
