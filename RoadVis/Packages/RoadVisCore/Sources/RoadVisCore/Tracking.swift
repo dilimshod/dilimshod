@@ -24,7 +24,8 @@ public struct TrackedObject: Identifiable, Hashable, Sendable {
     public var make: String?
     /// Mean confidence of the winning make.
     public var makeConfidence: Double?
-    /// Majority of recent traffic-light colour observations.
+    /// Stable traffic-light colour: time-window vote over the recent observations (`TrafficLightColorVote`); nil
+    /// while there are too few readable observations — a colour never outlives ≈ 0.8 s without a readable lamp.
     public var lightColor: TrafficLightColor?
     /// Majority of recent person-role observations (≥ 5 needed; nil before / for non-persons). Colour heuristic (≈).
     public var personRole: PersonRole?
@@ -125,7 +126,8 @@ public final class ObjectTracker {
         var object: TrackedObject
         var kindVotes: [VehicleKind: Double] = [:]
         var makeVotes: [String: (count: Int, confidenceSum: Double)] = [:]
-        var colorHistory: [TrafficLightColor] = []
+        /// Every colour observation of a traffic-light track, INCLUDING `.unknown` (those age the state out).
+        var colorHistory: [TrafficLightColorVote.Observation] = []
         var roleHistory: [PersonRole] = []
         /// Rates per second of centre x/y and width/height (constant-velocity motion model).
         var velocity: (dx: Double, dy: Double) = (0, 0)
@@ -273,9 +275,9 @@ public final class ObjectTracker {
                 st.object.make = make
                 st.object.makeConfidence = mc
             }
-            if let c = d.lightColor, c != .unknown {
-                st.colorHistory = [c]
-                st.object.lightColor = c
+            if d.kind == .trafficLight {
+                st.colorHistory = [TrafficLightColorVote.Observation(time: timestamp, color: d.lightColor ?? .unknown)]
+                st.object.lightColor = TrafficLightColorVote.decide(st.colorHistory, now: timestamp, previous: nil)
             }
             if let role = d.personRole {
                 st.roleHistory = [role]
@@ -321,10 +323,13 @@ public final class ObjectTracker {
         if let make = d.make, let mc = d.makeConfidence {
             addMake(&st, make: make, confidence: mc)
         }
-        if let c = d.lightColor, c != .unknown {
-            st.colorHistory.append(c)
-            if st.colorHistory.count > 7 { st.colorHistory.removeFirst(st.colorHistory.count - 7) }
-            st.object.lightColor = Self.majority(st.colorHistory)
+        if d.kind == .trafficLight || !st.colorHistory.isEmpty || st.object.lightColor != nil {
+            // Runs on every matched frame, also when the lamp was unreadable: unknown observations are recorded so
+            // an old colour cannot survive (it used to stay red for the life of the track).
+            st.colorHistory.append(TrafficLightColorVote.Observation(time: timestamp, color: d.lightColor ?? .unknown))
+            TrafficLightColorVote.prune(&st.colorHistory, now: timestamp)
+            st.object.lightColor = TrafficLightColorVote.decide(st.colorHistory, now: timestamp,
+                                                                previous: st.object.lightColor)
         }
         if let role = d.personRole {
             st.roleHistory.append(role)
@@ -376,15 +381,72 @@ public final class ObjectTracker {
         guard let i = states.firstIndex(where: { $0.object.id == trackID }) else { return }
         addMake(&states[i], make: make, confidence: confidence)
     }
+}
 
-    private static func majority(_ colors: [TrafficLightColor]) -> TrafficLightColor? {
+/// Time-window vote that turns per-frame traffic-light colour observations into a stable colour.
+///
+/// Why time based: the old vote kept the last 7 KNOWN colours for the life of the track and ignored `.unknown`
+/// frames, so a light that was red and then became unreadable stayed "red" indefinitely (and 7 stale reds outvoted
+/// 3 fresh greens). Unknown is a normal answer of the colour classifier: 17–46 % of daytime lamp crops with the
+/// previous classifier and ≈ 8 % with the current one (measured on a LISA sample, see
+/// `TrafficLightColorClassifier`), whose per-frame wrong-colour rate is 0.4–0.5 %. The vote constants themselves are
+/// reasoning — no video sequences were evaluated.
+public enum TrafficLightColorVote {
+    public struct Observation: Hashable, Sendable {
+        public var time: TimeInterval
+        public var color: TrafficLightColor
+
+        public init(time: TimeInterval, color: TrafficLightColor) {
+            self.time = time
+            self.color = color
+        }
+    }
+
+    /// Observations older than this are forgotten, seconds (≈ 12 frames at 15 fps).
+    public static let window: TimeInterval = 0.8
+    /// Known-colour votes the winner needs inside the window…
+    public static let minVotes: Int = 3
+    /// …and its share of the known votes.
+    public static let minShare: Double = 0.6
+    /// Switching to a different colour additionally needs the newest this-many known observations to agree.
+    public static let switchAgreement: Int = 2
+    /// Hard cap of stored observations (frames arrive at ≤ 30 fps).
+    static let maxObservations: Int = 48
+
+    /// Drops observations outside the window.
+    public static func prune(_ history: inout [Observation], now: TimeInterval) {
+        history.removeAll { now - $0.time > window || $0.time > now + 1e-6 }
+        if history.count > maxObservations { history.removeFirst(history.count - maxObservations) }
+    }
+
+    /// Stable colour for the observations inside the window, or nil (not enough readable evidence).
+    /// - Parameter previous: the colour reported so far (hysteresis).
+    public static func decide(_ history: [Observation], now: TimeInterval, previous: TrafficLightColor?) -> TrafficLightColor? {
+        var known: [TrafficLightColor] = []
+        for o in history where now - o.time <= window && o.color != .unknown { known.append(o.color) }
+        guard known.count >= minVotes else { return nil }
         var counts: [TrafficLightColor: Int] = [:]
-        for c in colors { counts[c, default: 0] += 1 }
-        // Prefer the most recent colour on ties.
-        return counts.max { a, b in
-            a.value == b.value
-                ? (colors.lastIndex(of: a.key) ?? 0) < (colors.lastIndex(of: b.key) ?? 0)
-                : a.value < b.value
-        }?.key
+        for c in known { counts[c, default: 0] += 1 }
+        // Most votes; ties → the colour seen most recently.
+        var winner = known[known.count - 1]
+        var winnerCount = counts[winner] ?? 0
+        for color in [TrafficLightColor.red, .yellow, .green] {
+            let count = counts[color] ?? 0
+            if count > winnerCount {
+                winner = color
+                winnerCount = count
+            }
+        }
+        guard winnerCount >= minVotes, Double(winnerCount) / Double(known.count) >= minShare else {
+            return nil
+        }
+        if let previous, previous != .unknown, winner != previous {
+            // Hysteresis: the newest known observations must already show the new colour.
+            let newest = known.suffix(switchAgreement)
+            if newest.count < switchAgreement || newest.contains(where: { $0 != winner }) {
+                return (counts[previous] ?? 0) > 0 ? previous : nil
+            }
+        }
+        return winner
     }
 }

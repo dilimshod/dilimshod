@@ -3,11 +3,18 @@ import Foundation
 // On-device HEURISTIC distinction of a traffic police officer (YHXX xodimi) and a road worker (yo‘l ishchisi) among the
 // detector's "person" boxes. The COCO detector has no such classes, so the role is guessed from the colour of the
 // high-visibility vest on the torso:
-//  - fluorescent yellow-green / lime vest (hue ≈ 55–95°, S ≥ 0.5, V ≥ 0.6) over a dark uniform → traffic officer
-//    (Uzbekistan's YHXX officers wear lime / yellow reflective vests over a dark uniform);
-//  - fluorescent orange / red-orange vest (hue ≈ 10–35°, S ≥ 0.6, V ≥ 0.55) → road worker
-//    (a lime vest without any dark clothing is also treated as a road worker);
+//  - fluorescent yellow-green / lime vest (hue 55–100°, S ≥ 0.30, V ≥ 0.40) over a dark / navy lower body and without
+//    orange → traffic officer (the current YPX jacket seen on a Sept 2026 news photo: navy with a fluorescent
+//    yellow-green yoke; ONE photo — officer vs worker stays a guess);
+//  - fluorescent orange / red-orange vest (hue 3–38°, S ≥ 0.70, V ≥ 0.50) → road worker
+//    (a lime vest without a dark lower body is also treated as a road worker);
 //  - otherwise → pedestrian.
+// Measured in this project on YOLO11n person crops of Roboflow-100 construction-safety (CC BY 4.0; construction-site
+// photos, NOT road scenes; 1171 vest / 828 no-vest): the previous gates (lime S ≥ 0.5, V ≥ 0.6; orange 10–35°,
+// S ≥ 0.6; share ≥ 0.12) found 52.4 % of vest wearers with 6.2 % false positives on the held-out part; the gates
+// below, chosen on the train part, 62.1 % at the same 6.2 % — per single frame, before the vote. Misses of the old
+// gates were ordinary lime vests in shade. A learned vest classifier reached 87.7 % at that false-positive rate in a
+// 4-epoch experiment but was not shipped (under-trained snapshot, wrong domain, no device timing).
 // A yellow jacket, an orange T-shirt, a reflective school vest or a cyclist's jersey fool it; night, back light and
 // motion blur weaken it. The tracker therefore votes over several frames, and the app marks the role as "≈" (colour
 // heuristic). Reliable results need a trained model (a labelled dataset of YHXX officers and road workers, e.g. in
@@ -34,12 +41,17 @@ public struct PersonRoleSample: Hashable, Sendable {
     /// Dark pixels (uniform) / sampled pixels of the whole box.
     public var darkShare: Double
     public var torsoPixels: Int
+    /// Dark or navy pixels / sampled pixels of the lower body (rows 62–95 % of the box); nil when not measured
+    /// (then the whole-box `darkShare` decides officer vs worker, as before).
+    public var lowerDarkShare: Double?
 
-    public init(limeShare: Double, orangeShare: Double, darkShare: Double, torsoPixels: Int) {
+    public init(limeShare: Double, orangeShare: Double, darkShare: Double, torsoPixels: Int,
+                lowerDarkShare: Double? = nil) {
         self.limeShare = limeShare
         self.orangeShare = orangeShare
         self.darkShare = darkShare
         self.torsoPixels = torsoPixels
+        self.lowerDarkShare = lowerDarkShare
     }
 }
 
@@ -49,8 +61,24 @@ public enum PersonRoleClassifier {
     public static let torsoBottom = 0.62
     /// …and the central 60 % of its width.
     public static let torsoWidth = 0.6
-    /// Minimum vest share of the torso pixels.
-    public static let minVestShare = 0.12
+    /// Minimum vest share of the torso pixels (0.12 before; raised together with the wider colour gates).
+    public static let minVestShare = 0.15
+    /// Lower body band: rows from 62 % to 95 % of the box height.
+    public static let lowerBodyBottom = 0.95
+    /// Officer: at least this share of the lower body is dark / navy (uniform trousers)…
+    public static let minLowerDarkShare = 0.5
+    /// …and (almost) no orange on the torso.
+    public static let maxOfficerOrangeShare = 0.05
+    /// Hi-vis colour gates (hue in degrees), see the measurement in the file header.
+    static let limeHue: ClosedRange<Double> = 55...100
+    static let limeMinSaturation = 0.30
+    static let limeMinValue = 0.40
+    static let orangeHue: ClosedRange<Double> = 3...38
+    static let orangeMinSaturation = 0.70
+    static let orangeMinValue = 0.50
+    /// Navy (uniform) pixel: hue 200–260° and V below this (brighter blue is ordinary clothing).
+    static let navyHue: ClosedRange<Double> = 200...260
+    static let navyMaxValue = 0.45
     /// Minimum share of dark pixels in the box for an officer (dark uniform).
     public static let minDarkShare = 0.08
     /// Minimum number of sampled torso pixels for a decision.
@@ -58,7 +86,7 @@ public enum PersonRoleClassifier {
     /// Boxes smaller than this (pixels of height) are not classified (too far, colours unreliable).
     public static let minBoxHeightPixels = 40
 
-    enum PixelClass { case lime, orange, dark, other }
+    enum PixelClass { case lime, orange, dark, navy, other }
 
     /// Colour class of one pixel.
     static func pixelClass(_ p: RGBPixel) -> PixelClass {
@@ -78,8 +106,9 @@ public enum PersonRoleClassifier {
             hue = 60 * ((r - g) / delta + 4)
         }
         if hue < 0 { hue += 360 }
-        if hue >= 55, hue <= 95, saturation >= 0.5, value >= 0.6 { return .lime }
-        if hue >= 10, hue <= 35, saturation >= 0.6, value >= 0.55 { return .orange }
+        if limeHue.contains(hue), saturation >= limeMinSaturation, value >= limeMinValue { return .lime }
+        if orangeHue.contains(hue), saturation >= orangeMinSaturation, value >= orangeMinValue { return .orange }
+        if navyHue.contains(hue), value < navyMaxValue { return .navy }
         return .other
     }
 
@@ -89,6 +118,10 @@ public enum PersonRoleClassifier {
         let lime = sample.limeShare, orange = sample.orangeShare
         guard max(lime, orange) >= minVestShare else { return .pedestrian }
         if lime >= orange {
+            if let lower = sample.lowerDarkShare {
+                // Structure rule: lime top over dark / navy trousers and no orange → officer; else worker.
+                return lower >= minLowerDarkShare && orange < maxOfficerOrangeShare ? .trafficOfficer : .roadWorker
+            }
             return sample.darkShare >= minDarkShare ? .trafficOfficer : .roadWorker
         }
         return .roadWorker
@@ -130,12 +163,14 @@ public enum PersonRoleClassifier {
         let margin = Double(rectWidth) * (1 - torsoWidth) / 2
         let torsoX0 = rectX + Int(margin)
         let torsoX1 = rectX + rectWidth - Int(margin)
-        var lime = 0, orange = 0, dark = 0, torsoCount = 0, total = 0
+        let lowerY1 = rectY + Int(Double(rectHeight) * lowerBodyBottom)
+        var lime = 0, orange = 0, dark = 0, torsoCount = 0, total = 0, lowerCount = 0, lowerDark = 0
         let bytes = base.assumingMemoryBound(to: UInt8.self)
         var y = y0
         while y < y1 {
             let row = bytes + y * bytesPerRow
             let inTorsoRow = y >= torsoY0 && y < torsoY1
+            let inLowerRow = y >= torsoY1 && y < lowerY1
             var x = x0
             while x < x1 {
                 let px = row + x * 4
@@ -146,6 +181,10 @@ public enum PersonRoleClassifier {
                     torsoCount += 1
                     if cls == .lime { lime += 1 } else if cls == .orange { orange += 1 }
                 }
+                if inLowerRow, x >= torsoX0, x < torsoX1 {
+                    lowerCount += 1
+                    if cls == .dark || cls == .navy { lowerDark += 1 }
+                }
                 x += s
             }
             y += s
@@ -153,7 +192,8 @@ public enum PersonRoleClassifier {
         guard total > 0 else { return nil }
         let t = Double(max(1, torsoCount))
         return PersonRoleSample(limeShare: Double(lime) / t, orangeShare: Double(orange) / t,
-                                darkShare: Double(dark) / Double(total), torsoPixels: torsoCount)
+                                darkShare: Double(dark) / Double(total), torsoPixels: torsoCount,
+                                lowerDarkShare: lowerCount > 0 ? Double(lowerDark) / Double(lowerCount) : nil)
     }
 
     public static func classifyBGRA(base: UnsafeRawPointer, width: Int, height: Int, bytesPerRow: Int,
@@ -165,21 +205,30 @@ public enum PersonRoleClassifier {
 
     // MARK: - Voting
 
-    /// Observations kept per track.
-    public static let voteWindow = 9
+    /// Observations kept per track (≈ 1 s at 15 fps; 9 with a strict majority before).
+    public static let voteWindow = 15
     /// Observations needed before a role is reported.
     public static let minVotes = 5
+    /// Staff (officer + worker together) is reported from this share of the window…
+    public static let staffEnterShare = 0.6
+    /// …and kept until its share drops below this (hysteresis, no flicker). Reasoning, not measured on video; with a
+    /// per-frame false-positive rate of 6–7 % a 60 % vote makes a false staff label unlikely.
+    public static let staffKeepShare = 0.3
 
-    /// Role of a track from its recent per-frame observations: nil with fewer than `minObservations`; a role with a
-    /// strict majority wins; without one the previous role is kept (no flicker), or `.pedestrian` when there is none.
+    /// Role of a track from its recent per-frame observations: nil / `previous` with fewer than `minObservations`.
+    /// Officer and worker votes are pooled ("wears hi-vis"): staff is entered at `staffEnterShare` and kept down to
+    /// `staffKeepShare`; the more frequent of the two names the role (ties keep the previous one).
     public static func majority(_ history: [PersonRole], previous: PersonRole? = nil,
                                 minObservations: Int = minVotes) -> PersonRole? {
         guard history.count >= max(1, minObservations) else { return previous }
-        var counts: [PersonRole: Int] = [:]
-        for role in history { counts[role, default: 0] += 1 }
-        if let best = counts.max(by: { $0.value < $1.value }), best.value * 2 > history.count {
-            return best.key
+        var officer = 0, worker = 0
+        for role in history {
+            if role == .trafficOfficer { officer += 1 } else if role == .roadWorker { worker += 1 }
         }
-        return previous ?? .pedestrian
+        let share = Double(officer + worker) / Double(history.count)
+        let wasStaff = previous?.isRoadStaff == true
+        guard share >= (wasStaff ? staffKeepShare : staffEnterShare) else { return .pedestrian }
+        if officer == worker, let previous, previous.isRoadStaff { return previous }
+        return officer >= worker ? .trafficOfficer : .roadWorker
     }
 }

@@ -18,8 +18,13 @@ public enum DetectionThresholds {
         .car: 0.30, .truck: 0.30, .bus: 0.30,
         .motorcycle: 0.35, .bicycle: 0.35,
         .person: 0.40,
-        // Traffic-light precision was only ≈ 50–58 % at 0.25 in the measurement, so lights stay at 0.50.
-        .trafficLight: 0.50,
+        // Traffic lights: 0.30 (was 0.50). Two measurements pull in opposite directions: on BDD100K box precision
+        // was only ≈ 50–58 % at 0.25, while on a LISA sample (YOLO11n, 640 input) recall of annotated lights was
+        // 36.7 % by day / 0.2 % at night at 0.5 and 53.7 % / 11.9 % at 0.25. Recall wins here because a low-score
+        // light box alone drives nothing: the indicator, the coach and the red-light event additionally need a
+        // stable KNOWN colour (`TrafficLightColorVote`, `TrafficLightSelection`) — only 79 of 391 boxes that matched
+        // no annotated light got any colour from the classifier in that measurement.
+        .trafficLight: 0.30,
         .stopSign: 0.55,
         .other: 0.30,
     ]

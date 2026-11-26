@@ -206,6 +206,8 @@ public final class LaneDetector {
         /// Confidence multiplier per frame without a detection.
         public var missDecay: Double
         /// Typical lane width at the reference row (normalized) used when only one line is visible; refined online.
+        /// The value (and the 0.25…2.2 plausibility limits of `process`) is for a 16:9 LANDSCAPE frame; for other
+        /// frame shapes they are multiplied by `LaneDetector.aspectScale` (≈ 3.16 for 9:16 portrait).
         public var defaultLaneWidth: Double
 
         public init(horizonY: Double = EgoCorridor.default.horizonY, roiTopMargin: Double = 0.04,
@@ -243,6 +245,23 @@ public final class LaneDetector {
     private var left: SideState?
     private var right: SideState?
     private var laneWidth: Double
+    /// Aspect factor of the frames seen so far (1 until the first frame); a change (rotation) restarts the state.
+    private var aspect: Double = 1
+
+    /// Plausible lane width at the ROI bottom for a 16:9 landscape frame, fractions of the image width. A 3.5 m lane
+    /// seen from 1.2 m is (3.5 / 1.2) × (0.96 − 0.42) × H / W ≈ 0.89 there (flat-ground geometry, independent of the
+    /// field of view) — and ≈ 2.8 in 9:16 portrait, which is why the limits are scaled by `aspectScale`.
+    static let minLaneWidth: Double = 0.25
+    static let maxLaneWidthLandscape: Double = 2.2
+    /// Bottom-x jump (fraction of the width, landscape) above which a new fit is treated as a stray line.
+    static let bottomJumpLandscape: Double = 0.15
+
+    /// Lane-width factor of a frame relative to 16:9 landscape: (H / W) ÷ (9 / 16). 1 for 16:9 landscape,
+    /// ≈ 3.16 for 9:16 portrait, 1.33 for 4:3 landscape. Clamped to 0.75…4.
+    public static func aspectScale(width: Int, height: Int) -> Double {
+        guard width > 0, height > 0 else { return 1 }
+        return min(4, max(0.75, (Double(height) / Double(width)) / (9.0 / 16.0)))
+    }
 
     public init(config: Config = Config()) {
         self.config = config
@@ -252,20 +271,29 @@ public final class LaneDetector {
     public func reset() {
         left = nil
         right = nil
-        laneWidth = config.defaultLaneWidth
+        laneWidth = config.defaultLaneWidth * aspect
     }
 
     /// Analyses one frame and returns the smoothed estimate.
     @discardableResult
     public func process(_ image: LaneImage, timestamp: TimeInterval) -> LaneEstimate {
+        let k = Self.aspectScale(width: image.width, height: image.height)
+        if abs(k - aspect) > 0.01 {
+            // Frame shape changed (rotation, first frame): normalized x of the old state means something else.
+            aspect = k
+            left = nil
+            right = nil
+            laneWidth = config.defaultLaneWidth * k
+        }
         let fits = Self.detectLines(in: image, config: config)
         let w = Double(max(1, image.width))
-        left = Self.smooth(left, fit: fits.left, width: w, config: config)
-        right = Self.smooth(right, fit: fits.right, width: w, config: config)
+        left = Self.smooth(left, fit: fits.left, width: w, aspect: k, config: config)
+        right = Self.smooth(right, fit: fits.right, width: w, aspect: k, config: config)
         // Plausibility: lane width at the bottom must be sensible, otherwise trust the weaker side less.
         if let l = left, let r = right {
             let width = r.bottomX - l.bottomX
-            if width < 0.25 || width > 2.2 || r.topX < l.topX - 0.05 {
+            // Only the upper limit scales with the aspect (the lower one is a sanity bound for any frame shape).
+            if width < Self.minLaneWidth || width > Self.maxLaneWidthLandscape * k || r.topX < l.topX - 0.05 {
                 if l.confidence < r.confidence { left?.confidence *= 0.5 } else { right?.confidence *= 0.5 }
             } else if l.confidence >= 0.5, r.confidence >= 0.5 {
                 laneWidth += 0.1 * (width - laneWidth)
@@ -308,7 +336,8 @@ public final class LaneDetector {
                             timestamp: timestamp)
     }
 
-    private static func smooth(_ state: SideState?, fit: LaneLineFit?, width: Double, config: Config) -> SideState? {
+    private static func smooth(_ state: SideState?, fit: LaneLineFit?, width: Double, aspect: Double,
+                               config: Config) -> SideState? {
         guard let fit else {
             guard var s = state else { return nil }
             s.confidence *= config.missDecay
@@ -318,7 +347,8 @@ public final class LaneDetector {
         guard var s = state else {
             return SideState(bottomX: bx, topX: tx, confidence: fit.confidence * 0.6)
         }
-        let jump = abs(bx - s.bottomX) > 0.15 || abs(tx - s.topX) > 0.1
+        // The bottom x is extrapolated far outside a portrait frame, so only its threshold scales with the aspect.
+        let jump = abs(bx - s.bottomX) > bottomJumpLandscape * aspect || abs(tx - s.topX) > 0.1
         if jump && s.confidence >= 0.3 && s.outliers < 2 {
             // Probably a stray line (crack, kerb, car edge): ignore it unless it persists.
             s.outliers += 1
@@ -385,21 +415,26 @@ public final class LaneDetector {
             let pt = (x: Double(p.x), y: Double(p.y))
             if pt.x < egoPx { leftPts.append(pt) } else { rightPts.append(pt) }
         }
-        let leftFit = fitSide(leftPts, side: .left, width: w, yb: yb, yh: yh, roiRows: roiRows, config: config)
-        let rightFit = fitSide(rightPts, side: .right, width: w, yb: yb, yh: yh, roiRows: roiRows, config: config)
+        let k = aspectScale(width: image.width, height: image.height)
+        let leftFit = fitSide(leftPts, side: .left, width: w, yb: yb, yh: yh, roiRows: roiRows, aspect: k, config: config)
+        let rightFit = fitSide(rightPts, side: .right, width: w, yb: yb, yh: yh, roiRows: roiRows, aspect: k,
+                               config: config)
         return (leftFit, rightFit)
     }
 
     private static func fitSide(_ pts: [(x: Double, y: Double)], side: LaneSide, width w: Double, yb: Double, yh: Double,
-                                roiRows: Int, config: Config) -> LaneLineFit? {
+                                roiRows: Int, aspect k: Double, config: Config) -> LaneLineFit? {
         guard pts.count >= 6 else { return nil }
         // Line model: x = xb + s · (yb − y); s = cot(angle) > 0 for the left line (it leans right going up), < 0 right.
         let sMin = 1 / tan(config.maxAngleDegrees * .pi / 180)
         let sMax = 1 / tan(config.minAngleDegrees * .pi / 180)
         let slopeBins = 48
-        let binWidth = max(1.0, w / 80)
-        let xbMin = side == .left ? -w : 0.35 * w
-        let xbMax = side == .left ? 0.65 * w : 2 * w
+        // Bottom-intercept range: one image width beyond the frame in 16:9 landscape, `k` widths for taller frames
+        // (in portrait the own-lane lines reach the ROI bottom ≈ 0.9 widths outside the frame). Identical to the
+        // previous range for k = 1; wider bins keep the accumulator bounded.
+        let binWidth = max(1.0, w / 80 * max(1, k / 2))
+        let xbMin = side == .left ? -w * k : 0.35 * w
+        let xbMax = side == .left ? 0.65 * w : (1 + k) * w
         let xbBins = max(1, Int((xbMax - xbMin) / binWidth) + 1)
         // At the horizon the own-lane lines converge near the centre.
         let horizonMin = 0.12 * w, horizonMax = 0.88 * w

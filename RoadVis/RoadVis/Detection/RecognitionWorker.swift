@@ -48,9 +48,11 @@ final class RecognitionWorker: @unchecked Sendable {
         var uniqueCounts: [VehicleKind: Int]
         var fps: Double
         var inferenceMs: Double
-        /// Colour of the largest currently visible confirmed traffic light with ≥ 5 hits and peak confidence ≥ 0.5
-        /// (`.unknown` when not determined); nil when none.
+        /// Stable colour of the traffic light that applies to the own lane (`TrafficLightSelection.ownLane`: confirmed,
+        /// ≥ 5 hits, known colour from the tracker's time-window vote, ahead of the corridor); nil when none.
         var lightColor: TrafficLightColor?
+        /// The light `lightColor` comes from (track ID, colour, box) — the one the coach looks at.
+        var observedLight: ObservedTrafficLight?
         /// Size of the processed (upright) buffer, pixels.
         var frameSize: CGSize
         /// Frames processed since the worker was created.
@@ -94,12 +96,10 @@ final class RecognitionWorker: @unchecked Sendable {
 
     /// Upper bound of the processing rate (the camera delivers 30 fps).
     static let maxFramesPerSecond: Double = 15
-    /// A traffic light drives the colour indicator only with this many hits and once the track has reached this
-    /// detector confidence (`TrackedObject.peakConfidence` — the best score so far, so a one-frame dip of a solid
-    /// light no longer blanks the indicator). Kept at 0.5 whatever the slider says: in the BDD100K measurement
-    /// (see `DetectionThresholds`) traffic-light precision was only ≈ 50–58 % at 0.25.
-    static let lightMinHits = 5
-    static let lightMinConfidence = 0.5
+    /// A traffic light drives the colour indicator / coach only with this many hits AND a stable known colour
+    /// (`TrafficLightSelection.ownLane`). The former extra 0.5 confidence floor is gone: the class threshold is 0.30
+    /// for recall (see `DetectionThresholds.classBase`), and the colour requirement is what filters false boxes.
+    static let lightMinHits = TrafficLightSelection.minHits
     /// A pedestrian can raise a warning once its track has reached this detector confidence (plus the hit / shape
     /// checks of `PedestrianHazardDetector`). Same value as the person threshold at the default slider position;
     /// the previous 0.55 was stacked on top of the tracker's own 0.5.
@@ -327,7 +327,8 @@ final class RecognitionWorker: @unchecked Sendable {
             if frameInputs.laneDetectionEnabled, !detector.status.isReady {
                 outputHandler?(Output(generation: generation, tracks: [], visibleCounts: [:],
                                       uniqueCounts: tracker.uniqueCounts, fps: fpsEstimate, inferenceMs: 0,
-                                      lightColor: nil, frameSize: CGSize(width: width, height: height),
+                                      lightColor: nil, observedLight: nil,
+                                      frameSize: CGSize(width: width, height: height),
                                       processedFrames: processedFrames, leadVehicle: nil,
                                       laneEstimate: laneEstimate, pedestrianHazards: [], roadStaff: [],
                                       roadwayZone: nil, corridor: leadTracker.corridor))
@@ -383,20 +384,23 @@ final class RecognitionWorker: @unchecked Sendable {
                leadTrackID: leadVehicle?.trackID)
 
         var visibleCounts: [VehicleKind: Int] = [:]
-        var largestLight: TrackedObject?
+        let lightThreshold = DetectionThresholds.threshold(for: .trafficLight, global: confidence)
         for track in tracks where track.isConfirmed {
+            // Low-score lights without a readable colour are neither drawn (pipeline) nor counted as visible.
+            guard TrafficLightSelection.isDisplayable(track, classThreshold: lightThreshold) else { continue }
             visibleCounts[track.kind, default: 0] += 1
-            // Indicator only for a solid, currently visible light (no flicker from one-off false positives).
-            if track.kind == .trafficLight, track.missed == 0, track.hits >= Self.lightMinHits,
-               track.peakConfidence >= Self.lightMinConfidence, track.box.area > (largestLight?.box.area ?? 0) {
-                largestLight = track
-            }
         }
-        let lightColor: TrafficLightColor? = largestLight.map { $0.lightColor ?? .unknown }
+        // Indicator / coach: the light that applies to the own lane (stable known colour, ≥ 5 hits), not simply
+        // the largest box.
+        let observedLight = TrafficLightSelection.ownLane(
+            in: tracks, corridorCenterX: corridorCenterX,
+            horizonY: min(0.8, max(0.1, frameInputs.corridorHorizon)), minHits: Self.lightMinHits)
+        let lightColor: TrafficLightColor? = observedLight?.color
 
         let output = Output(generation: generation, tracks: tracks, visibleCounts: visibleCounts,
                             uniqueCounts: uniqueCounts, fps: fpsEstimate, inferenceMs: inferenceEstimate,
-                            lightColor: lightColor, frameSize: CGSize(width: width, height: height),
+                            lightColor: lightColor, observedLight: observedLight,
+                            frameSize: CGSize(width: width, height: height),
                             processedFrames: processedFrames, leadVehicle: leadVehicle, laneEstimate: laneEstimate,
                             pedestrianHazards: pedestrianHazards, roadStaff: roadStaff,
                             roadwayZone: frameInputs.detection.trackPedestrians ? roadwayEstimator.zone : nil,
@@ -418,8 +422,12 @@ final class RecognitionWorker: @unchecked Sendable {
         corridorCenterX = EgoCorridor.smoothedCenterX(previous: corridorCenterX,
                                                       lane: inputs.laneDetectionEnabled ? laneEstimate : nil)
         let centerX = (corridorCenterX * 1000).rounded() / 1000
-        if leadTracker.corridor.horizonY != horizon || leadTracker.corridor.centerX != centerX {
-            leadTracker.corridor = EgoCorridor(centerX: centerX, horizonY: horizon)
+        // Aspect-aware corridor (portrait frames need a wider one); the whole struct is compared so a rotation
+        // updates it too.
+        let corridor = EgoCorridor.forFrame(centerX: centerX, horizonY: horizon, imageWidth: geometry.imageWidth,
+                                            imageHeight: geometry.imageHeight)
+        if leadTracker.corridor != corridor {
+            leadTracker.corridor = corridor
         }
         leadTracker.cameraToBumperMeters = inputs.cameraToBumperMeters
         return leadTracker.update(tracks: tracks, geometry: geometry, timestamp: timestamp)
@@ -436,10 +444,14 @@ final class RecognitionWorker: @unchecked Sendable {
             return PersonSceneResult()
         }
         let horizon = min(0.8, max(0.1, inputs.corridorHorizon))
-        if pedestrianDetector.corridor.horizonY != horizon {
-            pedestrianDetector.corridor = EgoCorridor(horizonY: horizon)
+        let corridor = EgoCorridor.forFrame(horizonY: horizon, imageWidth: geometry.imageWidth,
+                                            imageHeight: geometry.imageHeight)
+        if pedestrianDetector.corridor != corridor {
+            pedestrianDetector.corridor = corridor
         }
         roadwayEstimator.config.roadWidthFactor = pedestrianDetector.roadWidthFactor
+        roadwayEstimator.config.aspectScale = LaneDetector.aspectScale(width: Int(geometry.imageWidth),
+                                                                       height: Int(geometry.imageHeight))
         pedestrianDetector.roadway = roadwayEstimator.update(lane: inputs.laneDetectionEnabled ? laneEstimate : nil,
                                                              corridor: pedestrianDetector.corridor)
         return pedestrianDetector.evaluate(tracks: tracks, ownSpeedKmh: inputs.ownSpeedKmh, geometry: geometry,
@@ -496,11 +508,10 @@ final class RecognitionWorker: @unchecked Sendable {
             let rectWidth = Int((box.width * Double(width)).rounded(.up))
             let rectHeight = Int((box.height * Double(height)).rounded(.up))
             guard rectWidth >= 3, rectHeight >= 6 else { continue }
-            // About 24 samples along the short side keeps the cost constant for near and far lights.
-            let step = max(1, min(rectWidth, rectHeight) / 24)
+            // The classifier samples about 24 points along the short side (constant cost for near and far lights).
             detections[index].lightColor = TrafficLightColorClassifier.classifyBGRA(
                 base: UnsafeRawPointer(base), width: width, height: height, bytesPerRow: bytesPerRow,
-                rectX: rectX, rectY: rectY, rectWidth: rectWidth, rectHeight: rectHeight, step: step)
+                rectX: rectX, rectY: rectY, rectWidth: rectWidth, rectHeight: rectHeight)
         }
     }
 

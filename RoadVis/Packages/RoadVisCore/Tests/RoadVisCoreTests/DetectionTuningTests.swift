@@ -14,7 +14,7 @@ final class DetectionTuningTests: XCTestCase {
         XCTAssertEqual(t[.car], 0.30)
         XCTAssertEqual(t[.truck], 0.30)
         XCTAssertEqual(t[.person], 0.40)
-        XCTAssertEqual(t[.trafficLight], 0.50)
+        XCTAssertEqual(t[.trafficLight], 0.30)
         XCTAssertEqual(t[.stopSign], 0.55)
         XCTAssertEqual(t.count, VehicleKind.allCases.count)
         XCTAssertEqual(ObjectTracker.Config().minConfidence, t)
@@ -25,11 +25,12 @@ final class DetectionTuningTests: XCTestCase {
         let low = DetectionThresholds.perClass(global: 0.15)
         XCTAssertEqual(low[.car] ?? 0, 0.15, accuracy: 1e-9)
         XCTAssertEqual(low[.person] ?? 0, 0.25, accuracy: 1e-9)
-        XCTAssertEqual(low[.trafficLight] ?? 0, 0.35, accuracy: 1e-9)
+        XCTAssertEqual(low[.trafficLight] ?? 0, 0.15, accuracy: 1e-9)
         XCTAssertEqual(low[.stopSign] ?? 0, 0.40, accuracy: 1e-9)
         let high = DetectionThresholds.perClass(global: 0.8)
         XCTAssertEqual(high[.car] ?? 0, 0.8, accuracy: 1e-9)
-        XCTAssertEqual(high[.trafficLight] ?? 0, DetectionThresholds.maximum, accuracy: 1e-9)
+        XCTAssertEqual(high[.trafficLight] ?? 0, 0.8, accuracy: 1e-9)
+        XCTAssertEqual(high[.stopSign] ?? 0, DetectionThresholds.maximum, accuracy: 1e-9)
         XCTAssertEqual(DetectionThresholds.threshold(for: .car, global: 0), DetectionThresholds.minimum)
         XCTAssertEqual(DetectionThresholds.threshold(for: .car, global: .nan), 0.30)
     }
@@ -68,30 +69,30 @@ final class DetectionTuningTests: XCTestCase {
         let tracker = ObjectTracker()
         var tracks: [TrackedObject] = []
         for i in 0..<3 {
-            tracks = tracker.update(detections: [det(.trafficLight, 0.6)], timestamp: Double(i) * 0.1)
+            tracks = tracker.update(detections: [det(.stopSign, 0.6)], timestamp: Double(i) * 0.1)
         }
         XCTAssertEqual(tracks.first?.isConfirmed, true)
         let id = tracks.first?.id
-        // 0.40 is below the light threshold (0.50) but above 0.50 × 0.7: the confirmed track goes on.
-        tracks = tracker.update(detections: [det(.trafficLight, 0.40)], timestamp: 0.3)
+        // 0.40 is below the stop-sign threshold (0.55) but above 0.55 × 0.7: the confirmed track goes on.
+        tracks = tracker.update(detections: [det(.stopSign, 0.40)], timestamp: 0.3)
         XCTAssertEqual(tracks.first?.id, id)
         XCTAssertEqual(tracks.first?.missed, 0)
         XCTAssertEqual(tracks.first?.hits, 4)
         XCTAssertEqual(tracks.first?.confidence ?? 0, 0.40, accuracy: 1e-9)
         XCTAssertEqual(tracks.first?.peakConfidence ?? 0, 0.60, accuracy: 1e-9)
         // Below the continuation floor: a miss.
-        tracks = tracker.update(detections: [det(.trafficLight, 0.30)], timestamp: 0.4)
+        tracks = tracker.update(detections: [det(.stopSign, 0.30)], timestamp: 0.4)
         XCTAssertTrue(tracks.isEmpty)
         // A low score never opens a track and never feeds a tentative one.
         let fresh = ObjectTracker()
-        XCTAssertTrue(fresh.update(detections: [det(.trafficLight, 0.40)], timestamp: 0).isEmpty)
-        _ = fresh.update(detections: [det(.trafficLight, 0.6)], timestamp: 0.1)
-        let tentative = fresh.update(detections: [det(.trafficLight, 0.40)], timestamp: 0.2)
+        XCTAssertTrue(fresh.update(detections: [det(.stopSign, 0.40)], timestamp: 0).isEmpty)
+        _ = fresh.update(detections: [det(.stopSign, 0.6)], timestamp: 0.1)
+        let tentative = fresh.update(detections: [det(.stopSign, 0.40)], timestamp: 0.2)
         XCTAssertTrue(tentative.isEmpty)
         // Hysteresis off: the old strict behaviour.
         let strict = ObjectTracker(config: ObjectTracker.Config(continuationFactor: 1))
-        for i in 0..<3 { _ = strict.update(detections: [det(.trafficLight, 0.6)], timestamp: Double(i) * 0.1) }
-        XCTAssertTrue(strict.update(detections: [det(.trafficLight, 0.45)], timestamp: 0.3).isEmpty)
+        for i in 0..<3 { _ = strict.update(detections: [det(.stopSign, 0.6)], timestamp: Double(i) * 0.1) }
+        XCTAssertTrue(strict.update(detections: [det(.stopSign, 0.45)], timestamp: 0.3).isEmpty)
     }
 
     func testDropTracksKeepsCountersAndIDs() {

@@ -706,3 +706,62 @@ final class CameraDrivingEventTests: XCTestCase {
         }
     }
 }
+
+// MARK: - Aspect-aware lane limits (portrait frames)
+
+extension LaneDetectorTests {
+    func testAspectScale() {
+        XCTAssertEqual(LaneDetector.aspectScale(width: 1920, height: 1080), 1, accuracy: 1e-9)
+        XCTAssertEqual(LaneDetector.aspectScale(width: 160, height: 284), 3.155, accuracy: 0.01)   // 9:16 portrait
+        XCTAssertEqual(LaneDetector.aspectScale(width: 640, height: 480), 4.0 / 3.0, accuracy: 1e-9)
+        XCTAssertEqual(LaneDetector.aspectScale(width: 0, height: 10), 1)
+        XCTAssertEqual(LaneDetector.aspectScale(width: 100, height: 1000), 4)                       // clamped
+    }
+
+    /// Realistic portrait geometry: a 3.5 m lane seen from 1.2 m is ≈ 2.8 image widths wide at the ROI bottom, so
+    /// the lines reach the bottom row far outside the frame (x ≈ −142 and 302 px of 160). With the landscape limit
+    /// (2.2) one of the two correctly detected lines was halved every frame and dropped below 0.45.
+    func testPortraitLaneWithRealisticWidthKeepsBothLines() {
+        let detector = LaneDetector()
+        var estimate = LaneEstimate.empty()
+        for i in 0..<30 {
+            estimate = detector.process(SyntheticRoad.image(leftBottom: -142, rightBottom: 302, dashed: false,
+                                                            seed: UInt64(i + 1)), timestamp: Double(i) * 0.2)
+        }
+        XCTAssertGreaterThanOrEqual(estimate.leftConfidence, 0.45)
+        XCTAssertGreaterThanOrEqual(estimate.rightConfidence, 0.45)
+        XCTAssertEqual(estimate.laneCenterX ?? 0, 0.5, accuracy: 0.08)
+        XCTAssertEqual(estimate.egoOffset ?? 9, 0, accuracy: 0.1)
+        let width = (estimate.right?.x(atY: estimate.referenceY) ?? 0) - (estimate.left?.x(atY: estimate.referenceY) ?? 0)
+        XCTAssertGreaterThan(width, 2.2)     // wider than the landscape limit — and accepted
+    }
+
+    /// One visible line in portrait: the lane centre uses the default lane width scaled by the aspect (0.9 × 3.16),
+    /// not the landscape 0.9 that put the centre far to the left.
+    func testPortraitSingleLineUsesScaledDefaultWidth() {
+        let detector = LaneDetector()
+        var estimate = LaneEstimate.empty()
+        for i in 0..<6 {
+            estimate = detector.process(SyntheticRoad.image(leftBottom: -142, rightBottom: nil, seed: UInt64(i + 3)),
+                                        timestamp: Double(i) * 0.2)
+        }
+        let left = try! XCTUnwrap(estimate.left)
+        XCTAssertNil(estimate.right)
+        let k = LaneDetector.aspectScale(width: 160, height: 284)
+        XCTAssertEqual(estimate.laneCenterX ?? 0, left.x(atY: estimate.referenceY) + 0.45 * k, accuracy: 0.02)
+        XCTAssertEqual(estimate.laneCenterX ?? 0, 0.5, accuracy: 0.2)
+    }
+
+    /// Rotation: the state of the previous frame shape is dropped (normalized x means something else).
+    func testAspectChangeResetsState() {
+        let detector = LaneDetector()
+        for i in 0..<5 {
+            detector.process(SyntheticRoad.image(leftBottom: 10, rightBottom: 150, seed: UInt64(i + 1)), timestamp: Double(i) * 0.2)
+        }
+        var landscape = LaneImage(width: 160, height: 90, fill: 95)
+        landscape[0, 0] = 95
+        let estimate = detector.process(landscape, timestamp: 1.2)
+        XCTAssertNil(estimate.left)
+        XCTAssertNil(estimate.right)
+    }
+}

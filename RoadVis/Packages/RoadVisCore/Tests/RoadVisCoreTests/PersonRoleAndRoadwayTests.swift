@@ -191,10 +191,13 @@ final class PersonRoleAndRoadwayTests: XCTestCase {
 
     func testOfficerOnRoadIsStaffNotHazard() {
         let d = PedestrianHazardDetector()
-        let r = d.evaluate(tracks: [person(1, x: 0.5, bottom: 0.7, t: 0, role: .trafficOfficer),
+        // Officer on the roadway but outside the own lane (corridor half width at y = 0.7 is ≈ 0.137).
+        let r = d.evaluate(tracks: [person(1, x: 0.72, bottom: 0.7, t: 0, role: .trafficOfficer),
                                     person(2, x: 0.02, bottom: 0.62, t: 0, role: .roadWorker)],
                            ownSpeedKmh: 40, geometry: g, timestamp: 0)
         XCTAssertTrue(r.hazards.isEmpty)
+        XCTAssertEqual(r.staff.first?.onRoadway, true)
+        XCTAssertEqual(r.staff.first?.inOwnLane, false)
         XCTAssertEqual(r.staff.map(\.trackID), [1])
         XCTAssertEqual(r.staff.first?.role, .trafficOfficer)
         XCTAssertEqual(r.filteredIDs, [2])   // the worker far out on the sidewalk is not kept

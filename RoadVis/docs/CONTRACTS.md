@@ -40,7 +40,7 @@ public struct TrackedObject: Identifiable, Hashable, Sendable {
     public var isConfirmed: Bool             // hits >= minHits
     public var make: String?                 // majority vote of make observations
     public var makeConfidence: Double?       // mean confidence of the winning make
-    public var lightColor: TrafficLightColor?   // majority of recent colour observations
+    public var lightColor: TrafficLightColor?   // TrafficLightColorVote: 0.8 s window, ≥ 3 known votes, ≥ 60 %; nil when unreadable
     public var distanceMeters: Double?       // set by MonocularSpeedEstimator
     public var relativeSpeedKmh: Double?     // + = moving away from camera
     public var estimatedSpeedKmh: Double?    // own speed + relative speed (only when plausible)
@@ -105,11 +105,30 @@ public enum COCOLabels { public static let names: [String] }   // 80 COCO class 
 // TrafficLightColorClassifier.swift
 public struct RGBPixel: Hashable, Sendable { public var r: UInt8; public var g: UInt8; public var b: UInt8; public init(r:g:b:) }
 public enum TrafficLightColorClassifier {
-    public static func classify(pixels: [RGBPixel]) -> TrafficLightColor
-    /// Samples a BGRA (kCVPixelFormatType_32BGRA) buffer inside the pixel rect (x, y, width, height) with a stride.
+    // v2 (port of the evaluated prototype tl/code/v5.py): relative brightness, red halo, position prior for vertical
+    // housings, green border-ring guard, lamp-vs-housing contrast. See the file header for the measurements.
+    public static func classify(pixels: [RGBPixel]) -> TrafficLightColor                       // flat list, no geometry
+    public static func classify(pixels: [RGBPixel], width: Int, height: Int, vertical: Bool? = nil) -> TrafficLightColor
+    /// Samples a BGRA (kCVPixelFormatType_32BGRA) buffer inside the pixel rect; step nil = ≈ 24 samples along the short side.
     public static func classifyBGRA(base: UnsafeRawPointer, width: Int, height: Int, bytesPerRow: Int,
-                                    rectX: Int, rectY: Int, rectWidth: Int, rectHeight: Int, step: Int = 2) -> TrafficLightColor
+                                    rectX: Int, rectY: Int, rectWidth: Int, rectHeight: Int, step: Int? = nil) -> TrafficLightColor
 }
+// Tracking.swift: TrafficLightColorVote (Observation, window 0.8 s, minVotes 3, minShare 0.6, switchAgreement 2,
+//   prune(_:now:), decide(_:now:previous:)). `.unknown` / nil observations are recorded and age the colour out.
+// CoachRules.swift: ObservedTrafficLight.largest(in:aheadX:) (ahead filter first), TrafficLightSelection
+//   (ownLane(in:corridorCenterX:horizonY:minHits:) — the light for the own lane, known colour only, red wins close
+//   calls; isDisplayable(_:classThreshold:) — low-score lights without a colour are not drawn). TrafficLightCoach binds
+//   "green, go" to the track that was red.
+// Aspect awareness (frames are upright: portrait or landscape): EgoCorridor.forFrame(centerX:horizonY:imageWidth:imageHeight:)
+//   and EgoCorridor.aspectScale; LaneDetector.aspectScale(width:height:) scales defaultLaneWidth (0.9), the 2.2 lane-width
+//   limit, the bottom-jump threshold and the Hough intercept range (all tuned for 16:9 landscape, × (H/W)/(9/16));
+//   RoadwayZone.fromLanes(..., aspectScale:) / RoadwayZoneEstimator.Config.aspectScale;
+//   PedestrianHazardDetector.isPlausible(_:geometry:) compares the box aspect in PIXELS.
+// PedestrianHazard.swift: a person in the own lane (or on the roadway moving toward it) is a .danger hazard whatever
+//   `personRole` says (staff additionally keep their RoadStaffSighting); "approaching" is the least-squares slope of the
+//   road-relative position (offset ÷ perspective zone half width), reach = slope × timeToEdgeSeconds.
+// PersonRoleClassifier.swift: wider hi-vis gates, PersonRoleSample.lowerDarkShare (officer = lime + dark/navy lower body,
+//   no orange), vote window 15 with 60 % enter / 30 % keep.
 
 // ExperimentLog.swift — research export (per-frame detections vs unique tracked vehicles)
 public struct ExperimentRecord: Codable, Hashable, Sendable {
@@ -468,7 +487,7 @@ enum ModelStatus: Equatable, Sendable {                // Detection/VehicleDetec
     private(set) var inferenceMs: Double
     private(set) var detectorStatus: ModelStatus
     private(set) var makeClassifierStatus: ModelStatus
-    private(set) var currentLightColor: TrafficLightColor?   // largest confirmed traffic light (.unknown = colour not determined); nil = none
+    private(set) var currentLightColor: TrafficLightColor?   // own-lane light with a stable known colour (TrafficLightSelection.ownLane); nil = none
     private(set) var isRunning: Bool                    // capture session running
     private(set) var cameraPermissionDenied: Bool
     private(set) var frameSize: CGSize                  // added: upright buffer size in pixels (for aspect-fill box mapping)
