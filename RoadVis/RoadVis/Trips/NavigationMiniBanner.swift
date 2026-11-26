@@ -22,7 +22,7 @@ struct NavigationMiniBanner: View {
                 guidance(nav)
             }
         }
-        .frame(maxWidth: 260, alignment: .leading)
+        .frame(width: 72, alignment: .leading)
         .animation(RVTheme.snappy, value: nav.state)
     }
 
@@ -32,21 +32,14 @@ struct NavigationMiniBanner: View {
         Button {
             app.switchTo(.navigator)
         } label: {
-            VStack(alignment: .leading, spacing: 4) {
-                HStack(alignment: .center, spacing: 8) {
-                    Image(systemName: symbolName(nav))
-                        .font(.system(size: 26, weight: .bold))
-                        .frame(width: 32, height: 32)
-                    VStack(alignment: .leading, spacing: 0) {
-                        primaryText(nav)
-                        if let detail = detailText(nav) {
-                            Text(detail)
-                                .font(RVTheme.font(11, weight: .medium))
-                                .opacity(0.85)
-                                .lineLimit(1)
-                        }
-                    }
-                }
+            // Vertical, minimal and slightly transparent: arrow on top, distance underneath, thin countdown bar.
+            VStack(alignment: .center, spacing: 3) {
+                Image(systemName: symbolName(nav))
+                    .font(.system(size: 40, weight: .semibold))
+                    .frame(width: 52, height: 46)
+                primaryText(nav)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
                 if let fraction = countdownFraction(nav) {
                     GeometryReader { proxy in
                         ZStack(alignment: .leading) {
@@ -55,18 +48,15 @@ struct NavigationMiniBanner: View {
                                 .frame(width: proxy.size.width * fraction)
                         }
                     }
-                    .frame(height: 3)
+                    .frame(width: 44, height: 3)
                     .animation(.linear(duration: 0.4), value: fraction)
                 }
             }
             .foregroundStyle(.white)
-            .padding(.horizontal, 10)
+            .opacity(0.85)
+            .frame(width: 72)
             .padding(.vertical, 6)
-            .frame(minHeight: RVTheme.HUD.hit)
-            .background(.ultraThinMaterial.opacity(0.35),
-                        in: RoundedRectangle(cornerRadius: RVTheme.Radius.control, style: .continuous))
-            .shadow(color: RVTheme.textShadow, radius: 3, x: 0, y: 1)
-            .fixedSize(horizontal: true, vertical: false)
+            .shadow(color: .black.opacity(0.55), radius: 4, x: 0, y: 1)
             .contentShape(Rectangle())
         }
         .buttonStyle(RVPressableButtonStyle())
@@ -84,17 +74,17 @@ struct NavigationMiniBanner: View {
     private func primaryText(_ nav: NavigationService) -> some View {
         if nav.state == .arrived {
             Text(l: "voice.arrived")
-                .font(RVTheme.font(17, weight: .bold))
+                .font(RVTheme.font(13, weight: .bold))
         } else if nav.isRecalculating || nav.progress?.isOffRoute == true {
             Text(l: "mini.rerouting")
-                .font(RVTheme.font(16, weight: .bold))
+                .font(RVTheme.font(12, weight: .bold))
         } else if let distance = nav.progress?.distanceToNextManeuver {
             Text(RVFormat.appDistance(distance))
-                .rvNumeric(20, weight: .heavy)
+                .rvNumeric(17, weight: .bold)
                 .contentTransition(.numericText())
         } else {
             Text(l: "nav.waitingGPS")
-                .font(RVTheme.font(15, weight: .bold))
+                .font(RVTheme.font(11, weight: .bold))
         }
     }
 
