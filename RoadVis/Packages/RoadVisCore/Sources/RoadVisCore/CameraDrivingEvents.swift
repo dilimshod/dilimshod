@@ -242,12 +242,14 @@ public struct CameraEventInput: Sendable {
     public var geometry: CameraGeometry?
     /// Pedestrians on / about to enter the roadway (from `PedestrianHazardDetector`; empty when the feature is off).
     public var pedestrianHazards: [PedestrianHazard]
+    /// Traffic officers / road workers on or at the roadway (colour heuristic).
+    public var roadStaff: [RoadStaffSighting]
 
     public init(timestamp: TimeInterval, date: Date = Date(), speedKmh: Double?, coordinate: GeoPoint? = nil,
                 assessment: FollowingDistanceAssessment? = nil, hasLead: Bool = false, collisionWarning: Bool = false,
                 collisionThresholdSeconds: Double = 2.5, laneDeparture: LaneSide? = nil, laneOffset: Double? = nil,
                 tracks: [TrackedObject] = [], geometry: CameraGeometry? = nil,
-                pedestrianHazards: [PedestrianHazard] = []) {
+                pedestrianHazards: [PedestrianHazard] = [], roadStaff: [RoadStaffSighting] = []) {
         self.timestamp = timestamp
         self.date = date
         self.speedKmh = speedKmh
@@ -261,6 +263,7 @@ public struct CameraEventInput: Sendable {
         self.tracks = tracks
         self.geometry = geometry
         self.pedestrianHazards = pedestrianHazards
+        self.roadStaff = roadStaff
     }
 }
 
@@ -278,6 +281,8 @@ public final class CameraDrivingEventMonitor {
     public var redLight = RedLightRunningDetector()
     public var stopSign = StopSignComplianceMonitor()
     public var pedestrians = PedestrianYieldMonitor()
+    /// Officer / road-worker tracks already logged (each track once; the debouncer merges repeats within the cooldown).
+    private var loggedStaffTracks = Set<Int>()
     public private(set) var debouncer: DrivingEventDebouncer
     private var tailgatingSince: TimeInterval?
     private var tailgatingReported = false
@@ -296,6 +301,7 @@ public final class CameraDrivingEventMonitor {
         redLight.reset()
         stopSign.reset()
         pedestrians.reset()
+        loggedStaffTracks.removeAll()
     }
 
     /// New events of this frame.
@@ -358,6 +364,13 @@ public final class CameraDrivingEventMonitor {
                                     timestamp: input.timestamp) {
             events.append(make(.pedestrianNotYielded, value: v.closestDistance, limit: pedestrians.config.maxDistance,
                                duration: v.duration))
+        }
+
+        // Observations (info, not violations): traffic officer / road workers seen, once per track.
+        for s in input.roadStaff where loggedStaffTracks.insert(s.trackID).inserted {
+            if loggedStaffTracks.count > 256 { loggedStaffTracks = [s.trackID] }
+            let kind: DrivingEventKind = s.role == .trafficOfficer ? .trafficOfficerSeen : .roadWorkersSeen
+            events.append(make(kind, value: s.distanceMeters))
         }
 
         return events.filter { debouncer.add($0) }

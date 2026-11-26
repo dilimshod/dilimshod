@@ -36,20 +36,74 @@ public struct PedestrianHazard: Hashable, Sendable {
     }
 }
 
-/// Decides whether detected pedestrians are on the roadway / in front of the car.
+/// A traffic police officer or road worker (colour heuristic, `PersonRole`) on / at the edge of the roadway. They are
+/// on the road deliberately, so they get their own banner / voice instead of "yield to the pedestrian".
+public struct RoadStaffSighting: Hashable, Sendable {
+    public var trackID: Int
+    public var role: PersonRole
+    public var box: BBox
+    /// Rough monocular distance (≈), metres.
+    public var distanceMeters: Double?
+    /// Feet inside the roadway zone (not only at its edge).
+    public var onRoadway: Bool
+    /// Feet inside the own-lane corridor.
+    public var inOwnLane: Bool
+
+    public init(trackID: Int, role: PersonRole, box: BBox, distanceMeters: Double?, onRoadway: Bool, inOwnLane: Bool) {
+        self.trackID = trackID
+        self.role = role
+        self.box = box
+        self.distanceMeters = distanceMeters
+        self.onRoadway = onRoadway
+        self.inOwnLane = inOwnLane
+    }
+}
+
+/// Result of one frame of `PedestrianHazardDetector.evaluate`.
+public struct PersonSceneResult: Hashable, Sendable {
+    /// Pedestrians on / about to enter the roadway, most urgent first (officers and workers excluded).
+    public var hazards: [PedestrianHazard]
+    /// Officers / road workers on or at the edge of the roadway, nearest first.
+    public var staff: [RoadStaffSighting]
+    /// Person tracks on / at the roadway or moving toward it: they are shown, counted and logged.
+    public var relevantIDs: Set<Int>
+    /// Person tracks outside the roadway zone and not moving toward it (sidewalk): hidden completely.
+    public var filteredIDs: Set<Int>
+
+    public init(hazards: [PedestrianHazard] = [], staff: [RoadStaffSighting] = [], relevantIDs: Set<Int> = [],
+                filteredIDs: Set<Int> = []) {
+        self.hazards = hazards
+        self.staff = staff
+        self.relevantIDs = relevantIDs
+        self.filteredIDs = filteredIDs
+    }
+}
+
+/// Decides whether detected pedestrians are on the roadway / in front of the car, and which persons are outside the
+/// roadway (sidewalk) and must not be recognised at all.
 ///
 /// Geometry (image space, y down): a person's ground contact point is the bottom-centre of the box. It is
 ///  - "in the own lane" when inside the `EgoCorridor` trapezoid at that row,
-///  - "on the roadway" when inside a wider trapezoid (`roadWidthFactor` × corridor width) — adjacent lanes,
-///    the crossing zone right in front of the car,
-///  - "approaching" when near the roadway edge and moving towards the corridor centre.
-/// This is a camera heuristic (no lane semantics beyond the corridor), so warnings are phrased as advice.
+///  - "on the roadway" when inside the `RoadwayZone` (lane markings extended by the typical number of lanes, or the
+///    corridor widened by `roadWidthFactor` when no markings are confident) plus a small `edgeMargin`,
+///  - "approaching" when moving laterally towards the roadway centre,
+///  - "filtered out" (sidewalk) when outside the zone by more than `edgeMargin` and not approaching — or approaching
+///    but still farther than the approach margin. Such persons get no box, no label, no warning and are not counted.
+/// Officers and road workers (`TrackedObject.personRole`) inside the zone are reported as `RoadStaffSighting`s, never as
+/// pedestrian hazards. This is a camera heuristic, so warnings are phrased as advice.
 public final class PedestrianHazardDetector {
     public var corridor: EgoCorridor
-    /// Width of the roadway zone relative to the own-lane corridor.
+    /// Roadway zone (from `RoadwayZoneEstimator`); nil → the corridor widened by `roadWidthFactor`.
+    public var roadway: RoadwayZone?
+    /// Width of the fallback roadway zone relative to the own-lane corridor.
     public var roadWidthFactor: Double
-    /// Extra margin outside the roadway zone in which an approaching pedestrian is reported.
+    /// Extra margin outside the roadway zone in which an approaching pedestrian is reported, in own-lane half widths
+    /// (converted to roadway half widths by dividing by `roadWidthFactor`).
     public var approachMarginFactor: Double
+    /// Feet up to this far beyond the roadway boundary (in roadway half widths) still count as "at the roadway edge".
+    public var edgeMargin: Double = 0.08
+    /// A person already relevant stays relevant until this much farther out (no flicker at the boundary).
+    public var relevanceHysteresis: Double = 0.1
     /// Minimum lateral speed towards the lane (fraction of image width per second) to count as approaching.
     public var minApproachSpeed: Double
     /// Pedestrians farther than this are ignored, metres.
@@ -70,6 +124,8 @@ public final class PedestrianHazardDetector {
     public var minDistance: Double = 2.0
 
     private var history: [Int: [(t: TimeInterval, x: Double)]] = [:]
+    /// Last time each person track was relevant (hysteresis; kept ≈ 1 s across missed frames).
+    private var relevant: [Int: TimeInterval] = [:]
 
     /// True when the track looks like a real pedestrian in the road scene.
     public func isPlausible(_ t: TrackedObject) -> Bool {
@@ -93,14 +149,28 @@ public final class PedestrianHazardDetector {
 
     public func reset() {
         history.removeAll()
+        relevant.removeAll()
+    }
+
+    /// The zone in use (the explicit roadway or the widened corridor).
+    public var effectiveRoadway: RoadwayZone {
+        roadway ?? RoadwayZone.fromCorridor(corridor, widthFactor: roadWidthFactor)
     }
 
     /// Returns hazards sorted by urgency (danger first, then nearest).
     public func update(tracks: [TrackedObject], ownSpeedKmh: Double?, geometry: CameraGeometry,
                        timestamp: TimeInterval) -> [PedestrianHazard] {
-        var result: [PedestrianHazard] = []
+        evaluate(tracks: tracks, ownSpeedKmh: ownSpeedKmh, geometry: geometry, timestamp: timestamp).hazards
+    }
+
+    /// Classifies every person track of the frame: hazard / road staff / relevant / filtered (sidewalk).
+    public func evaluate(tracks: [TrackedObject], ownSpeedKmh: Double?, geometry: CameraGeometry,
+                         timestamp: TimeInterval) -> PersonSceneResult {
+        var result = PersonSceneResult()
         var seen = Set<Int>()
-        for t in tracks where t.kind == .person && t.isConfirmed && t.missed == 0 {
+        let zone = effectiveRoadway
+        let approachMargin = approachMarginFactor / max(1, roadWidthFactor)
+        for t in tracks where t.kind == .person && t.missed == 0 {
             seen.insert(t.id)
             let footX = t.box.midX, footY = min(1, t.box.maxY)
             var h = history[t.id] ?? []
@@ -108,33 +178,48 @@ public final class PedestrianHazardDetector {
             h.removeAll { timestamp - $0.t > 1.0 }
             history[t.id] = h
 
-            guard isPlausible(t), footY > corridor.horizonY else { continue }
-            let laneHalf = corridor.halfWidth(atY: footY)
-            guard laneHalf > 0 else { continue }
-            let dx = abs(footX - corridor.centerX)
-            let roadHalf = laneHalf * roadWidthFactor
-            // The feet (bottom centre) decide — a box merely overlapping the corridor does not.
-            let inLane = dx <= laneHalf
-            let onRoad = inLane || dx <= roadHalf
-
+            let roadCenter = zone.centerX(atY: footY) ?? corridor.centerX
             var approaching = false
             if let first = h.first, timestamp - first.t >= 0.3 {
                 let v = (footX - first.x) / (timestamp - first.t)           // + = moving right
-                let towardsCentre = (footX < corridor.centerX && v > 0) || (footX > corridor.centerX && v < 0)
+                let towardsCentre = (footX < roadCenter && v > 0) || (footX > roadCenter && v < 0)
                 approaching = towardsCentre && abs(v) >= minApproachSpeed
             }
-            let nearEdge = dx <= roadHalf + laneHalf * approachMarginFactor
+
+            // Sidewalk filter (zone relation of the feet).
+            let outside = zone.outsideDistance(x: footX, y: footY)
+            let margin = edgeMargin + (relevant[t.id] != nil ? relevanceHysteresis : 0)
+            let atRoad = outside <= margin
+            let nearEdge = outside <= margin + approachMargin
+            guard atRoad || (approaching && nearEdge) else {
+                result.filteredIDs.insert(t.id)
+                continue
+            }
+            result.relevantIDs.insert(t.id)
+
+            guard t.isConfirmed, isPlausible(t), footY > corridor.horizonY else { continue }
+            let laneHalf = corridor.halfWidth(atY: footY)
+            guard laneHalf > 0 else { continue }
+            // The feet (bottom centre) decide — a box merely overlapping the corridor does not.
+            let inLane = abs(footX - corridor.centerX) <= laneHalf
+            let onRoad = inLane || outside <= edgeMargin
 
             let distance = MonocularDistance.distance(realHeight: VehicleKind.person.typicalHeightMeters ?? 1.7,
                                                       normalizedBoxHeight: t.box.height, geometry: geometry)
             if let d = distance, d > maxDistance || d < minDistance { continue }
+
+            if let role = t.personRole, role.isRoadStaff {
+                result.staff.append(RoadStaffSighting(trackID: t.id, role: role, box: t.box, distanceMeters: distance,
+                                                      onRoadway: onRoad, inOwnLane: inLane))
+                continue
+            }
 
             var level: PedestrianHazardLevel?
             if inLane {
                 level = .danger
             } else if onRoad {
                 level = approaching ? .danger : .caution
-            } else if nearEdge && approaching {
+            } else if approaching {
                 level = .caution
             }
             // When standing still a pedestrian off the own lane is only informative.
@@ -142,12 +227,17 @@ public final class PedestrianHazardDetector {
                 level = approaching ? .caution : nil
             }
             guard let finalLevel = level else { continue }
-            result.append(PedestrianHazard(trackID: t.id, box: t.box, level: finalLevel, distanceMeters: distance,
-                                           inOwnLane: inLane, onRoadway: onRoad, approaching: approaching))
+            result.hazards.append(PedestrianHazard(trackID: t.id, box: t.box, level: finalLevel, distanceMeters: distance,
+                                                   inOwnLane: inLane, onRoadway: onRoad, approaching: approaching))
         }
         for id in history.keys where !seen.contains(id) { history[id] = nil }
-        return result.sorted {
+        for id in result.filteredIDs { relevant[id] = nil }
+        for id in result.relevantIDs { relevant[id] = timestamp }
+        relevant = relevant.filter { timestamp - $0.value <= 1.0 }
+        result.hazards.sort {
             $0.level != $1.level ? $0.level > $1.level : ($0.distanceMeters ?? .infinity) < ($1.distanceMeters ?? .infinity)
         }
+        result.staff.sort { ($0.distanceMeters ?? .infinity) < ($1.distanceMeters ?? .infinity) }
+        return result
     }
 }

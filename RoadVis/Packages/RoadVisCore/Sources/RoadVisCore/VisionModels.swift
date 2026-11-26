@@ -209,9 +209,12 @@ public struct Detection: Hashable, Sendable {
     public var makeConfidence: Double?
     /// Optional traffic light colour (only for `.trafficLight`).
     public var lightColor: TrafficLightColor?
+    /// Optional per-frame person role (only for `.person`; colour heuristic, see `PersonRoleClassifier`).
+    public var personRole: PersonRole?
 
     public init(kind: VehicleKind, label: String, confidence: Double, box: BBox,
-                make: String? = nil, makeConfidence: Double? = nil, lightColor: TrafficLightColor? = nil) {
+                make: String? = nil, makeConfidence: Double? = nil, lightColor: TrafficLightColor? = nil,
+                personRole: PersonRole? = nil) {
         self.kind = kind
         self.label = label
         self.confidence = confidence
@@ -219,5 +222,6 @@ public struct Detection: Hashable, Sendable {
         self.make = make
         self.makeConfidence = makeConfidence
         self.lightColor = lightColor
+        self.personRole = personRole
     }
 }

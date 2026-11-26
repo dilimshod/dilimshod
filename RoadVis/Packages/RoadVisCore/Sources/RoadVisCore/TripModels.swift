@@ -264,7 +264,7 @@ public struct TripStats: Hashable, Sendable {
 ///   penaltyPerKm = Σ penalty / max(distance km, 1)
 ///   score = clamp(100 − 10 × penaltyPerKm, 0, 100), rounded
 /// Weights: red light 8, pedestrian not yielded 8, STOP sign 5, collision risk 5, speeding 3, tailgating 2, harsh braking 2,
-/// harsh acceleration 1.5, lane departure 1.5.
+/// harsh acceleration 1.5, lane departure 1.5. Observations (traffic officer / road workers seen) weigh 0.
 /// Example: 10 km with two harsh brakings → 4 points / 10 km = 0.4 per km → score 96.
 public enum TripScoring {
     public static let scale: Double = 10
@@ -281,6 +281,7 @@ public enum TripScoring {
         case .harshBraking: return 2
         case .harshAcceleration: return 1.5
         case .laneDeparture: return 1.5
+        case .trafficOfficerSeen, .roadWorkersSeen: return 0
         }
     }
 
@@ -352,13 +353,16 @@ extension DrivingEventKind {
         case .pedestrianNotYielded: return "Пешеход не пропущен"
         case .harshBraking: return "Резкое торможение"
         case .harshAcceleration: return "Резкий разгон"
+        case .trafficOfficerSeen: return "Сотрудник ГАИ (YHXX)"
+        case .roadWorkersSeen: return "Дорожные рабочие"
         }
     }
 
     /// Whether the event comes from the camera (an estimate) rather than GPS / sensors.
     public var isCameraBased: Bool {
         switch self {
-        case .tailgating, .collisionRisk, .laneDeparture, .redLightRunning, .stopSignIgnored, .pedestrianNotYielded:
+        case .tailgating, .collisionRisk, .laneDeparture, .redLightRunning, .stopSignIgnored, .pedestrianNotYielded,
+             .trafficOfficerSeen, .roadWorkersSeen:
             return true
         case .speeding, .harshBraking, .harshAcceleration: return false
         }
@@ -368,7 +372,7 @@ extension DrivingEventKind {
     public var tripValueUnit: String {
         switch self {
         case .speeding: return "км/ч сверх"
-        case .tailgating, .pedestrianNotYielded: return "м"
+        case .tailgating, .pedestrianNotYielded, .trafficOfficerSeen, .roadWorkersSeen: return "м"
         case .collisionRisk: return "с до столкн."
         case .laneDeparture: return ""
         case .redLightRunning, .stopSignIgnored: return "км/ч"

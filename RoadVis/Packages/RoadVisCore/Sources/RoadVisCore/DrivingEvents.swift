@@ -20,12 +20,17 @@ public enum DrivingEventKind: String, Codable, Hashable, Sendable, CaseIterable 
     case harshBraking
     /// Strong acceleration (GPS / motion sensors).
     case harshAcceleration
+    /// A traffic police officer (YHXX) was seen on / at the roadway (camera colour heuristic; info, not a violation).
+    case trafficOfficerSeen
+    /// Road workers were seen on / near the roadway (camera colour heuristic; info, not a violation).
+    case roadWorkersSeen
 
     /// Default severity used when an event is created without an explicit one.
     public var defaultSeverity: DrivingEventSeverity {
         switch self {
         case .speeding, .tailgating, .laneDeparture, .harshBraking, .harshAcceleration: return .warning
         case .collisionRisk, .redLightRunning, .stopSignIgnored, .pedestrianNotYielded: return .violation
+        case .trafficOfficerSeen, .roadWorkersSeen: return .info
         }
     }
 
@@ -41,6 +46,8 @@ public enum DrivingEventKind: String, Codable, Hashable, Sendable, CaseIterable 
         case .pedestrianNotYielded: return "figure.walk"
         case .harshBraking: return "arrow.down.circle.fill"
         case .harshAcceleration: return "arrow.up.circle.fill"
+        case .trafficOfficerSeen: return "shield.fill"
+        case .roadWorkersSeen: return "hammer.fill"
         }
     }
 }
@@ -108,7 +115,8 @@ public struct DrivingEventDebouncer: Sendable {
                 merged.severity = max(previous.severity, event.severity)
                 if let v = event.value {
                     // Keep the worst value: larger for "over" quantities, smaller for gaps / TTC.
-                    let smallerIsWorse: Set<DrivingEventKind> = [.tailgating, .collisionRisk, .pedestrianNotYielded]
+                    let smallerIsWorse: Set<DrivingEventKind> = [.tailgating, .collisionRisk, .pedestrianNotYielded,
+                                                                     .trafficOfficerSeen, .roadWorkersSeen]
                     if let old = merged.value {
                         merged.value = smallerIsWorse.contains(event.kind) ? min(old, v) : max(old, v)
                     } else {

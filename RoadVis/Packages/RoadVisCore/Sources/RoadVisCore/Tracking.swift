@@ -22,6 +22,8 @@ public struct TrackedObject: Identifiable, Hashable, Sendable {
     public var makeConfidence: Double?
     /// Majority of recent traffic-light colour observations.
     public var lightColor: TrafficLightColor?
+    /// Majority of recent person-role observations (≥ 5 needed; nil before / for non-persons). Colour heuristic (≈).
+    public var personRole: PersonRole?
     /// Rough monocular distance estimate, metres (see MonocularSpeedEstimator).
     public var distanceMeters: Double?
     /// Rate of change of the distance, km/h; positive = moving away from the camera.
@@ -33,7 +35,7 @@ public struct TrackedObject: Identifiable, Hashable, Sendable {
                 hits: Int = 1, missed: Int = 0, firstSeen: TimeInterval, lastSeen: TimeInterval,
                 isConfirmed: Bool = false, make: String? = nil, makeConfidence: Double? = nil,
                 lightColor: TrafficLightColor? = nil, distanceMeters: Double? = nil,
-                relativeSpeedKmh: Double? = nil, estimatedSpeedKmh: Double? = nil) {
+                relativeSpeedKmh: Double? = nil, estimatedSpeedKmh: Double? = nil, personRole: PersonRole? = nil) {
         self.id = id
         self.kind = kind
         self.label = label
@@ -50,6 +52,7 @@ public struct TrackedObject: Identifiable, Hashable, Sendable {
         self.distanceMeters = distanceMeters
         self.relativeSpeedKmh = relativeSpeedKmh
         self.estimatedSpeedKmh = estimatedSpeedKmh
+        self.personRole = personRole
     }
 }
 
@@ -77,12 +80,16 @@ public final class ObjectTracker {
         public var maxMissedTentative: Int
         /// Per-class minimum detector confidence applied before tracking (classes not listed: no extra filter).
         public var minConfidence: [VehicleKind: Double]
+        /// Kinds that are counted only when the owner marks the confirmed track relevant (`markRelevant(trackIDs:)`),
+        /// e.g. persons inside the roadway zone (a pedestrian on the sidewalk is not counted).
+        public var deferredCountKinds: Set<VehicleKind>
 
         public static let defaultMinConfidence: [VehicleKind: Double] = [.trafficLight: 0.5, .stopSign: 0.55, .person: 0.5]
 
         public init(iouThreshold: Double = 0.3, maxMissed: Int = 8, minHits: Int = 3, boxSmoothing: Double = 0.6,
                     centerGate: Double = 1.0, maxAreaRatio: Double = 2.5, maxMissedTentative: Int = 2,
-                    minConfidence: [VehicleKind: Double] = Config.defaultMinConfidence) {
+                    minConfidence: [VehicleKind: Double] = Config.defaultMinConfidence,
+                    deferredCountKinds: Set<VehicleKind> = []) {
             self.iouThreshold = iouThreshold
             self.maxMissed = maxMissed
             self.minHits = minHits
@@ -91,6 +98,7 @@ public final class ObjectTracker {
             self.maxAreaRatio = maxAreaRatio
             self.maxMissedTentative = maxMissedTentative
             self.minConfidence = minConfidence
+            self.deferredCountKinds = deferredCountKinds
         }
     }
 
@@ -99,6 +107,7 @@ public final class ObjectTracker {
         var kindVotes: [VehicleKind: Double] = [:]
         var makeVotes: [String: (count: Int, confidenceSum: Double)] = [:]
         var colorHistory: [TrafficLightColor] = []
+        var roleHistory: [PersonRole] = []
         /// Rates per second of centre x/y and width/height (constant-velocity motion model).
         var velocity: (dx: Double, dy: Double) = (0, 0)
         var sizeRate: (dw: Double, dh: Double) = (0, 0)
@@ -217,6 +226,10 @@ public final class ObjectTracker {
                 st.colorHistory = [c]
                 st.object.lightColor = c
             }
+            if let role = d.personRole {
+                st.roleHistory = [role]
+                st.object.personRole = PersonRoleClassifier.majority(st.roleHistory)
+            }
             if config.minHits <= 1 {
                 confirm(&st)
             }
@@ -261,6 +274,12 @@ public final class ObjectTracker {
             if st.colorHistory.count > 7 { st.colorHistory.removeFirst(st.colorHistory.count - 7) }
             st.object.lightColor = Self.majority(st.colorHistory)
         }
+        if let role = d.personRole {
+            st.roleHistory.append(role)
+            let window = PersonRoleClassifier.voteWindow
+            if st.roleHistory.count > window { st.roleHistory.removeFirst(st.roleHistory.count - window) }
+            st.object.personRole = PersonRoleClassifier.majority(st.roleHistory, previous: st.object.personRole)
+        }
         if !st.counted && st.object.hits >= config.minHits {
             confirm(&st)
         }
@@ -269,7 +288,7 @@ public final class ObjectTracker {
 
     private func confirm(_ st: inout State) {
         st.object.isConfirmed = true
-        if !st.counted {
+        if !st.counted && !config.deferredCountKinds.contains(st.object.kind) {
             st.counted = true
             uniqueCounts[st.object.kind, default: 0] += 1
         }
@@ -287,6 +306,17 @@ public final class ObjectTracker {
         }) {
             st.object.make = best.key
             st.object.makeConfidence = best.value.confidenceSum / Double(max(1, best.value.count))
+        }
+    }
+
+    /// Counts the given confirmed tracks of a deferred kind (`Config.deferredCountKinds`) once.
+    public func markRelevant(trackIDs: [Int]) {
+        guard !trackIDs.isEmpty else { return }
+        let ids = Set(trackIDs)
+        for i in states.indices where ids.contains(states[i].object.id) {
+            guard states[i].object.isConfirmed, !states[i].counted else { continue }
+            states[i].counted = true
+            uniqueCounts[states[i].object.kind, default: 0] += 1
         }
     }
 

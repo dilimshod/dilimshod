@@ -341,6 +341,8 @@ extension VoicePhrase {
         case .stopSignAhead: elements = [.clip("stop_sign_ahead")]
         case .overSpeedLimit(let limit): elements = [.clip("speeding"), .speed(limit)]
         case .greenLightGo: elements = [.clip("green_go")]
+        case .trafficOfficerAhead: elements = [.clip("traffic_officer_ahead")]
+        case .roadWorkersAhead: elements = [.clip("road_workers_ahead")]
         }
         return VoicePhrase(elements, text: text)
     }

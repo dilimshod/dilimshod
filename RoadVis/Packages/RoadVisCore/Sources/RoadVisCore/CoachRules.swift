@@ -4,7 +4,7 @@ import Foundation
 // into a phrase of the current language (`coachText(_:language:)` in the app).
 //
 // Priorities (highest first): collision risk > pedestrian on the roadway > red light ahead > lane departure > tailgating >
-// signs > green light hint. A global minimum gap between utterances (≈ 3 s) keeps the coach calm; a collision warning
+// traffic officer / road works ahead > signs > green light hint. A global minimum gap between utterances (≈ 3 s) keeps the coach calm; a collision warning
 // and a pedestrian danger warning bypass it. Every
 // category additionally has its own cooldown, and pending messages expire when they are no longer relevant.
 
@@ -35,6 +35,10 @@ public enum CoachMessage: Hashable, Sendable {
     case overSpeedLimit(limitKmh: Int)
     /// Stopped at a light that turned green, nobody close ahead: gentle "you can go".
     case greenLightGo
+    /// A traffic police officer (YHXX, colour heuristic) ahead on / at the roadway. `trackID` for the per-track cooldown.
+    case trafficOfficerAhead(trackID: Int)
+    /// Road workers (orange vests, colour heuristic) on / near the roadway ahead: slow down.
+    case roadWorkersAhead(trackID: Int)
 
     public var category: CoachCategory {
         switch self {
@@ -45,6 +49,7 @@ public enum CoachMessage: Hashable, Sendable {
         case .keepDistance: return .tailgating
         case .roadSign, .speedLimit, .speedLimitAhead, .stopSignAhead, .overSpeedLimit: return .sign
         case .greenLightGo: return .greenLight
+        case .trafficOfficerAhead, .roadWorkersAhead: return .roadStaff
         }
     }
 
@@ -53,7 +58,7 @@ public enum CoachMessage: Hashable, Sendable {
         if case .pedestrianCaution = self { return .normal }
         switch category {
         case .collision, .pedestrian, .redLight: return .high
-        case .laneDeparture, .tailgating, .sign: return .normal
+        case .laneDeparture, .tailgating, .roadStaff, .sign: return .normal
         case .greenLight: return .low
         }
     }
@@ -74,6 +79,14 @@ public enum CoachMessage: Hashable, Sendable {
         }
     }
 
+    /// Officer / road-worker track of a road-staff message.
+    public var roadStaffTrackID: Int? {
+        switch self {
+        case .trafficOfficerAhead(let id), .roadWorkersAhead(let id): return id
+        default: return nil
+        }
+    }
+
     /// Rounds a distance for speech: 10 m steps below 100 m, 50 m steps above.
     public static func spokenDistance(_ meters: Double) -> Int {
         guard meters.isFinite, meters > 0 else { return 0 }
@@ -84,7 +97,7 @@ public enum CoachMessage: Hashable, Sendable {
 
 /// Priority order of coach messages (higher raw value = more important).
 public enum CoachCategory: Int, Hashable, Sendable, Comparable, CaseIterable {
-    case greenLight = 0, sign, tailgating, laneDeparture, redLight, pedestrian, collision
+    case greenLight = 0, sign, roadStaff, tailgating, laneDeparture, redLight, pedestrian, collision
 
     public static func < (lhs: CoachCategory, rhs: CoachCategory) -> Bool { lhs.rawValue < rhs.rawValue }
 }
@@ -109,10 +122,10 @@ public struct CoachRules: Sendable {
         public init(minGap: TimeInterval = 3,
                     cooldowns: [CoachCategory: TimeInterval] = [.collision: 5, .pedestrian: 2, .redLight: 10,
                                                                 .laneDeparture: 6, .tailgating: 12, .sign: 2,
-                                                                .greenLight: 20],
+                                                                .greenLight: 20, .roadStaff: 8],
                     timeToLive: [CoachCategory: TimeInterval] = [.collision: 1.5, .pedestrian: 1.5, .redLight: 3,
                                                                  .laneDeparture: 2, .tailgating: 3, .sign: 8,
-                                                                 .greenLight: 3]) {
+                                                                 .greenLight: 3, .roadStaff: 4]) {
             self.minGap = minGap
             self.cooldowns = cooldowns
             self.timeToLive = timeToLive
@@ -328,14 +341,17 @@ public struct CoachToggles: Hashable, Sendable {
     public var signs: Bool
     public var trafficLights: Bool
     public var pedestrians: Bool
+    /// Traffic officer / road works ahead (colour heuristic).
+    public var roadStaff: Bool
 
     public init(distance: Bool = true, laneDeparture: Bool = true, signs: Bool = true, trafficLights: Bool = true,
-                pedestrians: Bool = true) {
+                pedestrians: Bool = true, roadStaff: Bool = true) {
         self.distance = distance
         self.laneDeparture = laneDeparture
         self.signs = signs
         self.trafficLights = trafficLights
         self.pedestrians = pedestrians
+        self.roadStaff = roadStaff
     }
 }
 
@@ -349,6 +365,10 @@ public final class DriverCoachEngine {
     public var pedestrianTrackCooldown: TimeInterval = 6
     /// Caution warnings only above this own speed, km/h (danger warnings always).
     public var pedestrianCautionMinSpeedKmh: Double = 3
+    /// The same officer / road-worker track is announced at most once per this many seconds.
+    public var roadStaffTrackCooldown: TimeInterval = 20
+    /// "Traffic police ahead" only for officers estimated closer than this, metres.
+    public var officerMaxDistance: Double = 60
 
     public var toggles: CoachToggles
     public private(set) var rules: CoachRules
@@ -357,6 +377,10 @@ public final class DriverCoachEngine {
     private var tooCloseSince: TimeInterval?
     /// Last spoken pedestrian warning per track.
     private var pedestrianWarned: [Int: (level: PedestrianHazardLevel, time: TimeInterval)] = [:]
+    /// Last announcement per officer / road-worker track.
+    private var roadStaffAnnounced: [Int: TimeInterval] = [:]
+    /// Last announcement per role (a group of workers / officers is announced once per cooldown).
+    private var roadStaffRoleAnnounced: [PersonRole: TimeInterval] = [:]
 
     public init(toggles: CoachToggles = CoachToggles(), rules: CoachRules = CoachRules(),
                 lights: TrafficLightCoach = TrafficLightCoach()) {
@@ -369,6 +393,8 @@ public final class DriverCoachEngine {
         collisionSince = nil
         tooCloseSince = nil
         pedestrianWarned.removeAll()
+        roadStaffAnnounced.removeAll()
+        roadStaffRoleAnnounced.removeAll()
         lights.reset()
         rules.reset()
     }
@@ -389,6 +415,26 @@ public final class DriverCoachEngine {
         let message: CoachMessage = top.level == .danger ? .pedestrianDanger(trackID: top.trackID)
                                                          : .pedestrianCaution(trackID: top.trackID)
         rules.offer(message, now: now)
+    }
+
+    /// Offers "traffic police ahead" (officer within `officerMaxDistance`) or "road works ahead" (worker on / near the
+    /// roadway) for the nearest sighting not announced within `roadStaffTrackCooldown` (per track and per role, so a
+    /// group is announced once). Officers are preferred.
+    public func updateRoadStaff(_ staff: [RoadStaffSighting], now: TimeInterval) {
+        roadStaffAnnounced = roadStaffAnnounced.filter { now - $0.value < roadStaffTrackCooldown }
+        roadStaffRoleAnnounced = roadStaffRoleAnnounced.filter { now - $0.value < roadStaffTrackCooldown }
+        guard toggles.roadStaff else { return }
+        let fresh = staff.filter { roadStaffAnnounced[$0.trackID] == nil && roadStaffRoleAnnounced[$0.role] == nil }
+        let officer = fresh.filter { $0.role == .trafficOfficer && ($0.distanceMeters ?? 0) <= officerMaxDistance }
+            .min { ($0.distanceMeters ?? .infinity) < ($1.distanceMeters ?? .infinity) }
+        if let officer {
+            rules.offer(.trafficOfficerAhead(trackID: officer.trackID), now: now)
+            return
+        }
+        if let worker = fresh.filter({ $0.role == .roadWorker })
+            .min(by: { ($0.distanceMeters ?? .infinity) < ($1.distanceMeters ?? .infinity) }) {
+            rules.offer(.roadWorkersAhead(trackID: worker.trackID), now: now)
+        }
     }
 
     /// Feeds one camera frame; offers the resulting messages to the rules.
@@ -459,6 +505,14 @@ public final class DriverCoachEngine {
                 pedestrianWarned[id] = (.danger, now)
             } else {
                 pedestrianWarned[id] = (.caution, now)
+            }
+        }
+        if let id = message.roadStaffTrackID {
+            roadStaffAnnounced[id] = now
+            if case .trafficOfficerAhead = message {
+                roadStaffRoleAnnounced[.trafficOfficer] = now
+            } else {
+                roadStaffRoleAnnounced[.roadWorker] = now
             }
         }
         if message == .collisionRisk {
