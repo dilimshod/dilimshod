@@ -169,7 +169,9 @@ struct RecognitionView: View {
         let now = Date()
         if let lastSpeedWarning, now.timeIntervalSince(lastSpeedWarning) < 30 { return }
         lastSpeedWarning = now
-        app.speech.speak(coachText(.overSpeedLimit(limitKmh: limit), language: currentCoachLanguage()), priority: .low)
+        let message = CoachMessage.overSpeedLimit(limitKmh: limit)
+        app.speech.speak(VoicePhrase.coach(message, text: coachText(message, language: currentCoachLanguage())),
+                         priority: .low)
     }
 }
 

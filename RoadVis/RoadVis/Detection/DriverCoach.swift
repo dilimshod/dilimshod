@@ -15,7 +15,8 @@ struct DriverAssistFrame: Sendable {
 /// Inputs: camera cues from `RecognitionPipeline` (every processed frame), own speed from `LocationService`, the current
 /// road's speed limit (`RoadInfoService`) and — while navigating — the OSM features and speed limits along the route
 /// (`NavigationService`). `DriverCoachEngine` + `CoachRules` decide when to speak (priorities, ≈ 3 s global gap,
-/// per-topic cooldowns); the text comes from `coachText(_:language:)` in the app language ("rv.appLanguage").
+/// per-topic cooldowns); the phrase is `VoicePhrase.coach(_:)` (natural-voice clips) with `coachText(_:language:)` as
+/// the system-voice text in the app language ("rv.appLanguage").
 ///
 /// Creating the coach takes over the distance voice warnings from `DistanceWarningController` (haptics / tone stay
 /// there), so nothing is spoken twice. Usage (AppState, after all services exist):
@@ -156,7 +157,7 @@ final class DriverCoach {
     private func speakNext(now: TimeInterval) {
         guard let message = engine.next(now: now) else { return }
         let text = coachText(message, language: currentCoachLanguage())
-        speech.speak(text, priority: Self.priority(message.urgency))
+        speech.speak(VoicePhrase.coach(message, text: text), priority: Self.priority(message.urgency))
         lastMessage = message
         lastMessageDate = Date()
     }

@@ -743,7 +743,8 @@ final class NavigationService {
         if incidentLoopTask == nil { startIncidentLoop() }
         if settings.voiceGuidanceEnabled {
             let text = L("voice.routeReady", Self.spokenDistance(option.distance), Self.spokenDuration(option.expectedTravelTime))
-            speech.speak(text, priority: .high)
+            // Clips: only "Route ready" (distance and time are on screen); the system voice reads the full text.
+            speech.speak(VoicePhrase.fixed("route_ready", text: text), priority: .high)
         }
         if let fix = location.location {
             handleFix(fix)
@@ -776,7 +777,7 @@ final class NavigationService {
         }
         let generation = planGeneration
         if settings.voiceGuidanceEnabled {
-            speech.speak(L("voice.rerouting"), priority: .high)
+            speech.speak(VoicePhrase.fixed("rerouting", text: L("voice.rerouting")), priority: .high)
         }
         do {
             let planned = try await computeRoutes(to: destination)
@@ -901,7 +902,7 @@ final class NavigationService {
         isWaitingAtSignal = false
         upcomingFeatures = []
         if settings.voiceGuidanceEnabled {
-            speech.speak(L("voice.arrived"), priority: .high)
+            speech.speak(VoicePhrase.fixed("arrived", text: L("voice.arrived")), priority: .high)
         }
     }
 
@@ -1001,10 +1002,12 @@ final class NavigationService {
         if let prompt = voiceScheduler.prompt(stepIndex: stepIndex, distance: distance,
                                               instruction: instruction, speedKmh: speedKmh) {
             // The closest threshold gets the distance back plus a caution (and slow-down) phrase.
-            let text = distance <= NavigationPhrases.closeDistance
-                ? NavigationPhrases.closeManeuver(instruction: instruction, distance: distance, speedKmh: speedKmh)
-                : prompt
-            speech.speak(text, priority: distance <= 150 ? .high : .normal)
+            let phrase = distance <= NavigationPhrases.closeDistance
+                ? NavigationPhrases.closeManeuverPhrase(maneuver: current.nextManeuver, instruction: instruction,
+                                                        distance: distance, speedKmh: speedKmh)
+                : NavigationPhrases.maneuverPhrase(maneuver: current.nextManeuver, instruction: instruction,
+                                                   distance: distance, text: prompt)
+            speech.speak(phrase, priority: distance <= 150 ? .high : .normal)
         }
     }
 
@@ -1016,7 +1019,7 @@ final class NavigationService {
             guard ahead >= 0, ahead <= feature.kind.alertDistance,
                   let text = Self.hazardPrompt(for: feature.kind, speedKmh: speedKmh) else { continue }
             announcedFeatureIDs.insert(feature.id)
-            speech.speak(text, priority: .normal)
+            speech.speak(VoicePhrase.hazard(feature.kind, text: text), priority: .normal)
             break
         }
     }
@@ -1028,8 +1031,8 @@ final class NavigationService {
             let ahead = item.distanceAlongRoute - current.distanceAlong
             guard ahead >= 0, ahead <= Self.incidentAlertDistance else { continue }
             announcedIncidentIDs.insert(item.id)
-            speech.speak(L("voice.incidentAhead", Self.spokenName(item.incident.kind), Self.spokenDistance(ahead)),
-                         priority: .normal)
+            let text = L("voice.incidentAhead", Self.spokenName(item.incident.kind), Self.spokenDistance(ahead))
+            speech.speak(VoicePhrase.incident(item.incident.kind, distance: ahead, text: text), priority: .normal)
             break
         }
     }

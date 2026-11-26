@@ -36,7 +36,11 @@ enum SpeechVoiceKind: Equatable {
 /// Mostly-Cyrillic text (e.g. Apple Maps instructions in a Russian system language) is spoken with the Russian voice;
 /// single Cyrillic words inside a localized phrase (OSM street names) are transliterated to Latin for the uz / en voice.
 ///
-/// The audio session ducks other audio only while speaking and is deactivated after the last utterance.
+/// Natural voice: when pre-recorded Microsoft Edge neural clips are bundled (`ClipVoicePlayer`, generated on a Mac by
+/// `tools/generate_voice_clips.py`), `speak(_ phrase: VoicePhrase, …)` plays the phrase from clips; phrases that need
+/// a missing clip (or street names) are spoken by the system voice as before.
+///
+/// The audio session ducks other audio only while speaking and is deactivated after the last utterance / clip.
 @Observable
 @MainActor
 final class SpeechService: NSObject {
@@ -55,6 +59,16 @@ final class SpeechService: NSObject {
     @ObservationIgnored private var currentPriority: SpeechPriority = .low
     @ObservationIgnored private var voiceCache: [AppLanguage: VoiceChoice] = [:]
     @ObservationIgnored private var cachedRussianVoice: AVSpeechSynthesisVoice?
+    @ObservationIgnored private let clips = ClipVoicePlayer()
+    /// Clip phrases waiting for the system voice to finish (normal priority).
+    @ObservationIgnored private var deferredClips: [[URL]] = []
+    /// System-voice texts waiting for the clip queue to finish (normal priority).
+    @ObservationIgnored private var deferredTexts: [String] = []
+
+    /// Use the bundled natural-voice clips when they cover a phrase (Settings → Language; default on).
+    var useNaturalVoice: Bool = ClipVoicePlayer.isEnabled {
+        didSet { ClipVoicePlayer.isEnabled = useNaturalVoice }
+    }
 
     private struct VoiceChoice {
         let voice: AVSpeechSynthesisVoice?
@@ -64,6 +78,7 @@ final class SpeechService: NSObject {
     override init() {
         super.init()
         synthesizer.delegate = self
+        clips.onFinish = { [weak self] in self?.didFinishClips() }
         // Voices can be downloaded while the app runs (Settings → Accessibility → Spoken Content → Voices).
         NotificationCenter.default.addObserver(forName: AVSpeechSynthesizer.availableVoicesDidChangeNotification,
                                                object: nil, queue: .main) { [weak self] _ in
@@ -71,11 +86,62 @@ final class SpeechService: NSObject {
         }
     }
 
+    /// Speaks a structured phrase in the current `language`: from the bundled natural-voice clips when all of them
+    /// exist, otherwise its localized text (`phrase.text` or the text composed from the clip texts) with the system
+    /// voice. Same priorities as `speak(_ text:)`: `.high` interrupts, `.low` is dropped while something is speaking,
+    /// `.normal` waits for the current utterance.
+    func speak(_ phrase: VoicePhrase, priority: SpeechPriority = .normal) {
+        guard !isMuted else { return }
+        let lang = language
+        guard useNaturalVoice, let urls = clips.urls(for: phrase, language: lang) else {
+            speak(VoiceComposer.text(for: phrase, language: lang.core), priority: priority)
+            return
+        }
+        if isBusy {
+            if priority == .low { return }
+            if priority == .high { interruptAll() }
+        }
+        currentPriority = priority
+        if synthesizer.isSpeaking {
+            // Normal priority while the system voice talks: play right after it.
+            deferredClips.append(urls)
+            return
+        }
+        activatePlaybackSession()
+        clips.play(urls, interrupt: false)
+        isSpeaking = true
+    }
+
+    /// Number of bundled natural-voice clips for `language` and the number the catalog defines.
+    func naturalVoiceClipCount(for language: AppLanguage? = nil) -> (installed: Int, total: Int) {
+        ClipVoicePlayer.installedCount(for: language ?? self.language)
+    }
+
+    private var isBusy: Bool { synthesizer.isSpeaking || clips.isPlaying }
+
+    /// Stops the system voice and the clips and forgets everything waiting (a `.high` utterance follows).
+    private func interruptAll() {
+        deferredClips.removeAll()
+        deferredTexts.removeAll()
+        if synthesizer.isSpeaking { synthesizer.stopSpeaking(at: .immediate) }
+        clips.stop()
+    }
+
     /// Speaks already-localized `text` in the current `language`. A `.high` priority utterance interrupts whatever
     /// is being spoken; `.low` utterances are dropped while something else is speaking.
     func speak(_ text: String, priority: SpeechPriority = .normal) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !isMuted, !trimmed.isEmpty else { return }
+        if clips.isPlaying {
+            if priority == .low { return }
+            if priority == .high {
+                interruptAll()
+            } else {
+                // Normal priority while clips play: speak right after them.
+                deferredTexts.append(trimmed)
+                return
+            }
+        }
         if synthesizer.isSpeaking {
             if priority == .low { return }
             if priority >= currentPriority && priority == .high {
@@ -94,9 +160,12 @@ final class SpeechService: NSObject {
     }
 
     func stop() {
+        deferredClips.removeAll()
+        deferredTexts.removeAll()
         if synthesizer.isSpeaking {
             synthesizer.stopSpeaking(at: .immediate)
         }
+        clips.stop()
     }
 
     // MARK: Voice selection
@@ -239,7 +308,30 @@ final class SpeechService: NSObject {
     }
 
     private func didFinishUtterance() {
-        isSpeaking = synthesizer.isSpeaking
+        guard !synthesizer.isSpeaking else { return }
+        if !clips.isPlaying, !deferredClips.isEmpty {
+            let urls = deferredClips.removeFirst()
+            activatePlaybackSession()
+            clips.play(urls, interrupt: false)
+            for more in deferredClips { clips.play(more, interrupt: false) }
+            deferredClips.removeAll()
+        }
+        finishIfIdle()
+    }
+
+    /// The clip queue finished: speak texts that waited for it, or release the audio session.
+    private func didFinishClips() {
+        if !synthesizer.isSpeaking, !deferredTexts.isEmpty {
+            let texts = deferredTexts
+            deferredTexts.removeAll()
+            for text in texts { speak(text, priority: .normal) }
+            return
+        }
+        finishIfIdle()
+    }
+
+    private func finishIfIdle() {
+        isSpeaking = isBusy
         if !isSpeaking {
             currentPriority = .low
             // Last utterance done: release the session so other apps' audio is un-ducked.

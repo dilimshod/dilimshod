@@ -23,8 +23,9 @@ struct LanguageSettingsSection: View {
                 }
             }
             voiceRow
+            naturalVoiceRow
             Button {
-                app.speech.speak(L("language.voice.sample"), priority: .high)
+                app.speech.speak(VoicePhrase.sample(text: L("language.voice.sample")), priority: .high)
             } label: {
                 Label {
                     Text(l: "language.voice.test")
@@ -72,6 +73,33 @@ struct LanguageSettingsSection: View {
         let base = code.replacingOccurrences(of: "_", with: "-").split(separator: "-").first.map(String.init) ?? code
         let name = Locale(identifier: localization.language.rawValue).localizedString(forLanguageCode: base) ?? code
         return L("language.voice.downloadHint", name)
+    }
+
+    /// Pre-recorded Microsoft Edge neural clips: how many phrases are bundled for the language, or how to add them.
+    @ViewBuilder
+    private var naturalVoiceRow: some View {
+        let count = app.speech.naturalVoiceClipCount(for: localization.language)
+        VStack(alignment: .leading, spacing: 4) {
+            Text(l: "language.natural.title")
+            Group {
+                if count.installed > 0 {
+                    Text(l: "language.natural.installed", count.installed, count.total)
+                    Text(l: "language.natural.partial")
+                } else {
+                    Text(l: "language.natural.missing")
+                }
+            }
+            .font(.footnote)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+        }
+        .accessibilityElement(children: .combine)
+        if count.installed > 0 {
+            Toggle(isOn: Binding(get: { app.speech.useNaturalVoice },
+                                 set: { app.speech.useNaturalVoice = $0 })) {
+                Text(l: "language.natural.toggle")
+            }
+        }
     }
 
     @ViewBuilder

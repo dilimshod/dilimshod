@@ -53,6 +53,11 @@ enum UzStrings {
         "language.voice.quality.default": "standart (ixcham ovoz)",
         "language.voice.downloadHint": "Tabiiyroq ovoz uchun: iPhone’da Settings (Sozlamalar) → Accessibility → Spoken Content → Voices → %@ bo‘limini oching va «Yaxshilangan» (Enhanced) yoki «Premium» ovozni yuklab oling. RoadVis uni avtomatik tanlaydi.",
         "language.voice.sample": "300 metrdan keyin o‘ngga buriling. Oldinda svetofor.",
+        "language.natural.title": "Tabiiy ovoz (Microsoft Edge kliplari)",
+        "language.natural.installed": "O‘rnatilgan: %ld / %ld ta ibora",
+        "language.natural.toggle": "Tabiiy ovozdan foydalanish",
+        "language.natural.partial": "Yozib olinmagan iboralar (masalan, ko‘cha nomlari) tizim ovozida o‘qiladi.",
+        "language.natural.missing": "Kliplar o‘rnatilmagan. Mac’da bir marta ishga tushiring: python3 RoadVis/tools/generate_voice_clips.py — so‘ng ilovani qayta yig‘ing (yoki install_on_iphone.sh --voices).",
 
         // MARK: About hub
         "about.title": "Ilova haqida",

@@ -52,6 +52,11 @@ enum RuStrings {
         "language.voice.quality.default": "стандартное (компактный голос)",
         "language.voice.downloadHint": "Более естественный голос: на iPhone откройте Настройки → Универсальный доступ → Устный контент → Голоса → %@ и скачайте голос с пометкой «Улучшенный» (Enhanced) или «Высокое качество» (Premium). RoadVis выберет его автоматически.",
         "language.voice.sample": "Через 300 метров поверните направо. Впереди светофор.",
+        "language.natural.title": "Естественный голос (клипы Microsoft Edge)",
+        "language.natural.installed": "Установлено: %ld из %ld фраз",
+        "language.natural.toggle": "Использовать естественный голос",
+        "language.natural.partial": "Фразы без записи (например, названия улиц) читает системный голос.",
+        "language.natural.missing": "Клипы не установлены. Один раз запустите на Mac: python3 RoadVis/tools/generate_voice_clips.py — и пересоберите приложение (или install_on_iphone.sh --voices).",
 
         // MARK: About hub
         "about.title": "О приложении",

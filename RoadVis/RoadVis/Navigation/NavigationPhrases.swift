@@ -28,4 +28,21 @@ enum NavigationPhrases {
         }
         return phrase
     }
+
+    /// Structured form of `closeManeuver` for the natural-voice clips (street names are not recorded; the system
+    /// voice reads `closeManeuver(...)`, which keeps them).
+    static func closeManeuverPhrase(maneuver: ManeuverType, instruction: String, distance: Double,
+                                    speedKmh: Double?) -> VoicePhrase {
+        VoicePhrase.maneuver(maneuver, distance: distance >= 60 ? distance : nil,
+                             roundaboutExit: VoiceComposer.roundaboutExit(in: instruction),
+                             caution: true, slowDown: (speedKmh ?? 0) > slowDownSpeedKmh,
+                             text: closeManeuver(instruction: instruction, distance: distance, speedKmh: speedKmh))
+    }
+
+    /// A far maneuver prompt ("400 metrdan keyin o‘ngga buriling"); `text` = the scheduler's prompt for the system voice.
+    static func maneuverPhrase(maneuver: ManeuverType, instruction: String, distance: Double,
+                               text: String) -> VoicePhrase {
+        VoicePhrase.maneuver(maneuver, distance: distance >= 60 ? distance : nil,
+                             roundaboutExit: VoiceComposer.roundaboutExit(in: instruction), text: text)
+    }
 }

@@ -22,8 +22,8 @@ final class DistanceWarningController {
     /// Voice output (set by the pipeline from `AppState`); nil → haptics and tone only.
     weak var speech: SpeechService?
 
-    static var collisionPhrase: String { L("voice.collision") }
-    static var keepDistancePhrase: String { L("voice.keepDistance") }
+    static var collisionPhrase: VoicePhrase { .fixed("collision_alert", text: L("voice.collision")) }
+    static var keepDistancePhrase: VoicePhrase { .fixed("keep_distance", text: L("voice.keepDistance")) }
     /// Minimum time between two forward-collision warnings, seconds.
     static let collisionRepeatInterval: TimeInterval = 5
     /// Minimum time between two "keep distance" reminders, seconds.

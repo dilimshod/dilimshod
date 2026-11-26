@@ -11,7 +11,19 @@
 #   bash <repo>/RoadVis/tools/install_on_iphone.sh            # or RoadVis/tools/… before the rename
 # Optional overrides:
 #   TEAM_ID=ABCDE12345 BUNDLE_ID=uz.example.roadvis DEVICE_ID=<udid> bash install_on_iphone.sh
+# Natural voice (Microsoft Edge neural clips, see tools/VOICE_CLIPS.md):
+#   bash install_on_iphone.sh --voices     # if RoadVis/VoiceClips has no clips yet, generate them first
+#   VOICE_ARGS="--uz-voice uz-UZ-SardorNeural" bash install_on_iphone.sh --voices
 set -euo pipefail
+
+WANT_VOICES=0
+for arg in "$@"; do
+  case "$arg" in
+    --voices) WANT_VOICES=1 ;;
+    -h|--help) sed -n '2,17p' "$0"; exit 0 ;;
+    *) printf 'Неизвестный параметр: %s (допустимо: --voices)\n' "$arg" >&2; exit 2 ;;
+  esac
+done
 
 say()  { printf '\n\033[1;36m▶ %s\033[0m\n' "$*"; }
 fail() { printf '\n\033[1;31m✖ %s\033[0m\n' "$*" >&2; exit 1; }
@@ -28,6 +40,31 @@ if xcode-select -p | grep -q CommandLineTools; then
   fail "Активны только Command Line Tools. Выполните: sudo xcode-select -s /Applications/Xcode.app/Contents/Developer"
 fi
 xcodebuild -version | head -n 1
+
+# --- 0. Voice clips (optional) ----------------------------------------------------------------------
+CLIPS_DIR="$PROJECT_DIR/$SCHEME/VoiceClips"
+clip_count() { { find "$CLIPS_DIR" -maxdepth 1 \( -name '*.m4a' -o -name '*.mp3' \) 2>/dev/null || true; } | wc -l | tr -d ' '; }
+if [ "$(clip_count)" -eq 0 ]; then
+  if [ "$WANT_VOICES" -eq 1 ]; then
+    if ! command -v python3 >/dev/null; then
+      printf 'python3 не найден — голосовые клипы пропущены (будет системный голос).\n'
+    elif ! curl -sS -m 8 -o /dev/null https://speech.platform.bing.com 2>/dev/null; then
+      printf 'Нет доступа к speech.platform.bing.com — голосовые клипы пропущены (будет системный голос).\n'
+    else
+      say "Генерация естественного голоса (Microsoft Edge, один раз ~2–4 мин)…"
+      python3 -c 'import edge_tts' 2>/dev/null || python3 -m pip install --user --quiet edge-tts \
+        || printf 'Не удалось установить edge-tts (python3 -m pip install --user edge-tts).\n'
+      # shellcheck disable=SC2086
+      python3 "$PROJECT_DIR/tools/generate_voice_clips.py" ${VOICE_ARGS:-} \
+        || printf 'Генерация клипов завершилась с ошибкой — недостающие фразы прозвучат системным голосом.\n'
+      say "Голосовых клипов: $(clip_count)"
+    fi
+  else
+    printf 'Подсказка: естественный голос — запустите скрипт с флагом --voices (см. tools/VOICE_CLIPS.md).\n'
+  fi
+else
+  say "Голосовых клипов: $(clip_count)"
+fi
 
 # --- 1. Development team -------------------------------------------------------------------------
 TEAM_ID="${TEAM_ID:-}"

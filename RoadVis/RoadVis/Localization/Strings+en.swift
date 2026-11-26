@@ -53,6 +53,11 @@ enum EnStrings {
         "language.voice.quality.default": "standard (compact voice)",
         "language.voice.downloadHint": "For a more natural voice: on your iPhone open Settings → Accessibility → Spoken Content → Voices → %@ and download an \"Enhanced\" or \"Premium\" voice. RoadVis picks it automatically.",
         "language.voice.sample": "In 300 metres, turn right. Traffic light ahead.",
+        "language.natural.title": "Natural voice (Microsoft Edge clips)",
+        "language.natural.installed": "Installed: %ld of %ld phrases",
+        "language.natural.toggle": "Use natural voice",
+        "language.natural.partial": "Phrases without a recording (e.g. street names) are read by the system voice.",
+        "language.natural.missing": "Clips are not installed. Run once on a Mac: python3 RoadVis/tools/generate_voice_clips.py — then rebuild the app (or install_on_iphone.sh --voices).",
 
         // MARK: About hub
         "about.title": "About",
