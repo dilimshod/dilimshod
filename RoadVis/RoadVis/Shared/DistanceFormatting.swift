@@ -103,7 +103,8 @@ enum FollowingDistanceText {
     static func movingNorm(_ assessment: FollowingDistanceAssessment, policy: FollowingDistancePolicy) -> String {
         let gap = policy.timeGap(for: assessment.condition)
         let surface = assessment.condition.localizedName.lowercased()
-        if !assessment.isStopped {
+        // Unknown own speed (no GPS fix): the metres are not known, only the time gap is shown.
+        if !assessment.isStopped, assessment.ownSpeedKmh != nil {
             return "≥ \(RVFormat.compactNumber(gap)) \(RVFormat.appSeconds) ≈ \(RVFormat.normMeters(assessment.recommendedDistanceMeters)) (\(surface))"
         }
         return "≥ \(RVFormat.compactNumber(gap)) \(RVFormat.appSeconds) (\(surface))"
@@ -155,7 +156,7 @@ enum FollowingDistanceText {
         }
         if assessment.isStopped {
             parts.append(L("fd.a11y.stopped", meters(policy.stoppedGapMeters)))
-        } else {
+        } else if assessment.ownSpeedKmh != nil {
             parts.append(L("fd.a11y.moving", meters(assessment.recommendedDistanceMeters)))
         }
         if let ttc = assessment.timeToCollisionSeconds {

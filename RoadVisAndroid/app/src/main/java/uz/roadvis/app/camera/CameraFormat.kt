@@ -162,7 +162,8 @@ object FollowingDistanceText {
     fun movingNorm(a: FollowingDistanceAssessment, policy: FollowingDistancePolicy): String {
         val gap = policy.timeGap(a.condition)
         val surface = a.condition.localizedName.lowercase()
-        return if (!a.isStopped) {
+        // Unknown own speed (no GPS fix): the metres are not known, only the time gap is shown.
+        return if (!a.isStopped && a.ownSpeedKmh != null) {
             "≥ ${CamFmt.compactNumber(gap)} ${CamFmt.seconds} ≈ ${CamFmt.normMeters(a.recommendedDistanceMeters)} ($surface)"
         } else {
             "≥ ${CamFmt.compactNumber(gap)} ${CamFmt.seconds} ($surface)"
@@ -201,7 +202,7 @@ object FollowingDistanceText {
             parts.add(L("fd.a11y.noLead"))
         }
         if (a.isStopped) parts.add(L("fd.a11y.stopped", CamFmt.spokenMeters(policy.stoppedGapMeters)))
-        else parts.add(L("fd.a11y.moving", CamFmt.spokenMeters(a.recommendedDistanceMeters)))
+        else if (a.ownSpeedKmh != null) parts.add(L("fd.a11y.moving", CamFmt.spokenMeters(a.recommendedDistanceMeters)))
         a.timeToCollisionSeconds?.let { parts.add(L("fd.a11y.ttc", CamFmt.spokenSeconds(it))) }
         return parts.joinToString(". ")
     }

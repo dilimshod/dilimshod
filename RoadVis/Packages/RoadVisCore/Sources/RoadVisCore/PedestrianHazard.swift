@@ -117,11 +117,11 @@ public final class PedestrianHazardDetector {
     /// Fallback only (no usable zone width at the feet row): minimum lateral speed towards the lane, fraction of the
     /// image width per second.
     public var minApproachSpeed: Double
-    /// Minimum speed toward the road centre in road-relative units (perspective zone half widths per second). Pinhole
-    /// arithmetic (not a measurement): a pedestrian walking 1.4 m/s toward a road of 3.5–7 m half width changes u by
-    /// 0.2–0.4 per second, while a standing one stays constant even though its image x drifts with the car's motion —
-    /// with the old image-velocity test (0.04 widths/s) the same walker seen from a car at 10 m/s moved only 0.004.
-    public var minRoadRelativeApproachSpeed: Double = 0.20
+    /// Minimum speed toward the road centre, metres per second (lateral offset measured with the person's own box
+    /// height as the scale, so it does not depend on the configured horizon). Pinhole arithmetic, not a measurement:
+    /// a pedestrian walks ≈ 1.4 m/s; 0.7 m/s equals the previous 0.20 half widths/s on a 3.5 m half width. A standing
+    /// person stays constant even though its image x drifts with the car's motion.
+    public var minRoadRelativeApproachMetersPerSecond: Double = 0.7
     /// History needed before the road-relative slope is trusted, seconds / samples.
     public var minApproachHistory: TimeInterval = 0.4
     public var minApproachSamples: Int = 4
@@ -231,7 +231,14 @@ public final class PedestrianHazardDetector {
             // person's u drift as the car approaches. So u = offset ÷ (growth per row × rows below the horizon):
             // proportional to the lateral distance in metres, whatever the depth.
             let perspectiveHalf = Self.perspectiveHalfWidth(of: zone, atY: footY)
-            let u: Double? = perspectiveHalf > 1e-4 ? (footX - roadCenter) / perspectiveHalf : nil
+            // The scale comes from the person's own box height (typical body height ÷ box height), NOT from the
+            // configured horizon: with ÷ (y − horizon) a horizon that is off by 1 % (or a brake nod) made a standing
+            // kerb pedestrian appear to slide toward the road centre. u is therefore in metres.
+            let personHeight: Double = VehicleKind.person.typicalHeightMeters ?? 1.7
+            let pixelAspect: Double = geometry.imageWidth > 0 && geometry.imageHeight > 0
+                ? geometry.imageWidth / geometry.imageHeight : 1
+            let metresPerX: Double = t.box.height > 0.015 ? personHeight * pixelAspect / t.box.height : 0
+            let u: Double? = perspectiveHalf > 1e-4 && metresPerX > 0 ? (footX - roadCenter) * metresPerX : nil
             var h = history[t.id] ?? []
             h.append((timestamp, footX, u))
             h.removeAll { timestamp - $0.t > 1.0 }
@@ -239,7 +246,7 @@ public final class PedestrianHazardDetector {
 
             // Crossing intent. Road-relative: least-squares slope of u over the last second.
             var approaching = false
-            var approachSpeed = 0.0          // zone half widths per second toward the centre (road-relative path)
+            var approachSpeed = 0.0          // metres per second toward the road centre (road-relative path)
             var roadRelative = false
             if let u, let first = h.first, timestamp - first.t >= minApproachHistory {
                 var samples: [(t: Double, u: Double)] = []
@@ -257,7 +264,7 @@ public final class PedestrianHazardDetector {
                         roadRelative = true
                         let slope = num / den                              // + = moving right of the road centre
                         let toward = u > 0 ? -slope : slope
-                        if toward >= minRoadRelativeApproachSpeed {
+                        if toward >= minRoadRelativeApproachMetersPerSecond {
                             approaching = true
                             approachSpeed = toward
                         }
@@ -280,8 +287,8 @@ public final class PedestrianHazardDetector {
             let isStaff = t.personRole?.isRoadStaff == true
             let atRoad = outside <= margin || (isStaff && outside <= staffEdgeMargin + hysteresis)
             // Outside the zone: reported when the feet would reach the roadway edge within `timeToEdgeSeconds`.
-            // (`approachSpeed` is in perspective half widths per second, `outside` in zone half widths.)
-            let unitRatio = zoneHalf > 1e-6 ? perspectiveHalf / zoneHalf : 1
+            // (`approachSpeed` is in metres per second, `outside` in zone half widths.)
+            let unitRatio: Double = zoneHalf > 1e-6 && metresPerX > 0 ? 1 / (zoneHalf * metresPerX) : 0
             let approachReach = roadRelative
                 ? min(maxApproachOutside, approachSpeed * timeToEdgeSeconds * unitRatio) : fallbackApproachMargin
             let nearEdge = outside <= margin + approachReach

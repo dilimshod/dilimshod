@@ -115,6 +115,13 @@ enum class AlertToneKind {
     }
 
     companion object {
+        /**
+         * Whether a coach message produces any sound in [mode]: its voice phrase, or its tone when the voice is
+         * off. A message that is silent in the current mode must not start the coach's global gap.
+         */
+        fun isAudible(message: CoachMessage, mode: SoundMode): Boolean =
+            mode.voiceEnabled || (kindFor(message)?.shouldPlay(mode) ?: false)
+
         /** Tone of a coach message; null = informational message without a tone (signs, limit changes, green light). */
         fun kindFor(message: CoachMessage): AlertToneKind? = when (message) {
             CoachMessage.CollisionRisk -> COLLISION

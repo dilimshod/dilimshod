@@ -191,7 +191,8 @@ private fun FollowingDistanceSection(app: AppState) {
         RowDivider()
         ToggleRow(L("settings.fd.warnings"), s.distanceWarningsEnabled, { s.distanceWarningsEnabled = it }, enabled = on)
         ToggleRow(L("settings.fd.corridor"), s.showEgoCorridor, { s.showEgoCorridor = it }, enabled = on)
-        SliderRow(L("settings.fd.horizon"), percent(s.corridorHorizon), s.corridorHorizon, 0.25..0.65, 0.01, { s.corridorHorizon = it }, on)
+        SliderRow(L("settings.fd.horizon"), percent(s.corridorHorizon), s.corridorHorizon, 0.25..0.65, 0.01, { s.corridorHorizon = it },
+            on && !s.autoHorizonEnabled)
         ToggleRow(L("settings.fd.horizonAuto"), s.autoHorizonEnabled, { s.autoHorizonEnabled = it }, enabled = on)
         TextRow(L("settings.fd.horizonAuto.hint"), secondary = true)
     }

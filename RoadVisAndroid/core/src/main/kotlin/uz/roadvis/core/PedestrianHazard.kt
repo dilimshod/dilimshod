@@ -98,11 +98,11 @@ class PedestrianHazardDetector(
     var staffEdgeMargin: Double = 1.0
 
     /**
-     * Minimum speed toward the road centre in road-relative units (perspective zone half widths per second). Pinhole
-     * arithmetic (not a measurement): a pedestrian walking 1.4 m/s toward a road of 3.5–7 m half width changes u by
-     * 0.2–0.4 per second, while a standing one stays constant.
+     * Minimum speed toward the road centre, metres per second (lateral offset measured with the person's own box
+     * height as the scale, so it does not depend on the configured horizon). Pinhole arithmetic, not a measurement:
+     * a pedestrian walks ≈ 1.4 m/s; 0.7 m/s equals the previous 0.20 half widths/s on a 3.5 m half width.
      */
-    var minRoadRelativeApproachSpeed: Double = 0.20
+    var minRoadRelativeApproachMetersPerSecond: Double = 0.7
     /** History needed before the road-relative slope is trusted, seconds / samples. */
     var minApproachHistory: Double = 0.4
     var minApproachSamples: Int = 4
@@ -190,14 +190,20 @@ class PedestrianHazardDetector(
             // Road-relative lateral position: offset ÷ (growth of the zone half width per row × rows below the
             // horizon) — proportional to the lateral distance in metres, whatever the depth.
             val perspectiveHalf = perspectiveHalfWidth(zone, footY)
-            val u: Double? = if (perspectiveHalf > 1e-4) (footX - roadCenter) / perspectiveHalf else null
+            // The scale comes from the person's own box height (typical body height ÷ box height), NOT from the
+            // configured horizon: with ÷ (y − horizon) a horizon that is off by 1 % (or a brake nod) made a standing
+            // kerb pedestrian appear to slide toward the road centre. u is therefore in metres.
+            val personHeight = VehicleKind.PERSON.typicalHeightMeters ?: 1.7
+            val pixelAspect = if (geometry.imageWidth > 0 && geometry.imageHeight > 0) geometry.imageWidth / geometry.imageHeight else 1.0
+            val metresPerX = if (t.box.height > 0.015) personHeight * pixelAspect / t.box.height else 0.0
+            val u: Double? = if (perspectiveHalf > 1e-4 && metresPerX > 0) (footX - roadCenter) * metresPerX else null
             val h = history.getOrPut(t.id) { mutableListOf() }
             h.add(Sample(timestamp, footX, u))
             h.removeAll { timestamp - it.t > 1.0 }
 
             // Crossing intent. Road-relative: least-squares slope of u over the last second.
             var approaching = false
-            var approachSpeed = 0.0 // zone half widths per second toward the centre (road-relative path)
+            var approachSpeed = 0.0 // metres per second toward the road centre (road-relative path)
             var roadRelative = false
             val first = h.firstOrNull()
             if (u != null && first != null && timestamp - first.t >= minApproachHistory) {
@@ -215,7 +221,7 @@ class PedestrianHazardDetector(
                         roadRelative = true
                         val slope = num / den // + = moving right of the road centre
                         val toward = if (u > 0) -slope else slope
-                        if (toward >= minRoadRelativeApproachSpeed) {
+                        if (toward >= minRoadRelativeApproachMetersPerSecond) {
                             approaching = true
                             approachSpeed = toward
                         }
@@ -238,7 +244,8 @@ class PedestrianHazardDetector(
             val isStaff = t.personRole?.isRoadStaff == true
             val atRoad = outside <= margin || (isStaff && outside <= staffEdgeMargin + hysteresis)
             // Outside the zone: reported when the feet would reach the roadway edge within `timeToEdgeSeconds`.
-            val unitRatio = if (zoneHalf > 1e-6) perspectiveHalf / zoneHalf else 1.0
+            // (`approachSpeed` is in metres per second, `outside` in zone half widths.)
+            val unitRatio = if (zoneHalf > 1e-6 && metresPerX > 0) 1 / (zoneHalf * metresPerX) else 0.0
             val approachReach = if (roadRelative) min(maxApproachOutside, approachSpeed * timeToEdgeSeconds * unitRatio)
             else fallbackApproachMargin
             val nearEdge = outside <= margin + approachReach

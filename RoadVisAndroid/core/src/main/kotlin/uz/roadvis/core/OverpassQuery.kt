@@ -280,3 +280,19 @@ object OverpassQuery {
 
     private fun truncate(s: String, length: Int): String = if (s.length <= length) s else s.take(length) + "…"
 }
+
+/** Fallback rules of the Overpass client (pure logic shared with its tests). */
+object OverpassFallbackPolicy {
+    /** Timeouts after which the link itself is suspected to be stalled. */
+    const val STALLED_AFTER_TIMEOUTS: Int = 2
+    /** Timeout for the servers tried after that, seconds. */
+    const val SHORT_TIMEOUT: Double = 10.0
+
+    /**
+     * Timeout (seconds) for the next attempt of one query. One overloaded server timing out is what the fallback
+     * list is for, so every remaining server is still tried after two timeouts (it may be the only healthy one) —
+     * but with a short timeout, so a truly stalled link does not cost the full timeout per server.
+     */
+    fun attemptTimeout(base: Double, timeoutsSoFar: Int): Double =
+        if (timeoutsSoFar >= STALLED_AFTER_TIMEOUTS) minOf(base, SHORT_TIMEOUT) else base
+}

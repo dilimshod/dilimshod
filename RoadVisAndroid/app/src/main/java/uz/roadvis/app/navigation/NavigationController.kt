@@ -721,8 +721,11 @@ class NavigationController(val app: AppState, context: Context) {
             // A retried OSRM route ignores the travel direction: prefer the fastest option that starts the way the
             // car is moving, so the new route does not begin with a U-turn the driver is not making.
             val heading = if ((location.speedKmh ?: 0.0) >= 5) location.travelDirection else null
+            // The preference is bounded by travel time (options are ordered fastest first): a forward start must not
+            // buy an unbounded detour over the fastest route.
             val chosen = planned.options.getOrNull(
-                ReroutePolicy.preferredIndex(planned.options.map { it.route.polyline }, heading)) ?: first
+                ReroutePolicy.preferredIndex(planned.options.map { it.route.polyline }, heading,
+                    travelTimes = planned.options.map { it.expectedTravelTime })) ?: first
             applyOptions(planned)
             beginGuidance(chosen)
             reloadRouteContext()
@@ -808,7 +811,7 @@ class NavigationController(val app: AppState, context: Context) {
 
     /** True while the latest fix lies on the route line (not merely "not yet confirmed off-route"). */
     private fun isMatchedToRoute(current: RouteProgress): Boolean =
-        !current.isOffRoute && current.crossTrackDistance <= (tracker?.offRouteThreshold ?: 50.0)
+        !current.isOffRoute && current.crossTrackDistance <= (tracker?.lastMatchThreshold ?: 50.0)
 
     private fun refreshUpcomingFeatures(along: Double) {
         val ahead = visibleRouteFeatures.filter {

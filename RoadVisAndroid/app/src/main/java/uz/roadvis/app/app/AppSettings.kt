@@ -70,7 +70,18 @@ class AppSettings(context: Context) {
      * Measure the horizon from the lane vanishing point while driving (`LaneHorizonEstimator`); [corridorHorizon] is
      * then the start value and the fallback.
      */
-    var autoHorizonEnabled by Pref("rv.autoHorizonEnabled", true)
+    private var autoHorizonEnabledRaw by Pref("rv.autoHorizonEnabled", true)
+    var autoHorizonEnabled: Boolean
+        get() = autoHorizonEnabledRaw
+        set(value) {
+            autoHorizonEnabledRaw = value
+            // Switching the automatic mode off forgets the stored measurements: turning it on again restarts from
+            // the slider value (the only way to drop a stale horizon after the phone was re-mounted).
+            if (!value) {
+                autoHorizonPortrait = 0.0
+                autoHorizonLandscape = 0.0
+            }
+        }
     /** Last measured horizon for portrait / landscape frames (0 = nothing measured yet). */
     var autoHorizonPortrait by Pref("rv.autoHorizonPortrait", 0.0)
     var autoHorizonLandscape by Pref("rv.autoHorizonLandscape", 0.0)

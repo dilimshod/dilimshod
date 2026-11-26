@@ -69,6 +69,12 @@ class RouteProgressTracker(
      *  the road-snapped point): until then only moving AWAY from the line counts as off-route. */
     private var hasBeenOnRoute = false
     private var minOffRouteDistance = Double.POSITIVE_INFINITY
+    /** First fix that did not match while the route had never been matched: position and distance from the line. */
+    private var firstUnmatchedPosition: GeoPoint? = null
+    private var firstUnmatchedDistance = 0.0
+    /** Match threshold used by the latest [update] ([offRouteThreshold] widened by the accuracy of that fix). */
+    var lastMatchThreshold: Double = offRouteThreshold
+        private set
 
     val totalDistance: Double get() = cumulative.lastOrNull() ?: 0.0
 
@@ -95,6 +101,7 @@ class RouteProgressTracker(
                course: Double? = null): RouteProgress {
         val total = totalDistance
         val threshold = offRouteThreshold + min(50.0, max(0.0, (horizontalAccuracy ?: 0.0) - 10))
+        lastMatchThreshold = threshold
 
         // Incremental search near the last match first (avoids jumping to overlapping parts of the route).
         var projection: Geo.Projection? = null
@@ -154,10 +161,18 @@ class RouteProgressTracker(
             } else if (hasBeenOnRoute) {
                 offRouteCount += 1
             } else {
-                // Not on this route yet: off-route only when the car moves away from the line, not while it stands
-                // still or approaches (otherwise every reroute would start off-route again — a reroute storm).
+                // Not on this route yet: off-route only when the car moves away from the line, or drives a real
+                // distance without approaching it (a parallel street) — not while it stands still or approaches
+                // (otherwise every reroute would start off-route again — a reroute storm).
                 minOffRouteDistance = min(minOffRouteDistance, proj.distanceFromLine)
-                if (proj.distanceFromLine > minOffRouteDistance + offRouteThreshold) offRouteCount += 1
+                if (firstUnmatchedPosition == null) {
+                    firstUnmatchedPosition = position
+                    firstUnmatchedDistance = proj.distanceFromLine
+                }
+                val travelled = firstUnmatchedPosition?.let { Geo.distance(it, position) } ?: 0.0
+                val closed = firstUnmatchedDistance - proj.distanceFromLine
+                val drivingPast = travelled > UNMATCHED_TRAVEL_LIMIT && closed < travelled * UNMATCHED_CLOSING_SHARE
+                if (proj.distanceFromLine > minOffRouteDistance + offRouteThreshold || drivingPast) offRouteCount += 1
                 else offRouteCount = 0
             }
         } else {
@@ -224,6 +239,13 @@ class RouteProgressTracker(
             nextActiveLanes = nextIndex?.let { steps[it].activeLanes } ?: emptyList(),
         )
     }
+
+    companion object {
+        /** Metres the car must travel without approaching the line before a never-matched route is off-route. */
+        const val UNMATCHED_TRAVEL_LIMIT: Double = 150.0
+        /** "Approaching" = the cross-track distance shrank by at least this share of the distance travelled. */
+        const val UNMATCHED_CLOSING_SHARE: Double = 0.3
+    }
 }
 
 /** Decides when to speak turn-by-turn prompts. Each threshold is spoken at most once per step. */
@@ -276,10 +298,23 @@ object ReroutePolicy {
     /**
      * Index of the route to follow after a reroute: the first one (fastest first) that starts within [tolerance]
      * degrees of the travel [heading]. Falls back to 0 when the heading is unknown or no route matches.
+     *
+     * [travelTimes] (seconds, parallel to [polylines]; index 0 = fastest) bounds the preference: a route slower than
+     * the fastest one by more than max([minExtraSeconds], [maxExtraShare] × fastest) is never preferred — a forward
+     * start must not buy an unbounded detour. Routes without a known time are not bounded.
      */
-    fun preferredIndex(polylines: List<List<GeoPoint>>, heading: Double?, tolerance: Double = 90.0): Int {
+    fun preferredIndex(
+        polylines: List<List<GeoPoint>>, heading: Double?, tolerance: Double = 90.0,
+        travelTimes: List<Double> = emptyList(), minExtraSeconds: Double = 120.0, maxExtraShare: Double = 0.15,
+    ): Int {
         if (heading == null || !heading.isFinite()) return 0
+        val fastest: Double? = travelTimes.firstOrNull()?.takeIf { it.isFinite() && it >= 0 }
         for ((index, polyline) in polylines.withIndex()) {
+            if (fastest != null && index < travelTimes.size) {
+                val time = travelTimes[index]
+                val allowance = max(minExtraSeconds, fastest * maxExtraShare)
+                if (!time.isFinite() || time > fastest + allowance) continue
+            }
             val bearing = initialBearing(polyline) ?: continue
             if (Geo.angleDifference(bearing, heading) <= tolerance) return index
         }

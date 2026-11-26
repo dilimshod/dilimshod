@@ -266,3 +266,18 @@ public enum OverpassQuery {
         }
     }
 }
+
+/// Fallback rules of the Overpass client (pure logic shared with its tests).
+public enum OverpassFallbackPolicy {
+    /// Timeouts after which the link itself is suspected to be stalled.
+    public static let stalledAfterTimeouts: Int = 2
+    /// Timeout for the servers tried after that, seconds.
+    public static let shortTimeout: TimeInterval = 10
+
+    /// Timeout for the next attempt of one query. One overloaded server timing out is what the fallback list is
+    /// for, so every remaining server is still tried after two timeouts (it may be the only healthy one) — but with
+    /// a short timeout, so a truly stalled link does not cost the full timeout per server.
+    public static func attemptTimeout(base: TimeInterval, timeoutsSoFar: Int) -> TimeInterval {
+        timeoutsSoFar >= stalledAfterTimeouts ? min(base, shortTimeout) : base
+    }
+}

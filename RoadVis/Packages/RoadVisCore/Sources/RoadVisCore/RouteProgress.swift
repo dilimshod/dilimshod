@@ -95,6 +95,14 @@ public final class RouteProgressTracker {
     /// road-snapped point): until then only moving AWAY from the line counts as off-route.
     private var hasBeenOnRoute = false
     private var minOffRouteDistance = Double.infinity
+    /// First fix that did not match while the route had never been matched: position and distance from the line.
+    private var firstUnmatched: (position: GeoPoint, distance: Double)?
+    /// Metres the car must travel without approaching the line before a never-matched route counts as off-route.
+    static let unmatchedTravelLimit: Double = 150
+    /// …"approaching" = the cross-track distance shrank by at least this share of the distance travelled.
+    static let unmatchedClosingShare: Double = 0.3
+    /// Match threshold used by the latest `update` (`offRouteThreshold` widened by the accuracy of that fix).
+    public private(set) var lastMatchThreshold: Double = 50
 
     public var totalDistance: Double { cumulative.last ?? 0 }
 
@@ -105,6 +113,7 @@ public final class RouteProgressTracker {
         self.steps = steps
         self.expectedTravelTime = max(0, expectedTravelTime)
         self.offRouteThreshold = offRouteThreshold
+        self.lastMatchThreshold = offRouteThreshold
         self.offRouteConfirmations = max(1, offRouteConfirmations)
         self.arrivalThreshold = arrivalThreshold
 
@@ -128,6 +137,7 @@ public final class RouteProgressTracker {
                        countsTowardsOffRoute: Bool = true, course: Double? = nil) -> RouteProgress {
         let total = totalDistance
         let threshold = offRouteThreshold + min(50, max(0, (horizontalAccuracy ?? 0) - 10))
+        lastMatchThreshold = threshold
 
         // Incremental search near the last match first (avoids jumping to overlapping parts of the route).
         var projection: Geo.Projection?
@@ -190,10 +200,17 @@ public final class RouteProgressTracker {
             } else if hasBeenOnRoute {
                 offRouteCount += 1
             } else {
-                // Not on this route yet: off-route only when the car moves away from the line, not while it stands
-                // still or approaches (otherwise every reroute would start off-route again — a reroute storm).
+                // Not on this route yet: off-route only when the car moves away from the line, or drives a real
+                // distance without approaching it (a parallel street) — not while it stands still or approaches
+                // (otherwise every reroute would start off-route again — a reroute storm).
                 minOffRouteDistance = min(minOffRouteDistance, proj.distanceFromLine)
-                if proj.distanceFromLine > minOffRouteDistance + offRouteThreshold {
+                if firstUnmatched == nil { firstUnmatched = (position, proj.distanceFromLine) }
+                let startDistance: Double = firstUnmatched?.distance ?? proj.distanceFromLine
+                let travelled: Double = firstUnmatched.map { Geo.distance($0.position, position) } ?? 0
+                let closed: Double = startDistance - proj.distanceFromLine
+                let drivingPast: Bool = travelled > Self.unmatchedTravelLimit
+                    && closed < travelled * Self.unmatchedClosingShare
+                if proj.distanceFromLine > minOffRouteDistance + offRouteThreshold || drivingPast {
                     offRouteCount += 1
                 } else {
                     offRouteCount = 0
@@ -321,9 +338,21 @@ public enum ReroutePolicy {
     /// Index of the route to follow after a reroute: the first one (routes are ordered fastest first) that starts
     /// within `tolerance` degrees of the travel `heading`, so the new route does not begin with a U-turn the driver
     /// is not making. Falls back to 0 when the heading is unknown or no route matches.
-    public static func preferredIndex(polylines: [[GeoPoint]], heading: Double?, tolerance: Double = 90) -> Int {
+    ///
+    /// `travelTimes` (seconds, parallel to `polylines`; index 0 = fastest) bounds the preference: a route that is
+    /// slower than the fastest one by more than `max(minExtraSeconds, maxExtraShare × fastest)` is never preferred —
+    /// a forward start must not buy an unbounded detour. Routes without a known time are not bounded.
+    public static func preferredIndex(polylines: [[GeoPoint]], heading: Double?, tolerance: Double = 90,
+                                      travelTimes: [Double] = [], minExtraSeconds: Double = 120,
+                                      maxExtraShare: Double = 0.15) -> Int {
         guard let heading, heading.isFinite else { return 0 }
+        let fastest: Double? = travelTimes.first.flatMap { $0.isFinite && $0 >= 0 ? $0 : nil }
         for (index, polyline) in polylines.enumerated() {
+            if let fastest, index < travelTimes.count {
+                let time: Double = travelTimes[index]
+                let allowance: Double = max(minExtraSeconds, fastest * maxExtraShare)
+                if !time.isFinite || time > fastest + allowance { continue }
+            }
             if let bearing = initialBearing(of: polyline), Geo.angleDifference(bearing, heading) <= tolerance {
                 return index
             }

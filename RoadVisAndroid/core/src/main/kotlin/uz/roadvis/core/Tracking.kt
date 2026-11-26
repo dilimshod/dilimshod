@@ -405,8 +405,15 @@ class ObjectTracker(val config: Config = Config()) {
 object TrafficLightColorVote {
     data class Observation(val time: Double, val color: TrafficLightColor)
 
-    /** Observations older than this are forgotten, seconds (≈ 12 frames at 15 fps). */
+    /**
+     * Observations older than this are forgotten, seconds (≈ 12 frames at 15 fps). This is the MINIMUM window: at
+     * low processing rates it is stretched, see [effectiveWindow].
+     */
     const val window: Double = 0.8
+    /** Upper bound of the stretched window, seconds. */
+    const val maxWindow: Double = 2.0
+    /** The window covers at least this many frame intervals. */
+    internal const val windowFrames: Double = 5.0
     /** Known-colour votes the winner needs inside the window… */
     const val minVotes: Int = 3
     /** …and its share of the known votes. */
@@ -416,9 +423,23 @@ object TrafficLightColorVote {
     /** Hard cap of stored observations (frames arrive at ≤ 30 fps). */
     internal const val maxObservations: Int = 48
 
+    /**
+     * 0.8 s at normal rates; stretched to ≈ 5 frame intervals (capped at 2 s) when frames arrive slowly, so a device
+     * that processes 2.5–4 frames per second still collects the votes a stable colour needs.
+     */
+    fun effectiveWindow(history: List<Observation>): Double {
+        if (history.size < 2) return window
+        val gaps = ArrayList<Double>(history.size - 1)
+        for (i in 1 until history.size) gaps.add(history[i].time - history[i - 1].time)
+        gaps.sort()
+        val median = gaps[gaps.size / 2]
+        return min(maxWindow, max(window, windowFrames * median))
+    }
+
     /** Drops observations outside the window. */
     fun prune(history: MutableList<Observation>, now: Double) {
-        history.removeAll { now - it.time > window || it.time > now + 1e-6 }
+        val w = effectiveWindow(history)
+        history.removeAll { now - it.time > w || it.time > now + 1e-6 }
         while (history.size > maxObservations) history.removeAt(0)
     }
 
@@ -427,8 +448,9 @@ object TrafficLightColorVote {
      * [previous] is the colour reported so far (hysteresis).
      */
     fun decide(history: List<Observation>, now: Double, previous: TrafficLightColor?): TrafficLightColor? {
+        val w = effectiveWindow(history)
         val known = ArrayList<TrafficLightColor>()
-        for (o in history) if (now - o.time <= window && o.color != TrafficLightColor.UNKNOWN) known.add(o.color)
+        for (o in history) if (now - o.time <= w && o.color != TrafficLightColor.UNKNOWN) known.add(o.color)
         if (known.size < minVotes) return null
         val counts = HashMap<TrafficLightColor, Int>()
         for (c in known) counts[c] = (counts[c] ?: 0) + 1

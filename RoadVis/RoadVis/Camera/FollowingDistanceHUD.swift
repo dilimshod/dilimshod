@@ -69,7 +69,7 @@ struct FollowingDistanceHUD: View {
                 .frame(width: 8, height: 8)
                 .shadow(color: color.opacity(hasLead ? 0.8 : 0), radius: 3)
                 .rvPulse(status == .danger || isForwardCollisionWarning, minOpacity: 0.3, period: 0.7)
-            Text(L("fd.norm", "≥ " + RVFormat.gapMeters(assessment.recommendedDistanceMeters)))
+            Text(L("fd.norm", FollowingDistanceText.recommended(assessment)))
                 .rvNumeric(14, weight: .bold)
                 .foregroundStyle(.white.opacity(hasLead ? 1 : 0.8))
                 .contentTransition(.numericText())

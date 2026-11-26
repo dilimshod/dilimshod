@@ -6,6 +6,7 @@ import kotlinx.coroutines.sync.withLock
 import uz.roadvis.app.l10n.L
 import uz.roadvis.core.OSMElement
 import uz.roadvis.core.OverpassError
+import uz.roadvis.core.OverpassFallbackPolicy
 import uz.roadvis.core.OverpassQuery
 import java.net.URI
 import kotlin.math.max
@@ -105,17 +106,13 @@ class OverpassClient(primaryEndpoint: String, fallbacks: List<String>) {
             } catch (_: Exception) { false }
             if (!valid) { reasons.add("$host: " + L("overpass.badAddress")); continue }
             val outcome = try {
-                attempt(endpoint, body, timeoutMs)
+                // After two timeouts the link itself may be stalled: the remaining servers are still tried (one of
+                // them may be the only healthy one), but with a short timeout.
+                attempt(endpoint, body,
+                    (OverpassFallbackPolicy.attemptTimeout(timeoutMs / 1000.0, timeouts) * 1000).toInt())
             } catch (e: Http.NetworkException) {
                 if (e.kind == Http.NetworkException.Kind.HOST_NOT_FOUND) offlineCount += 1
-                if (e.kind == Http.NetworkException.Kind.TIMEOUT) {
-                    timeouts += 1
-                    // One overloaded server timing out is what the fallback list is for; two is a stalled link.
-                    if (timeouts >= 2) {
-                        reasons.add("$host: " + (e.message ?: L("net.timedOut")))
-                        throw OverpassClientError.AllEndpointsFailed(reasons)
-                    }
-                }
+                if (e.kind == Http.NetworkException.Kind.TIMEOUT) timeouts += 1
                 Outcome.Failed(e.message ?: L("net.loadError"))
             }
             when (outcome) {

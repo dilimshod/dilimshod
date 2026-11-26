@@ -158,6 +158,9 @@ final class TripRecorder {
             startedCameraCSV = false
             let urls = await recognition.finishRecording()
             finished.cameraCSVFiles = urls.map(\.lastPathComponent)
+            // The address of A may have arrived during the await (geocoding task of `start`): keep it before the
+            // local copy overwrites `trip`.
+            if finished.origin.name == nil { finished.origin.name = trip?.origin.name }
             trip = finished
             if hasTrack { store.persist(finished) }
         }
@@ -167,6 +170,8 @@ final class TripRecorder {
             // B gets an address only when it has no name (manual trips); the geocoder is given ≤ 4 s.
             if finished.destination?.name == nil, let coordinate = finished.destination?.coordinate {
                 finished.destination?.name = await TripRecorder.placeName(for: coordinate.clLocation, timeout: 4)
+                // …or during this await.
+                if finished.origin.name == nil { finished.origin.name = trip?.origin.name }
             }
             if finished.origin.name == nil, let coordinate = finished.origin.coordinate {
                 finished.origin.name = await TripRecorder.placeName(for: coordinate.clLocation, timeout: 4)

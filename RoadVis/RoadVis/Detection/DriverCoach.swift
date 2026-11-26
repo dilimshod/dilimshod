@@ -157,7 +157,13 @@ final class DriverCoach {
     // MARK: - Output
 
     private func speakNext(now: TimeInterval) {
-        guard let message = engine.next(now: now) else { return }
+        // A message without any sound in the current mode (e.g. a sign announcement in "sounds only") must not
+        // start the global gap: it would delay the tone of the next warning.
+        let mode: SoundMode = SoundModeStore.shared.mode
+        let next: CoachMessage? = engine.next(now: now, isAudible: { (candidate: CoachMessage) -> Bool in
+            AlertToneKind.isAudible(candidate, in: mode)
+        })
+        guard let message = next else { return }
         let text = coachText(message, language: currentCoachLanguage())
         // Tone first (it also is the whole warning in the "sounds only" mode; `playAlertTone` checks the mode). The
         // distance tones (collision, keep distance) belong to `DistanceWarningController`, which runs on the same
@@ -167,9 +173,10 @@ final class DriverCoach {
             speech.playAlertTone(tone)
         }
         let priority: SpeechPriority = Self.priority(message.urgency)
-        // Advice about the current moment (lane, distance) is stale after a few seconds of waiting.
-        speech.speak(VoicePhrase.coach(message, text: text), priority: priority,
-                     maxAge: priority >= .high ? SpeechService.defaultMaxAge : 3)
+        // Only advice about the current moment (lane, distance) is stale after a few seconds of waiting; signs, road
+        // staff and pedestrian cautions keep the default wait (a navigation prompt of 4–6 s must not swallow them).
+        let maxAge: TimeInterval = message.maxSpeechWait(defaultWait: SpeechService.defaultMaxAge)
+        speech.speak(VoicePhrase.coach(message, text: text), priority: priority, maxAge: maxAge)
         lastMessage = message
         lastMessageDate = Date()
     }

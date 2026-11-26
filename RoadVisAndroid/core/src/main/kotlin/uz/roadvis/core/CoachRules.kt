@@ -66,6 +66,16 @@ sealed class CoachMessage {
             }
         }
 
+    /**
+     * Advice about the current moment (lane position, following distance): stale after a few seconds of waiting
+     * behind another utterance. Signs, road staff and pedestrian cautions stay relevant for the default wait.
+     */
+    val isMomentBound: Boolean
+        get() = category == CoachCategory.LANE_DEPARTURE || category == CoachCategory.TAILGATING
+
+    /** Longest time the spoken phrase of this message may wait behind another utterance, seconds. */
+    fun maxSpeechWait(defaultWait: Double): Double = if (isMomentBound) minOf(3.0, defaultWait) else defaultWait
+
     /** Safety-critical messages that may interrupt the calm global gap between utterances. */
     val bypassesGlobalGap: Boolean
         get() = this == CollisionRisk || this is PedestrianDanger
@@ -153,8 +163,13 @@ class CoachRules(var config: Config = Config()) {
         lastSpoken[category] = now
     }
 
-    /** The message to speak now, if any (removes it from the queue). */
-    fun next(now: Double): CoachMessage? {
+    /**
+     * The message to speak now, if any (removes it from the queue).
+     * [isAudible]: false for a message that will produce no sound in the current sound mode (no voice and no tone):
+     * it is still returned and gets its category cooldown, but does not start the global gap, so a silent message
+     * cannot delay the tone of the next one.
+     */
+    fun next(now: Double, isAudible: (CoachMessage) -> Boolean = { true }): CoachMessage? {
         pending.removeAll { now - it.offeredAt > (config.timeToLive[it.message.category] ?: 3.0) }
         var bestIndex = -1
         for ((i, item) in pending.withIndex()) {
@@ -172,7 +187,7 @@ class CoachRules(var config: Config = Config()) {
         if (bestIndex < 0) return null
         val best = pending.removeAt(bestIndex)
         lastSpoken[best.message.category] = now
-        lastUtterance = now
+        if (isAudible(best.message)) lastUtterance = now
         return best.message
     }
 }
@@ -518,9 +533,9 @@ class DriverCoachEngine(
         rules.offer(message, now)
     }
 
-    /** The message to speak now, if any. */
-    fun next(now: Double): CoachMessage? {
-        val message = rules.next(now) ?: return null
+    /** The message to speak now, if any. [isAudible]: see [CoachRules.next]. */
+    fun next(now: Double, isAudible: (CoachMessage) -> Boolean = { true }): CoachMessage? {
+        val message = rules.next(now, isAudible) ?: return null
         message.pedestrianTrackID?.let { id ->
             pedestrianWarned[id] = Pair(
                 if (message is CoachMessage.PedestrianDanger) PedestrianHazardLevel.DANGER else PedestrianHazardLevel.CAUTION, now,

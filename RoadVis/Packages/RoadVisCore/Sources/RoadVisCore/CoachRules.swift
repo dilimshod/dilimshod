@@ -63,6 +63,17 @@ public enum CoachMessage: Hashable, Sendable {
         }
     }
 
+    /// Advice about the current moment (lane position, following distance): stale after a few seconds of waiting
+    /// behind another utterance. Signs, road staff and pedestrian cautions stay relevant for the default wait.
+    public var isMomentBound: Bool {
+        category == .laneDeparture || category == .tailgating
+    }
+
+    /// Longest time the spoken phrase of this message may wait behind another utterance, seconds.
+    public func maxSpeechWait(defaultWait: TimeInterval) -> TimeInterval {
+        isMomentBound ? min(3, defaultWait) : defaultWait
+    }
+
     /// Safety-critical messages that may interrupt the calm global gap between utterances.
     public var bypassesGlobalGap: Bool {
         switch self {
@@ -160,7 +171,10 @@ public struct CoachRules: Sendable {
     }
 
     /// The message to speak now, if any (removes it from the queue).
-    public mutating func next(now: TimeInterval) -> CoachMessage? {
+    /// - Parameter isAudible: false for a message that will produce no sound in the current sound mode (no voice and
+    ///   no tone): it is still returned and gets its category cooldown, but does not start the global gap, so a
+    ///   silent message cannot delay the tone of the next one.
+    public mutating func next(now: TimeInterval, isAudible: (CoachMessage) -> Bool = { _ in true }) -> CoachMessage? {
         pending.removeAll { now - $0.offeredAt > (config.timeToLive[$0.message.category] ?? 3) }
         let ready = pending.enumerated().filter { _, item in
             let category = item.message.category
@@ -175,7 +189,7 @@ public struct CoachRules: Sendable {
         pending.remove(at: best.offset)
         let category = best.element.message.category
         lastSpoken[category] = now
-        lastUtterance = now
+        if isAudible(best.element.message) { lastUtterance = now }
         return best.element.message
     }
 }
@@ -560,9 +574,9 @@ public final class DriverCoachEngine {
         rules.offer(message, now: now)
     }
 
-    /// The message to speak now, if any.
-    public func next(now: TimeInterval) -> CoachMessage? {
-        guard let message = rules.next(now: now) else { return nil }
+    /// The message to speak now, if any. `isAudible`: see `CoachRules.next`.
+    public func next(now: TimeInterval, isAudible: (CoachMessage) -> Bool = { _ in true }) -> CoachMessage? {
+        guard let message = rules.next(now: now, isAudible: isAudible) else { return nil }
         if let id = message.pedestrianTrackID {
             if case .pedestrianDanger = message {
                 pedestrianWarned[id] = (.danger, now)

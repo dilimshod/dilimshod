@@ -41,7 +41,17 @@ final class AppSettings {
     var corridorHorizon: Double { didSet { defaults.set(corridorHorizon, forKey: Keys.corridorHorizon) } }
     /// Measure the horizon from the lane vanishing point while driving (`LaneHorizonEstimator`); `corridorHorizon`
     /// is then the start value and the fallback.
-    var autoHorizonEnabled: Bool { didSet { defaults.set(autoHorizonEnabled, forKey: Keys.autoHorizonEnabled) } }
+    var autoHorizonEnabled: Bool {
+        didSet {
+            defaults.set(autoHorizonEnabled, forKey: Keys.autoHorizonEnabled)
+            // Switching the automatic mode off forgets the stored measurements: turning it on again restarts from
+            // the slider value (the only way to drop a stale horizon after the phone was re-mounted).
+            if !autoHorizonEnabled {
+                autoHorizonPortrait = 0
+                autoHorizonLandscape = 0
+            }
+        }
+    }
     /// Last measured horizon for portrait / landscape frames (0 = nothing measured yet).
     var autoHorizonPortrait: Double { didSet { defaults.set(autoHorizonPortrait, forKey: Keys.autoHorizonPortrait) } }
     var autoHorizonLandscape: Double { didSet { defaults.set(autoHorizonLandscape, forKey: Keys.autoHorizonLandscape) } }

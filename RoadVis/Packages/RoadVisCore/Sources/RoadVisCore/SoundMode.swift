@@ -99,6 +99,13 @@ public enum AlertToneKind: String, CaseIterable, Hashable, Sendable {
         }
     }
 
+    /// Whether a coach message produces any sound in `mode`: its voice phrase, or its tone when the voice is off.
+    /// A message that is silent in the current mode must not start the coach's global gap (`CoachRules.next`).
+    public static func isAudible(_ message: CoachMessage, in mode: SoundMode) -> Bool {
+        if mode.voiceEnabled { return true }
+        return kind(for: message)?.shouldPlay(in: mode) ?? false
+    }
+
     public var segments: [Segment] {
         switch self {
         case .collision:

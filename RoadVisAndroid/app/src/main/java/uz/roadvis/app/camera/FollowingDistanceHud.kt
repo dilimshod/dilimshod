@@ -114,7 +114,7 @@ private fun Pill(a: FollowingDistanceAssessment, hasLead: Boolean, status: Dista
             horizontalArrangement = Arrangement.spacedBy(6.dp),
         ) {
             Box(Modifier.size(8.dp).alpha(dotAlpha).background(if (collision) RV.danger else color, CircleShape))
-            Text(L("fd.norm", "≥ " + CamFmt.gapMeters(a.recommendedDistanceMeters)),
+            Text(L("fd.norm", FollowingDistanceText.recommended(a)),
                 style = CamTheme.numeric(14.sp, color = Color.White.copy(alpha = if (hasLead) 1f else 0.8f)), maxLines = 1)
             if (hasLead) FollowingDistanceText.timeToCollision(a)?.let { ttc ->
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(2.dp)) {

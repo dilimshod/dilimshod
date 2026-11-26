@@ -106,16 +106,20 @@ class DriverCoach(private val app: AppState, private val assist: AssistSettings)
     }
 
     private fun speakNext(now: Double) {
-        val message = engine.next(now) ?: return
+        // A message without any sound in the current mode (e.g. a sign announcement in "sounds only") must not
+        // start the global gap: it would delay the tone of the next warning.
+        val mode = app.speech.soundMode
+        val message = engine.next(now) { AlertToneKind.isAudible(it, mode) } ?: return
         // Tone first (it is the whole warning in the "sounds only" mode; `playAlertTone` checks the mode). The distance
         // tones (collision, keep distance) belong to `DistanceWarningController`, which runs on the same frames —
         // a second tone here would double up.
         val distanceOwned = message.category == CoachCategory.COLLISION || message.category == CoachCategory.TAILGATING
         if (!distanceOwned) AlertToneKind.kindFor(message)?.let { app.speech.playAlertTone(it) }
         val priority = priority(message.urgency)
-        // Advice about the current moment (lane, distance) is stale after a few seconds of waiting.
+        // Only advice about the current moment (lane, distance) is stale after a few seconds of waiting; signs, road
+        // staff and pedestrian cautions keep the default wait (a navigation prompt of 4–6 s must not swallow them).
         app.speech.speak(VoicePhrase.coach(message, CoachPhrases.phrase(message)), priority,
-            maxAge = if (priority >= SpeechPriority.HIGH) SpeechService.DEFAULT_MAX_AGE else 3.0)
+            maxAge = message.maxSpeechWait(SpeechService.DEFAULT_MAX_AGE))
     }
 
     companion object {

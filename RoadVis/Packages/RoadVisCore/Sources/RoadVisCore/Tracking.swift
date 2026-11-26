@@ -465,8 +465,13 @@ public enum TrafficLightColorVote {
         }
     }
 
-    /// Observations older than this are forgotten, seconds (≈ 12 frames at 15 fps).
+    /// Observations older than this are forgotten, seconds (≈ 12 frames at 15 fps). This is the MINIMUM window: at
+    /// low processing rates it is stretched, see `effectiveWindow`.
     public static let window: TimeInterval = 0.8
+    /// Upper bound of the stretched window, seconds.
+    public static let maxWindow: TimeInterval = 2.0
+    /// The window covers at least this many frame intervals.
+    static let windowFrames: Double = 5
     /// Known-colour votes the winner needs inside the window…
     public static let minVotes: Int = 3
     /// …and its share of the known votes.
@@ -476,17 +481,30 @@ public enum TrafficLightColorVote {
     /// Hard cap of stored observations (frames arrive at ≤ 30 fps).
     static let maxObservations: Int = 48
 
+    /// 0.8 s at normal rates; stretched to ≈ 5 frame intervals (capped at 2 s) when frames arrive slowly, so a
+    /// device that processes 2.5–4 frames per second still collects the votes a stable colour needs.
+    public static func effectiveWindow(_ history: [Observation]) -> TimeInterval {
+        guard history.count >= 2 else { return window }
+        var gaps: [TimeInterval] = []
+        for i in 1..<history.count { gaps.append(history[i].time - history[i - 1].time) }
+        gaps.sort()
+        let median: TimeInterval = gaps[gaps.count / 2]
+        return min(maxWindow, max(window, windowFrames * median))
+    }
+
     /// Drops observations outside the window.
     public static func prune(_ history: inout [Observation], now: TimeInterval) {
-        history.removeAll { now - $0.time > window || $0.time > now + 1e-6 }
+        let w: TimeInterval = effectiveWindow(history)
+        history.removeAll { now - $0.time > w || $0.time > now + 1e-6 }
         if history.count > maxObservations { history.removeFirst(history.count - maxObservations) }
     }
 
     /// Stable colour for the observations inside the window, or nil (not enough readable evidence).
     /// - Parameter previous: the colour reported so far (hysteresis).
     public static func decide(_ history: [Observation], now: TimeInterval, previous: TrafficLightColor?) -> TrafficLightColor? {
+        let w: TimeInterval = effectiveWindow(history)
         var known: [TrafficLightColor] = []
-        for o in history where now - o.time <= window && o.color != .unknown { known.append(o.color) }
+        for o in history where now - o.time <= w && o.color != .unknown { known.append(o.color) }
         guard known.count >= minVotes else { return nil }
         var counts: [TrafficLightColor: Int] = [:]
         for c in known { counts[c, default: 0] += 1 }

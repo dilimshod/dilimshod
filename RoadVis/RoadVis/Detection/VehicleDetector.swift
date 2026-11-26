@@ -161,11 +161,25 @@ final class VehicleDetector {
     /// The model for a frame orientation and quality level: the first candidate that is in the bundle and loads.
     /// Updates `status`. Returns nil when no candidate is usable.
     private func model(landscape: Bool, level: DetectorQualityGovernor.Level) -> LoadedModel? {
-        if let previous = loadedForLandscape, previous != landscape {
+        let orientationChanged: Bool = loadedForLandscape != landscape
+        if orientationChanged, loadedForLandscape != nil {
             // The device was rotated: free the models of the previous orientation.
             loadedModels.removeAll()
         }
         loadedForLandscape = landscape
+        if orientationChanged {
+            // Warm the other quality tier now (a load happens here anyway: start-up or rotation), so a later
+            // full <-> lite switch of the governor finds its model loaded and never loads one on a driving frame.
+            let otherLevel: DetectorQualityGovernor.Level = level == .full ? .lite : .full
+            _ = resolveModel(landscape: landscape, level: otherLevel)
+        }
+        // The requested level is resolved last, so `status` names the model in use.
+        return resolveModel(landscape: landscape, level: level)
+    }
+
+    /// First candidate for the orientation and level that is in the bundle and loads (already loaded ones are
+    /// reused). Updates `status`.
+    private func resolveModel(landscape: Bool, level: DetectorQualityGovernor.Level) -> LoadedModel? {
         for name in Self.candidateModelNames(landscape: landscape, level: level) {
             if let loaded = loadedModels[name] {
                 setStatus(.ready(name))

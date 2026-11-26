@@ -867,8 +867,12 @@ final class NavigationService {
             // Apple (and a retried OSRM) routes ignore the travel direction: prefer the fastest option that starts
             // the way the car is moving, so the new route does not begin with a U-turn the driver is not making.
             let heading: Double? = (location.speedKmh ?? 0) >= 5 ? location.travelDirection : nil
-            let preferred = ReroutePolicy.preferredIndex(polylines: planned.options.map { $0.route.polyline },
-                                                         heading: heading)
+            // The preference is bounded by travel time (options are ordered fastest first): a forward start must not
+            // buy an unbounded detour over the fastest route.
+            let polylines: [[GeoPoint]] = planned.options.map { $0.route.polyline }
+            let travelTimes: [Double] = planned.options.map { $0.expectedTravelTime }
+            let preferred: Int = ReroutePolicy.preferredIndex(polylines: polylines, heading: heading,
+                                                              travelTimes: travelTimes)
             let chosen: RouteOption = planned.options.indices.contains(preferred) ? planned.options[preferred] : first
             applyOptions(planned)
             beginGuidance(on: chosen)
@@ -1087,7 +1091,9 @@ final class NavigationService {
 
     /// True while the latest fix lies on the route line (not merely "not yet confirmed off-route").
     private func isMatchedToRoute(_ current: RouteProgress) -> Bool {
-        !current.isOffRoute && current.crossTrackDistance <= (tracker?.offRouteThreshold ?? 50)
+        // The threshold the tracker used for this fix (widened by a poor GPS accuracy): a fix the tracker itself
+        // matched and advanced the progress with must keep the route edge.
+        !current.isOffRoute && current.crossTrackDistance <= (tracker?.lastMatchThreshold ?? 50)
     }
 
     private func refreshUpcomingFeatures(distanceAlong along: Double) {

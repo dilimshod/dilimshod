@@ -193,6 +193,7 @@ private struct SettingsFollowingDistanceSection: View {
                             .foregroundStyle(.secondary)
                     }
                     Slider(value: $settings.corridorHorizon, in: 0.25...0.65, step: 0.01)
+                        .disabled(settings.autoHorizonEnabled)
                         .accessibilityLabel(L("settings.fd.horizon.a11y"))
                         .accessibilityValue(settingsPercent(settings.corridorHorizon))
                 }

@@ -160,7 +160,11 @@ actor OverpassClient {
                 reasons.append("\(host): " + L("overpass.badAddress"))
                 continue
             }
-            switch try await attempt(url: url, endpoint: endpoint, body: body, timeout: timeout) {
+            // After two timeouts the link itself may be stalled: the remaining servers are still tried (one of them
+            // may be the only healthy one), but with a short timeout.
+            let attemptTimeout: TimeInterval = OverpassFallbackPolicy.attemptTimeout(base: timeout,
+                                                                                   timeoutsSoFar: timeouts)
+            switch try await attempt(url: url, endpoint: endpoint, body: body, timeout: attemptTimeout) {
             case .complete(let elements):
                 store(elements, for: query)
                 return elements
@@ -173,8 +177,6 @@ actor OverpassClient {
             case .timedOut(let reason):
                 reasons.append("\(host): \(reason)")
                 timeouts += 1
-                // One overloaded server timing out is what the fallback list is for; two in a row is a stalled link.
-                if timeouts >= 2 { throw OverpassClientError.allEndpointsFailed(reasons) }
             case .rateLimited(let reason):
                 rateLimitedCount += 1
                 reasons.append("\(host): \(reason)")
