@@ -22,6 +22,7 @@ struct TripInfoPanel: View {
             if isExpanded, let progress = nav.progress {
                 ScrollView(.vertical, showsIndicators: false) {
                     VStack(alignment: .leading, spacing: 10) {
+                        OpenInWazeButton()
                         timelineSection(nav)
                         signalSection(nav, progress: progress)
                         congestionSection(nav)
@@ -118,7 +119,7 @@ struct TripInfoPanel: View {
                 } else if nav.isWaitingAtSignal {
                     chip(symbol: "pause.circle", tint: .secondary, text: L("nav.atSignal"))
                 }
-                let cameras = nav.upcomingEvents().filter { $0.kind == .feature(.speedCamera) }
+                let cameras = nav.upcomingEvents().filter { $0.kind.isSpeedCamera }
                 if let camera = cameras.first {
                     chip(symbol: "camera.fill", tint: .purple,
                          text: RVFormat.appDistance(max(0, camera.distanceAlongRoute - nav.distanceAlong)))

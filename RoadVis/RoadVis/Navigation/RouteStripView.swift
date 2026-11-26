@@ -95,7 +95,7 @@ struct RouteStripView: View {
 
     private var accessibilityText: String {
         let signals = events.filter { $0.kind == .trafficSignal && $0.distanceAlongRoute >= distanceAlong }.count
-        let cameras = events.filter { $0.kind == .feature(.speedCamera) && $0.distanceAlongRoute >= distanceAlong }.count
+        let cameras = events.filter { $0.kind.isSpeedCamera && $0.distanceAlongRoute >= distanceAlong }.count
         return L("strip.a11y", signals, cameras)
     }
 }

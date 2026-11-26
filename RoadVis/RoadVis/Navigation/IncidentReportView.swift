@@ -2,7 +2,8 @@ import SwiftUI
 import UIKit
 
 /// Sheet for reporting a road event (accident, road works, jam …) at the current position or at a map point.
-/// Reports are stored only on this phone (`IncidentStore`) and expire after the lifetime set in Settings.
+/// Reports are stored only on this phone (`IncidentStore`) and expire after the lifetime set in Settings (camera marks
+/// are permanent until deleted).
 struct IncidentReportView: View {
     /// Where the event is; nil = the current GPS position.
     var coordinate: GeoPoint?
@@ -50,6 +51,10 @@ struct IncidentReportView: View {
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
+                    Text(l: "incident.cameraNote")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
                 .padding(16)
             }
@@ -90,6 +95,7 @@ struct IncidentReportView: View {
         case .jam: return .yellow
         case .police: return .blue
         case .pothole: return .brown
+        case .speedCamera: return .purple
         }
     }
 }

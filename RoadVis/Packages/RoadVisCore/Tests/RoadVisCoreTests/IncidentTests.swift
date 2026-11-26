@@ -53,6 +53,9 @@ final class IncidentTests: XCTestCase {
         XCTAssertEqual(RoadIncidentKind.speedCamera.alertDistance, 500)
         XCTAssertEqual(RoadIncidentKind.speedCamera.alertDistance, RouteFeatureKind.speedCamera.alertDistance)
         XCTAssertEqual(RoadIncidentKind.jam.alertDistance, 700)
+        XCTAssertTrue(RouteTimelineKind.incident(.speedCamera).isSpeedCamera)
+        XCTAssertTrue(RouteTimelineKind.feature(.speedCamera).isSpeedCamera)
+        XCTAssertFalse(RouteTimelineKind.incident(.police).isSpeedCamera)
 
         let oldCamera = RoadIncident(kind: .speedCamera, coordinate: GeoPoint(41.31, 69.28), date: now.addingTimeInterval(-90 * 86_400))
         let freshCamera = RoadIncident(kind: .speedCamera, coordinate: GeoPoint(41.32, 69.28), date: now.addingTimeInterval(-60))

@@ -102,7 +102,7 @@ struct NavigatorView: View {
             destinationTitle: nav.destinationName,
             events: nav.state == .idle ? [] : nav.timeline,
             speedLimitSegments: nav.state == .idle ? [] : nav.speedLimitSegments,
-            incidents: app.incidents.incidents,
+            incidents: app.settings.ownMarksEnabled ? app.incidents.incidents : [],
             mapStyle: mapStyle,
             is3D: is3D,
             cameraMode: cameraMode(nav.state),
@@ -217,6 +217,7 @@ struct NavigatorView: View {
                 GlassIconButton(systemName: "exclamationmark.bubble.fill", label: L("nav.report"), size: RVTheme.HUD.button) {
                     incidentTarget = IncidentReportTarget(coordinate: nil)
                 }
+                VoiceMuteButton()
                 GlassIconButton(systemName: "gearshape.fill", label: L("common.settings"), size: RVTheme.HUD.button) {
                     app.showSettings = true
                 }

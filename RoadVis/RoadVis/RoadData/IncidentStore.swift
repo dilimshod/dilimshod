@@ -1,10 +1,10 @@
 import Foundation
 import Observation
 
-/// Road events reported by the user (accident, road works, jam, police, pothole, hazard, closure).
+/// Road events reported by the user (accident, road works, jam, police, pothole, hazard, closure, camera).
 ///
 /// Reports are stored only on this phone (`Application Support/RoadVis/incidents.json`) and expire after
-/// `settings.incidentLifetimeMinutes`. Expired reports are removed on load, on every report and once a minute.
+/// `settings.incidentLifetimeMinutes`; own camera marks (`.speedCamera`) are permanent until deleted. Expired reports are removed on load, on every report and once a minute.
 /// They are the user's own notes, not data from a traffic service.
 @Observable
 @MainActor

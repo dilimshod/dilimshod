@@ -42,6 +42,11 @@ enum NavigatorStyle {
         }
     }
 
+    /// Marker colour of a user-reported incident (own camera marks share the OSM camera colour).
+    static func incidentUIColor(_ kind: RoadIncidentKind) -> UIColor {
+        kind == .speedCamera ? featureUIColor(.speedCamera) : .systemRed
+    }
+
     static func featureGlyphUIColor(_ kind: RouteFeatureKind) -> UIColor {
         kind == .school || kind == .kindergarten ? .black : .white
     }
@@ -53,7 +58,7 @@ enum NavigatorStyle {
         case .lanes: return .systemGray
         case .trafficSignal: return .systemOrange
         case .feature(let feature): return featureUIColor(feature)
-        case .incident: return .systemRed
+        case .incident(let incident): return incidentUIColor(incident)
         case .destination: return .systemRed
         }
     }

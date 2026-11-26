@@ -65,6 +65,7 @@ struct RouteOptionsView: View {
                 .buttonBorderShape(.roundedRectangle(radius: RVTheme.Radius.control))
                 .disabled(nav.selectedRouteOption == nil)
             }
+            OpenInWazeButton(prominent: true)
         }
         .padding(12)
         .rvGlass(cornerRadius: RVTheme.Radius.card)
@@ -158,7 +159,7 @@ struct RouteContentSummary: View {
                                                    (.construction, L("feature.construction")), (.fuel, L("feature.fuel")),
                                                    (.parking, L("routes.sum.parkings"))]
         for (kind, label) in pairs {
-            let n = count { $0 == .feature(kind) }
+            let n = kind == .speedCamera ? count { $0.isSpeedCamera } : count { $0 == .feature(kind) }
             if n > 0 {
                 items.append(Item(symbol: kind.symbolName, count: n, color: NavigatorStyle.eventColor(.feature(kind)),
                                   label: label))

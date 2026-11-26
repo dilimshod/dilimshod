@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// Settings sections of the navigator («Карта», «Маршрутизация», «Пробки»). Its body consists of `Section`s only, so it is
+/// Settings sections of the navigator («Карта», «Маршрутизация», «Пробки», «Источники камер и событий»). Its body consists of `Section`s only, so it is
 /// meant to be placed inside the `Form` of `SettingsView`.
 struct NavigationSettingsSection: View {
     @Environment(AppState.self) private var app
@@ -125,6 +125,8 @@ struct NavigationSettingsSection: View {
         } footer: {
             Text(l: "navset.traffic.footer")
         }
+
+        CameraSourcesSettingsSection()
     }
 
     /// Localized problem description for a non-empty, invalid tile template; nil when empty or valid.
@@ -143,5 +145,45 @@ struct NavigationSettingsSection: View {
             return L("navset.tiles.missing", missing.joined(separator: ", "))
         }
         return nil
+    }
+}
+
+/// «Источники камер и событий»: the «Open in Waze» button, speed cameras from OpenStreetMap and the user's own marks
+/// of cameras and events (with deleting them). Waze / ContraCam data cannot be embedded, hence the hand-off to Waze.
+private struct CameraSourcesSettingsSection: View {
+    @Environment(AppState.self) private var app
+    @State private var confirmsDeletingMarks = false
+
+    var body: some View {
+        @Bindable var settings = app.settings
+        let marks = app.incidents.incidents.count
+        Section {
+            Toggle(L("navset.sources.waze"), isOn: $settings.showWazeButton)
+                .frame(minHeight: 44)
+            Toggle(L("navset.sources.osmCameras"), isOn: $settings.osmCamerasEnabled)
+                .frame(minHeight: 44)
+                .onChange(of: settings.osmCamerasEnabled) { app.navigation.applyDataSourceSettings() }
+            Toggle(L("navset.sources.ownMarks"), isOn: $settings.ownMarksEnabled)
+                .frame(minHeight: 44)
+                .onChange(of: settings.ownMarksEnabled) { app.navigation.applyDataSourceSettings() }
+            if marks > 0 {
+                Button(L("navset.sources.deleteMarks", marks), role: .destructive) {
+                    confirmsDeletingMarks = true
+                }
+                .frame(minHeight: 44)
+                .confirmationDialog(L("navset.sources.deleteMarks.confirm"), isPresented: $confirmsDeletingMarks,
+                                    titleVisibility: .visible) {
+                    Button(L("navset.sources.deleteMarks.action"), role: .destructive) {
+                        app.incidents.removeAll()
+                        app.navigation.refreshIncidents()
+                    }
+                    Button(L("common.cancel"), role: .cancel) {}
+                }
+            }
+        } header: {
+            Text(l: "navset.sources")
+        } footer: {
+            Text(l: "navset.sources.footer")
+        }
     }
 }

@@ -710,7 +710,7 @@ struct NavigationMapView: UIViewRepresentable {
                 let view = (mapView.dequeueReusableAnnotationView(withIdentifier: Self.incidentReuseID) as? MKMarkerAnnotationView)
                     ?? MKMarkerAnnotationView(annotation: incident, reuseIdentifier: Self.incidentReuseID)
                 view.annotation = incident
-                view.markerTintColor = .systemRed
+                view.markerTintColor = NavigatorStyle.incidentUIColor(incident.incident.kind)
                 view.glyphImage = UIImage(systemName: incident.incident.kind.symbolName)
                 view.glyphTintColor = .white
                 view.displayPriority = .defaultHigh
