@@ -36,6 +36,8 @@ final class DriverAssistSettings {
     var pedestrianWarningsEnabled: Bool {
         didSet { defaults.set(pedestrianWarningsEnabled, forKey: Keys.pedestrianWarningsEnabled) }
     }
+    /// Short alert tones (e.g. forward-collision beep). Independent of voice prompts and the 🔊 mute button.
+    var alertSoundsEnabled: Bool { didSet { defaults.set(alertSoundsEnabled, forKey: "rv.alertSounds") } }
     /// Lane-departure warnings only at or above this GPS speed, km/h.
     var laneWarningMinSpeedKmh: Double { didSet { defaults.set(laneWarningMinSpeedKmh, forKey: Keys.laneWarningMinSpeedKmh) } }
 
@@ -55,6 +57,7 @@ final class DriverAssistSettings {
         signAnnouncementsEnabled = bool(Keys.signAnnouncementsEnabled, true)
         trafficLightHintsEnabled = bool(Keys.trafficLightHintsEnabled, true)
         pedestrianWarningsEnabled = bool(Keys.pedestrianWarningsEnabled, true)
+        alertSoundsEnabled = bool("rv.alertSounds", true)
         let speed = defaults.object(forKey: Keys.laneWarningMinSpeedKmh) == nil
             ? 40 : defaults.double(forKey: Keys.laneWarningMinSpeedKmh)
         laneWarningMinSpeedKmh = min(90, max(20, speed))
@@ -64,9 +67,17 @@ final class DriverAssistSettings {
 /// Form sections of the driver assistant, to be embedded in the app's settings `Form`.
 struct DriverAssistSettingsSection: View {
     @Bindable private var settings = DriverAssistSettings.shared
+    @Environment(AppState.self) private var app
 
     var body: some View {
         Section {
+            // Master switch for all spoken prompts (same state as the 🔊 button on the camera screen).
+            Toggle(isOn: Binding(get: { !app.speech.isMuted }, set: { app.speech.isMuted = !$0 })) {
+                Label(L("assist.voicePrompts"), systemImage: "speaker.wave.2.fill")
+            }
+            Toggle(isOn: $settings.alertSoundsEnabled) {
+                Label(L("assist.alertSounds"), systemImage: "bell.fill")
+            }
             Toggle(isOn: $settings.voiceCoachingEnabled) {
                 Label(L("assist.voice"), systemImage: "person.wave.2.fill")
             }

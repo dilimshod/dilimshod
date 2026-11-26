@@ -130,6 +130,7 @@ final class DistanceWarningController {
     }
 
     private func playAlertTone() {
+        guard DriverAssistSettings.shared.alertSoundsEnabled else { return }
         #if canImport(AudioToolbox)
         AudioServicesPlaySystemSound(SystemSoundID(Self.alertSoundID))
         #endif
