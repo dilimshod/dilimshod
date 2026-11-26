@@ -45,8 +45,13 @@ enum SpeechVoiceKind: Equatable {
 @MainActor
 final class SpeechService: NSObject {
     private(set) var isSpeaking = false
-    /// Global mute for all speech output.
-    var isMuted = false
+    /// Global mute for all speech output (voice prompts and the driver coach). Persisted; toggled by the 🔊 button.
+    var isMuted = UserDefaults.standard.bool(forKey: "rv.voiceMuted") {
+        didSet {
+            UserDefaults.standard.set(isMuted, forKey: "rv.voiceMuted")
+            if isMuted { stop() }
+        }
+    }
 
     /// Language of the spoken prompts. Mirrors the app language: reading it returns
     /// `LocalizationManager.shared.language`, setting it changes the app language too (UI and voice stay in sync).

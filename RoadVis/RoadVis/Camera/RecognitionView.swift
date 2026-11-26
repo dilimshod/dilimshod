@@ -120,6 +120,7 @@ struct RecognitionView: View {
                     GlassIconButton(systemName: "gearshape.fill", label: L("common.settings"), size: RVTheme.HUD.button) {
                         app.showSettings = true
                     }
+                    VoiceMuteButton()
                     StatusDotButton(pipeline: pipeline) {
                         showStatus = true
                     }
