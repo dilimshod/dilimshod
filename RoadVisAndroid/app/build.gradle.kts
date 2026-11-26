@@ -55,4 +55,5 @@ dependencies {
     implementation(libs.osmdroid)
     implementation(libs.coroutines.android)
     implementation(libs.play.services.location)
+    testImplementation(libs.junit)
 }
