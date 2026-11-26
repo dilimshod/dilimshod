@@ -141,14 +141,6 @@ object RouteFeatureExtractor {
         }
     }
 
-    private class Candidate(
-        val element: OSMElement,
-        val kind: RouteFeatureKind,
-        val coordinate: GeoPoint,
-        val along: Double,
-        val offset: Double,
-        val name: String?,
-    )
 
     /**
      * Projects elements onto the route, drops those farther than [maxOffset] (schools / kindergartens: 150 m),
@@ -158,11 +150,19 @@ object RouteFeatureExtractor {
      * @return features sorted by `distanceAlongRoute`.
      */
     fun extract(elements: List<OSMElement>, route: List<GeoPoint>, cumulative: List<Double>? = null,
-                maxOffset: Double = 40.0): List<RouteFeature> {
+                maxOffset: Double = 40.0): List<RouteFeature> =
+        features(candidates(elements, route, cumulative, maxOffset))
+
+    /**
+     * Projection phase of [extract]: one candidate per relevant element within its maximum offset of the route.
+     * Progressive loaders project each chunk's new elements once, append them and re-cluster with [features].
+     */
+    fun candidates(elements: List<OSMElement>, route: List<GeoPoint>, cumulative: List<Double>? = null,
+                   maxOffset: Double = 40.0): List<RouteFeatureCandidate> {
         if (route.isEmpty()) return emptyList()
         val cum = if (cumulative != null && cumulative.size == route.size) cumulative else Geo.cumulativeDistances(route)
 
-        val candidates = ArrayList<Candidate>()
+        val candidates = ArrayList<RouteFeatureCandidate>()
         val seen = HashSet<String>()
         for (element in elements) {
             if (seen.contains(element.key)) continue
@@ -187,16 +187,20 @@ object RouteFeatureExtractor {
             val point = bestPoint ?: continue
             if (projection.distanceFromLine > kind.maxOffset(maxOffset)) continue
             val name = element.tags["name:ru"] ?: element.tags["name"]
-            candidates.add(Candidate(element, kind, point, projection.distanceAlong, projection.distanceFromLine,
+            candidates.add(RouteFeatureCandidate(element, kind, point, projection.distanceAlong, projection.distanceFromLine,
                 if (name?.isEmpty() == true) null else name))
         }
+        return candidates
+    }
 
+    /** Clustering phase of [extract]: merges same-kind candidates; features sorted along the route. */
+    fun features(candidates: List<RouteFeatureCandidate>): List<RouteFeature> {
         val features = ArrayList<RouteFeature>()
         val byKind = candidates.groupBy { it.kind }
         for (kind in RouteFeatureKind.entries) {
             val list = byKind[kind] ?: continue
-            val sorted = list.sortedWith(compareBy<Candidate> { it.along }.thenBy { it.element.id })
-            val clusters = ArrayList<MutableList<Candidate>>()
+            val sorted = list.sortedWith(compareBy<RouteFeatureCandidate> { it.along }.thenBy { it.element.id })
+            val clusters = ArrayList<MutableList<RouteFeatureCandidate>>()
             for (candidate in sorted) {
                 val last = clusters.lastOrNull()
                 val anchor = last?.firstOrNull()
@@ -291,3 +295,13 @@ object RouteFeatureExtractor {
         return best
     }
 }
+
+/** An OSM element projected onto a route (intermediate result of `RouteFeatureExtractor`). */
+class RouteFeatureCandidate(
+    val element: OSMElement,
+    val kind: RouteFeatureKind,
+    val coordinate: GeoPoint,
+    val along: Double,
+    val offset: Double,
+    val name: String?,
+)

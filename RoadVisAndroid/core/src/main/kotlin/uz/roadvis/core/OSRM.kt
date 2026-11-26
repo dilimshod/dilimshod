@@ -40,13 +40,18 @@ object OSRM {
      * `GET {endpoint}/route/v1/driving/{lon},{lat};{lon},{lat}?overview=full&geometries=polyline6&steps=true&alternatives=true&annotations=true`.
      * Returns null when the endpoint is not an http(s) URL with a host or a coordinate is invalid.
      */
-    fun routeURL(endpoint: String, origin: GeoPoint, destination: GeoPoint, alternatives: Boolean = true): String? {
+    fun routeURL(endpoint: String, origin: GeoPoint, destination: GeoPoint, alternatives: Boolean = true,
+                 heading: Double? = null): String? {
         if (!origin.isValid || !destination.isValid) return null
         var base = endpoint.swiftTrim()
         while (base.endsWith("/")) base = base.dropLast(1)
         val coordinates = listOf(origin, destination)
             .joinToString(";") { String.format(Locale.US, "%.6f,%.6f", it.longitude, it.latitude) }
-        val query = "overview=full&geometries=polyline6&steps=true&alternatives=$alternatives&annotations=true"
+        var query = "overview=full&geometries=polyline6&steps=true&alternatives=$alternatives&annotations=true"
+        // Travel direction at the origin (±45°) so the route does not start backwards; the destination stays empty.
+        if (heading != null && heading.isFinite()) {
+            query += "&bearings=${Math.round(Geo.normalizeDegrees(heading)).toInt() % 360},45;"
+        }
         val url = "$base/route/v1/driving/$coordinates?$query"
         val uri = try { URI(url) } catch (e: Exception) { return null }
         val scheme = uri.scheme?.lowercase() ?: return null

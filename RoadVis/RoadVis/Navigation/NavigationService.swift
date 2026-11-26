@@ -178,6 +178,12 @@ final class NavigationService {
     // MARK: Tuning
 
     static let minimumRerouteInterval: TimeInterval = 15
+    /// How long "route ready" / "rerouting" is protected from being cut off by a non-urgent maneuver prompt.
+    static let statusPhraseProtection: TimeInterval = 4
+    /// A maneuver this close (metres) interrupts even a protected status phrase.
+    static let statusPhraseUrgentDistance: Double = 60
+    /// Fixes less accurate than this (metres) never count towards off-route or start a reroute.
+    static let maxRerouteAccuracy: Double = 65
     static let incidentRefreshInterval: TimeInterval = 30
     /// An own camera mark this close (along the route) to an OSM camera is the same camera: announced once.
     static let cameraMergeDistance: Double = 100
@@ -222,6 +228,13 @@ final class NavigationService {
     @ObservationIgnored private var incidentLoopTask: Task<Void, Never>?
     @ObservationIgnored private var rerouteTask: Task<Void, Never>?
     @ObservationIgnored private var lastRerouteAt: Date?
+    /// Consecutive failed reroutes of the current off-route episode (backs the retry interval off: 15, 30, 60, 120 s).
+    @ObservationIgnored private var rerouteFailureCount = 0
+    /// "Rerouting" was already spoken in the current off-route episode.
+    @ObservationIgnored private var rerouteAnnounced = false
+    /// Until then a status phrase ("route ready", "rerouting") is not interrupted by a non-urgent maneuver prompt.
+    @ObservationIgnored private var statusPhraseProtectedUntil: Date?
+    @ObservationIgnored private var planTask: Task<Void, Never>?
     @ObservationIgnored private var speedSamples: [(date: Date, kmh: Double)] = []
     @ObservationIgnored private var announcedFeatureIDs: Set<String> = []
     @ObservationIgnored private var announcedIncidentIDs: Set<UUID> = []
@@ -272,6 +285,16 @@ final class NavigationService {
     var routeLength: Double { contextCumulative.last ?? selectedRouteOption?.distance ?? 0 }
 
     // MARK: - Planning
+
+    /// Starts planning to `item`, cancelling a planning run that is still in flight (its routing requests are
+    /// cancelled or dropped from the client queues instead of delaying the new ones).
+    func startPlanning(to item: MKMapItem) {
+        planTask?.cancel()
+        planGeneration &+= 1
+        planTask = Task { [weak self] in
+            await self?.planRoutes(to: item)
+        }
+    }
 
     /// Plans routes to `item` with the configured engine policy and shows them as a preview.
     /// Any running guidance is stopped first. On failure the state returns to `.idle` with `errorMessage` set.
@@ -354,7 +377,8 @@ final class NavigationService {
         async let appleOutcome = runApple(item, enabled: wanted.contains(.apple))
         async let valhallaOutcome = runValhalla(origin: origin, target: target, heading: heading,
                                                 enabled: wanted.contains(.valhalla))
-        async let osrmOutcome = runOSRM(origin: origin, target: target, enabled: wanted.contains(.osrm))
+        async let osrmOutcome = runOSRM(origin: origin, target: target, heading: heading,
+                                        enabled: wanted.contains(.osrm))
         let outcomes: [(RouteSource, EngineOutcome)] = [(.apple, await appleOutcome),
                                                          (.valhalla, await valhallaOutcome),
                                                          (.osrm, await osrmOutcome)]
@@ -439,11 +463,22 @@ final class NavigationService {
         }
     }
 
-    private func runOSRM(origin: GeoPoint?, target: GeoPoint, enabled: Bool) async -> EngineOutcome {
+    private func runOSRM(origin: GeoPoint?, target: GeoPoint, heading: Double?, enabled: Bool) async -> EngineOutcome {
         guard enabled else { return .skipped(L("engine.disabled")) }
         guard let origin, origin.isValid else { return .failed(NavigationError.noLocation) }
         do {
-            let routes = try await osrm.routes(from: origin, to: target)
+            let routes: [NavRoute]
+            if let heading {
+                do {
+                    routes = try await osrm.routes(from: origin, to: target, heading: heading)
+                } catch let error as OSRMClientError {
+                    // OSRM answers "NoSegment" when no road matches the bearing: retry once without it.
+                    guard case .server = error else { throw error }
+                    routes = try await osrm.routes(from: origin, to: target, heading: nil)
+                }
+            } else {
+                routes = try await osrm.routes(from: origin, to: target, heading: nil)
+            }
             // OSRM's public car profile has no toll / highway avoidance: drop routes that violate the preference.
             let filtered = routes.filter { route in
                 !(settings.avoidTolls && route.hasTolls) && !(settings.avoidHighways && route.hasHighways)
@@ -595,11 +630,14 @@ final class NavigationService {
         }
     }
 
-    /// Valhalla trace_attributes for the selected option first, then for the other options (comparison cards).
+    /// Valhalla trace_attributes for the selected option first, then, in the preview only, for the other options
+    /// (comparison cards).
     private func loadAttributes(selectedID: Int, generation: Int) async {
         let order = [selectedID] + routeOptions.map(\.id).filter { $0 != selectedID }
         for id in order {
             guard generation == contextGeneration, !Task.isCancelled else { return }
+            // Alternatives only feed the comparison cards, which exist only in the preview.
+            if id != selectedID, state != .previewing { return }
             guard optionEdges[id] == nil, let option = routeOptions.first(where: { $0.id == id }) else { continue }
             let polyline = option.route.polyline
             let length = Geo.polylineLength(polyline)
@@ -619,8 +657,9 @@ final class NavigationService {
                     routeEdges = edges
                     edgeSignalDistances = Valhalla.signalDistances(in: edges)
                     isLoadingRouteAttributes = false
-                    if let progress {
-                        currentEdge = Valhalla.attributes(at: progress.distanceAlong, in: edges)
+                    if let progress, state == .navigating {
+                        currentEdge = isMatchedToRoute(progress)
+                            ? Valhalla.attributes(at: progress.distanceAlong, in: edges) : nil
                     }
                     rebuildTimeline()
                 }
@@ -722,6 +761,15 @@ final class NavigationService {
         let cumulative = contextCumulative.count == polyline.count ? contextCumulative : nil
         let items = incidents.along(route: polyline, cumulative: cumulative)
         if items != incidentsOnRoute {
+            if state == .navigating {
+                // A mark the driver just made at the current position is not "ahead": never voice it back.
+                let known = Set(incidentsOnRoute.map(\.id))
+                for item in items where !known.contains(item.id)
+                    && ReroutePolicy.isIncidentAtOrBehind(distanceAlongRoute: item.distanceAlongRoute,
+                                                          carDistanceAlong: distanceAlong) {
+                    announcedIncidentIDs.insert(item.id)
+                }
+            }
             incidentsOnRoute = items
             rebuildTimeline()
         }
@@ -753,6 +801,9 @@ final class NavigationService {
         speedSamples = []
         averageSpeedKmh = nil
         lastRerouteAt = nil
+        rerouteFailureCount = 0
+        rerouteAnnounced = false
+        statusPhraseProtectedUntil = nil
         errorMessage = nil
         state = .navigating
         if contextOptionID != option.id {
@@ -766,6 +817,7 @@ final class NavigationService {
             let text = L("voice.routeReady", Self.spokenDistance(option.distance), Self.spokenDuration(option.expectedTravelTime))
             // Clips: only "Route ready" (distance and time are on screen); the system voice reads the full text.
             speech.speak(VoicePhrase.fixed("route_ready", text: text), priority: .high)
+            statusPhraseProtectedUntil = Date().addingTimeInterval(Self.statusPhraseProtection)
         }
         if let fix = location.location {
             handleFix(fix)
@@ -774,6 +826,8 @@ final class NavigationService {
 
     /// Ends guidance / preview and resets everything to `.idle` (no destination).
     func stopNavigation() {
+        planTask?.cancel()
+        planTask = nil
         planGeneration &+= 1
         endActiveGuidance()
         cancelRouteTasks()
@@ -784,10 +838,11 @@ final class NavigationService {
     }
 
     /// Reroutes from the current position to the same destination with the same engine policy
-    /// (used when off-route; calls less than 15 s after the previous reroute are ignored).
+    /// (used when off-route; calls less than 15 s after the previous reroute are ignored — 30 / 60 / 120 s after
+    /// consecutive failures).
     func recalculate() async {
         guard state == .navigating, let destination, !isRecalculating else { return }
-        if let last = lastRerouteAt, Date().timeIntervalSince(last) < Self.minimumRerouteInterval { return }
+        if let last = lastRerouteAt, Date().timeIntervalSince(last) < currentRerouteInterval { return }
         lastRerouteAt = Date()
         recalculationGeneration &+= 1
         let token = recalculationGeneration
@@ -797,15 +852,26 @@ final class NavigationService {
             if token == recalculationGeneration { isRecalculating = false }
         }
         let generation = planGeneration
-        if settings.voiceGuidanceEnabled {
+        // Spoken once per off-route episode: retries after a failure stay silent.
+        if settings.voiceGuidanceEnabled, !rerouteAnnounced {
+            rerouteAnnounced = true
             speech.speak(VoicePhrase.fixed("rerouting", text: L("voice.rerouting")), priority: .high)
+            statusPhraseProtectedUntil = Date().addingTimeInterval(Self.statusPhraseProtection)
         }
         do {
             let planned = try await computeRoutes(to: destination)
             guard generation == planGeneration, token == recalculationGeneration, state == .navigating,
                   let first = planned.options.first else { return }
+            rerouteFailureCount = 0
+            rerouteAnnounced = false
+            // Apple (and a retried OSRM) routes ignore the travel direction: prefer the fastest option that starts
+            // the way the car is moving, so the new route does not begin with a U-turn the driver is not making.
+            let heading: Double? = (location.speedKmh ?? 0) >= 5 ? location.travelDirection : nil
+            let preferred = ReroutePolicy.preferredIndex(polylines: planned.options.map { $0.route.polyline },
+                                                         heading: heading)
+            let chosen: RouteOption = planned.options.indices.contains(preferred) ? planned.options[preferred] : first
             applyOptions(planned)
-            beginGuidance(on: first)
+            beginGuidance(on: chosen)
             // Clears the old route's features / signals synchronously before the first fix on the new route.
             reloadRouteContext()
             if let fix = location.location {
@@ -814,8 +880,17 @@ final class NavigationService {
         } catch {
             guard generation == planGeneration, token == recalculationGeneration, state == .navigating,
                   !(error is CancellationError) else { return }
-            errorMessage = L("route.rerouteFailed") + " " + Self.describe(error)
+            rerouteFailureCount += 1
+            // Only the first failure of the episode shows the banner, so a dismissed banner does not come back.
+            if rerouteFailureCount == 1 {
+                errorMessage = L("route.rerouteFailed") + " " + Self.describe(error)
+            }
         }
+    }
+
+    /// Minimum pause before the next automatic reroute (backs off while reroutes keep failing).
+    private var currentRerouteInterval: TimeInterval {
+        ReroutePolicy.retryInterval(base: Self.minimumRerouteInterval, failures: rerouteFailureCount)
     }
 
     /// Clears the error banner.
@@ -858,6 +933,9 @@ final class NavigationService {
         rerouteGeneration &+= 1
         recalculationGeneration &+= 1
         isRecalculating = false
+        rerouteFailureCount = 0
+        rerouteAnnounced = false
+        statusPhraseProtectedUntil = nil
         tracker = nil
         activeOptionID = nil
     }
@@ -920,6 +998,8 @@ final class NavigationService {
         incidentLoopTask?.cancel()
         incidentLoopTask = nil
         congestion = nil
+        // The road card falls back to the live OSM road (and its limit) once the route is finished.
+        currentEdge = nil
         isWaitingAtSignal = false
         upcomingFeatures = []
         if settings.voiceGuidanceEnabled {
@@ -937,7 +1017,13 @@ final class NavigationService {
         recordSpeed(speed, at: fix.timestamp)
 
         let accuracy: Double? = fix.horizontalAccuracy >= 0 ? fix.horizontalAccuracy : nil
-        let current = tracker.update(position: position, horizontalAccuracy: accuracy)
+        // Poor fixes (underpass, just resumed from background) still advance the progress when they match the route
+        // but never count towards off-route — same limit as `RoadInfoService.maxUsableAccuracy`.
+        let reliable = fix.horizontalAccuracy >= 0 && fix.horizontalAccuracy <= Self.maxRerouteAccuracy
+        // The GPS course is only meaningful while moving.
+        let course: Double? = (fix.course >= 0 && (speed ?? 0) >= 10) ? fix.course : nil
+        let current = tracker.update(position: position, horizontalAccuracy: accuracy,
+                                     countsTowardsOffRoute: reliable, course: course)
         progress = current
         if current.hasArrived {
             arrive()
@@ -946,8 +1032,13 @@ final class NavigationService {
         syncRouteSignals()
         updateRoadContext(current, speedKmh: speed)
         if current.isOffRoute {
-            requestReroute()
+            // The reroute waits for a trustworthy fix so the new route starts from the real position.
+            if reliable { requestReroute() }
             return
+        }
+        if rerouteFailureCount != 0 || rerouteAnnounced {
+            rerouteFailureCount = 0
+            rerouteAnnounced = false
         }
         announceManeuver(current, speedKmh: speed)
         announceHazard(current, speedKmh: speed)
@@ -970,7 +1061,9 @@ final class NavigationService {
 
     private func updateRoadContext(_ current: RouteProgress, speedKmh: Double?) {
         let along = current.distanceAlong
-        let edge = Valhalla.attributes(at: along, in: routeEdges)
+        // The route edge (speed limit, road class) applies only while the fix is matched to the route: off it the
+        // progress is frozen at the last matched point and the road card must use the live OSM road instead.
+        let edge = isMatchedToRoute(current) ? Valhalla.attributes(at: along, in: routeEdges) : nil
         if edge != currentEdge { currentEdge = edge }
         refreshUpcomingFeatures(distanceAlong: along)
 
@@ -990,6 +1083,11 @@ final class NavigationService {
         }
     }
 
+    /// True while the latest fix lies on the route line (not merely "not yet confirmed off-route").
+    private func isMatchedToRoute(_ current: RouteProgress) -> Bool {
+        !current.isOffRoute && current.crossTrackDistance <= (tracker?.offRouteThreshold ?? 50)
+    }
+
     private func refreshUpcomingFeatures(distanceAlong along: Double) {
         let ahead = visibleRouteFeatures.filter {
             let distance = $0.distanceAlongRoute - along
@@ -1004,7 +1102,7 @@ final class NavigationService {
     /// after guidance was restarted must not clear the newer task).
     private func requestReroute() {
         guard !isRecalculating, rerouteTask == nil else { return }
-        if let last = lastRerouteAt, Date().timeIntervalSince(last) < Self.minimumRerouteInterval { return }
+        if let last = lastRerouteAt, Date().timeIntervalSince(last) < currentRerouteInterval { return }
         rerouteGeneration &+= 1
         let generation = rerouteGeneration
         rerouteTask = Task { [weak self] in
@@ -1028,7 +1126,11 @@ final class NavigationService {
                                                         distance: distance, speedKmh: speedKmh)
                 : NavigationPhrases.maneuverPhrase(maneuver: current.nextManeuver, instruction: instruction,
                                                    distance: distance, text: prompt)
-            speech.speak(phrase, priority: distance <= 150 ? .high : .normal)
+            // Right after "route ready" / "rerouting" a maneuver prompt queues behind the status phrase instead of
+            // cutting it off; only an imminent maneuver still interrupts.
+            let shielded = statusPhraseProtectedUntil.map { Date() < $0 } ?? false
+            let urgent = distance <= Self.statusPhraseUrgentDistance
+            speech.speak(phrase, priority: (distance <= 150 && (!shielded || urgent)) ? .high : .normal)
         }
     }
 

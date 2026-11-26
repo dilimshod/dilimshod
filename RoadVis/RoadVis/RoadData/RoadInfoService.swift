@@ -380,9 +380,11 @@ final class RoadInfoService {
         guard isCurrentRouteLoad(generation) else { return }
         let queryRadius = Self.baseRouteQueryRadius + plan.plan.maxDeviation
 
-        var collected: [OSMElement] = []
+        // Each element is projected onto the route once; only the cheap clustering is redone per chunk.
+        var candidates: [RouteFeatureCandidate] = []
         var seenKeys = Set<String>()
         var failedChunks = 0
+        var consecutiveUnreachable = 0
         var lastFailure: Error?
         let chunks = plan.plan.chunks
 
@@ -396,17 +398,23 @@ final class RoadInfoService {
             do {
                 let elements = try await runRouteQuery(query)
                 guard isCurrentRouteLoad(generation) else { return }
-                let before = collected.count
+                consecutiveUnreachable = 0
+                var fresh: [OSMElement] = []
                 for element in elements where seenKeys.insert(element.key).inserted {
-                    collected.append(element)
+                    fresh.append(element)
                 }
-                if collected.count != before {
-                    let snapshot = collected
-                    let features = await Task.detached(priority: .userInitiated) {
-                        RouteFeatureExtractor.extract(elements: snapshot, route: plan.route, cumulative: plan.cumulative)
+                if !fresh.isEmpty {
+                    let existing: [RouteFeatureCandidate] = candidates
+                    let newElements: [OSMElement] = fresh
+                    let result: ([RouteFeatureCandidate], [RouteFeature]) = await Task.detached(priority: .userInitiated) {
+                        () -> ([RouteFeatureCandidate], [RouteFeature]) in
+                        let all: [RouteFeatureCandidate] = existing + RouteFeatureExtractor.candidates(
+                            elements: newElements, route: plan.route, cumulative: plan.cumulative)
+                        return (all, RouteFeatureExtractor.features(from: all))
                     }.value
                     guard isCurrentRouteLoad(generation) else { return }
-                    setRouteFeatures(features)
+                    candidates = result.0
+                    setRouteFeatures(result.1)
                 }
             } catch {
                 if error is CancellationError || !isCurrentRouteLoad(generation) { return }
@@ -419,6 +427,17 @@ final class RoadInfoService {
                 if case OverpassClientError.noValidEndpoint = error {
                     failedChunks += chunks.count - index - 1
                     break
+                }
+                // Two chunks in a row with no reachable server (stalled link): stop instead of holding the shared
+                // Overpass queue for every remaining chunk; the rest counts as failed.
+                if case OverpassClientError.allEndpointsFailed = error {
+                    consecutiveUnreachable += 1
+                    if consecutiveUnreachable >= 2 {
+                        failedChunks += chunks.count - index - 1
+                        break
+                    }
+                } else {
+                    consecutiveUnreachable = 0
                 }
             }
         }

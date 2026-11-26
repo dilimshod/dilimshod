@@ -164,18 +164,18 @@ public enum RouteFeatureExtractor {
     /// - Returns: features sorted by `distanceAlongRoute`.
     public static func extract(elements: [OSMElement], route: [GeoPoint], cumulative: [Double]? = nil,
                                maxOffset: Double = 40) -> [RouteFeature] {
+        features(from: candidates(elements: elements, route: route, cumulative: cumulative, maxOffset: maxOffset))
+    }
+
+    /// Projection phase of `extract`: one candidate per relevant element within its maximum offset of the route
+    /// (elements with a repeated key are taken once). Progressive loaders project each chunk's new elements once,
+    /// append the result to the earlier candidates and re-cluster with `features(from:)`.
+    public static func candidates(elements: [OSMElement], route: [GeoPoint], cumulative: [Double]? = nil,
+                                  maxOffset: Double = 40) -> [RouteFeatureCandidate] {
         guard !route.isEmpty else { return [] }
         let cum = (cumulative?.count == route.count) ? cumulative! : Geo.cumulativeDistances(route)
 
-        struct Candidate {
-            let element: OSMElement
-            let kind: RouteFeatureKind
-            let coordinate: GeoPoint
-            let along: Double
-            let offset: Double
-            let name: String?
-        }
-
+        typealias Candidate = RouteFeatureCandidate
         var candidates: [Candidate] = []
         var seen = Set<String>()
         for element in elements {
@@ -202,7 +202,12 @@ public enum RouteFeatureExtractor {
                                         along: projection.distanceAlong, offset: projection.distanceFromLine,
                                         name: name?.isEmpty == true ? nil : name))
         }
+        return candidates
+    }
 
+    /// Clustering phase of `extract`: merges same-kind candidates and returns the features sorted along the route.
+    public static func features(from candidates: [RouteFeatureCandidate]) -> [RouteFeature] {
+        typealias Candidate = RouteFeatureCandidate
         var features: [RouteFeature] = []
         let byKind = Dictionary(grouping: candidates, by: \.kind)
         for kind in RouteFeatureKind.allCases {
@@ -298,5 +303,27 @@ public enum RouteFeatureExtractor {
             }
         }
         return best
+    }
+}
+
+/// An OSM element projected onto a route (intermediate result of `RouteFeatureExtractor`).
+public struct RouteFeatureCandidate: Sendable {
+    public let element: OSMElement
+    public let kind: RouteFeatureKind
+    public let coordinate: GeoPoint
+    /// Distance along the route of the element's closest point.
+    public let along: Double
+    /// Distance from the route line, metres.
+    public let offset: Double
+    public let name: String?
+
+    public init(element: OSMElement, kind: RouteFeatureKind, coordinate: GeoPoint, along: Double, offset: Double,
+                name: String?) {
+        self.element = element
+        self.kind = kind
+        self.coordinate = coordinate
+        self.along = along
+        self.offset = offset
+        self.name = name
     }
 }

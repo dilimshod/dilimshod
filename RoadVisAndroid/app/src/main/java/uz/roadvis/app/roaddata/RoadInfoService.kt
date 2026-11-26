@@ -23,6 +23,7 @@ import uz.roadvis.core.OverpassQuery
 import uz.roadvis.core.RoadMatcher
 import uz.roadvis.core.RoadSegmentInfo
 import uz.roadvis.core.RouteFeature
+import uz.roadvis.core.RouteFeatureCandidate
 import uz.roadvis.core.RouteFeatureExtractor
 import uz.roadvis.core.RouteQueryPlanner
 import uz.roadvis.core.SignalLocation
@@ -284,9 +285,11 @@ class RoadInfoService(
         }
         if (generation != routeGeneration) return
         val queryRadius = BASE_ROUTE_QUERY_RADIUS + plan.maxDeviation
-        val collected = ArrayList<OSMElement>()
+        // Each element is projected onto the route once; only the cheap clustering is redone per chunk.
+        var candidates: List<RouteFeatureCandidate> = emptyList()
         val seen = HashSet<String>()
         var failed = 0
+        var consecutiveUnreachable = 0
         var lastFailure: Throwable? = null
         val chunks = plan.chunks
         for ((index, chunk) in chunks.withIndex()) {
@@ -296,14 +299,16 @@ class RoadInfoService(
             try {
                 val elements = runRouteQuery(query)
                 if (generation != routeGeneration) return
-                val before = collected.size
-                for (e in elements) if (seen.add(e.key)) collected.add(e)
-                if (collected.size != before) {
-                    val snapshot = collected.toList()
-                    val features = withContext(Dispatchers.Default) {
-                        RouteFeatureExtractor.extract(snapshot, route, cumulative)
+                consecutiveUnreachable = 0
+                val fresh = elements.filter { seen.add(it.key) }
+                if (fresh.isNotEmpty()) {
+                    val existing = candidates
+                    val (all, features) = withContext(Dispatchers.Default) {
+                        val merged = existing + RouteFeatureExtractor.candidates(fresh, route, cumulative)
+                        merged to RouteFeatureExtractor.features(merged)
                     }
                     if (generation != routeGeneration) return
+                    candidates = all
                     publishRouteFeatures(features)
                 }
             } catch (e: CancellationException) {
@@ -315,6 +320,17 @@ class RoadInfoService(
                 if (e is OverpassClientError.Offline || e is OverpassClientError.NoValidEndpoint) {
                     failed += chunks.size - index - 1
                     break
+                }
+                // Two chunks in a row with no reachable server (stalled link): stop instead of holding the shared
+                // Overpass queue for every remaining chunk; the rest counts as failed.
+                if (e is OverpassClientError.AllEndpointsFailed) {
+                    consecutiveUnreachable += 1
+                    if (consecutiveUnreachable >= 2) {
+                        failed += chunks.size - index - 1
+                        break
+                    }
+                } else {
+                    consecutiveUnreachable = 0
                 }
             }
         }

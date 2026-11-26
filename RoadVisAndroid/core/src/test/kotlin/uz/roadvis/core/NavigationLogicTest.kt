@@ -84,6 +84,8 @@ class NavigationLogicTest {
     @Test fun routeOffRouteAndArrival() {
         val (pts, steps) = makeRoute()
         val tracker = RouteProgressTracker(pts, steps, expectedTravelTime = 300.0, offRouteConfirmations = 3)
+        // On the route first: a tracker that never matched the route only reports off-route when moving away.
+        assertFalse(tracker.update(pts[5]).isOffRoute)
         val far = Geo.destination(pts[5], 180.0, 200.0)
         var last = tracker.update(far)
         assertFalse(last.isOffRoute)

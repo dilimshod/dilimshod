@@ -79,6 +79,8 @@ final class NavigationLogicTests: XCTestCase {
     func testRouteOffRouteAndArrival() {
         let (pts, steps) = makeRoute()
         let tracker = RouteProgressTracker(polyline: pts, steps: steps, expectedTravelTime: 300, offRouteConfirmations: 3)
+        // On the route first: a tracker that never matched the route only reports off-route when moving away.
+        XCTAssertFalse(tracker.update(position: pts[5]).isOffRoute)
         let far = Geo.destination(from: pts[5], bearing: 180, distance: 200)
         var last = tracker.update(position: far)
         XCTAssertFalse(last.isOffRoute)

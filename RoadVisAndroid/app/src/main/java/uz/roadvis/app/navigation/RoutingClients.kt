@@ -28,7 +28,10 @@ class RequestSpacer(private val spacingMs: Long = 1_100) {
 }
 
 /** Localized routing-engine error (iOS `ValhallaClientError` / `OSRMClientError`). */
-class RoutingException(message: String) : Exception(message)
+open class RoutingException(message: String) : Exception(message)
+
+/** OSRM answered with a routing error code (e.g. `NoSegment` when no road matches the requested bearing). */
+class OsrmServerException(message: String) : RoutingException(message)
 
 /** Valhalla `/route` (with alternates) and `/trace_attributes` (port of iOS `ValhallaClient`). */
 class ValhallaClient(endpoint: String) {
@@ -114,8 +117,9 @@ class OsrmClient(endpoint: String = OSRM.defaultEndpoint) {
     @Volatile var endpoint: String = endpoint
     private val spacer = RequestSpacer()
 
-    suspend fun routes(from: GeoPoint, to: GeoPoint, lang: RVLang): List<NavRoute> {
-        val url = OSRM.routeURL(endpoint, from, to, true) ?: throw RoutingException(L("navErr.osrm"))
+    /** [heading] (travel direction, degrees) makes the route start the way the car is moving. */
+    suspend fun routes(from: GeoPoint, to: GeoPoint, lang: RVLang, heading: Double? = null): List<NavRoute> {
+        val url = OSRM.routeURL(endpoint, from, to, true, heading) ?: throw RoutingException(L("navErr.osrm"))
         val response = spacer.run {
             try {
                 Http.get(url, timeoutMs = 25_000)
@@ -128,7 +132,7 @@ class OsrmClient(endpoint: String = OSRM.defaultEndpoint) {
             OSRM.parseRoutes(response.text, lang).ifEmpty { throw OSRMError("NoRoute", "no routes") }
         } catch (e: OSRMError) {
             // The core describes OSRM codes in Russian only; show the raw code/message for other languages.
-            throw RoutingException(if (lang == RVLang.RU) e.russianDescription
+            throw OsrmServerException(if (lang == RVLang.RU) e.russianDescription
             else "OSRM ${e.code ?: ""}: ${e.message}".trim())
         } catch (e: Exception) {
             if (response.status != 200) throw RoutingException("OSRM: HTTP ${response.status}")

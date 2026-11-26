@@ -68,6 +68,8 @@ actor OverpassClient {
         case complete([OSMElement])
         case partial([OSMElement], remark: String)
         case failed(String)
+        /// The request timed out (a second timeout in the same run means the link is stalled, not the server).
+        case timedOut(String)
         case rateLimited(String)
         case rejected(String)
     }
@@ -149,6 +151,7 @@ actor OverpassClient {
         var rejection: String?
         var emptyPartial = false
         var rateLimitedCount = 0
+        var timeouts = 0
         for endpoint in available {
             try Task.checkCancellation()
             let host = Self.hostName(endpoint)
@@ -167,6 +170,11 @@ actor OverpassClient {
                 reasons.append("\(host): \(Self.shortened(remark))")
             case .failed(let reason):
                 reasons.append("\(host): \(reason)")
+            case .timedOut(let reason):
+                reasons.append("\(host): \(reason)")
+                timeouts += 1
+                // One overloaded server timing out is what the fallback list is for; two in a row is a stalled link.
+                if timeouts >= 2 { throw OverpassClientError.allEndpointsFailed(reasons) }
             case .rateLimited(let reason):
                 rateLimitedCount += 1
                 reasons.append("\(host): \(reason)")
@@ -207,7 +215,7 @@ actor OverpassClient {
             case .notConnectedToInternet, .dataNotAllowed, .internationalRoamingOff:
                 throw OverpassClientError.offline
             case .timedOut:
-                return .failed(L("net.timedOut"))
+                return .timedOut(L("net.timedOut"))
             case .cannotFindHost, .dnsLookupFailed:
                 return .failed(L("net.hostNotFound"))
             case .cannotConnectToHost, .networkConnectionLost:

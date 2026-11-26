@@ -96,6 +96,7 @@ class OverpassClient(primaryEndpoint: String, fallbacks: List<String>) {
         var emptyPartial = false
         var rateLimitedCount = 0
         var offlineCount = 0
+        var timeouts = 0
         for (endpoint in available) {
             val host = hostName(endpoint)
             val valid = try {
@@ -107,6 +108,14 @@ class OverpassClient(primaryEndpoint: String, fallbacks: List<String>) {
                 attempt(endpoint, body, timeoutMs)
             } catch (e: Http.NetworkException) {
                 if (e.kind == Http.NetworkException.Kind.HOST_NOT_FOUND) offlineCount += 1
+                if (e.kind == Http.NetworkException.Kind.TIMEOUT) {
+                    timeouts += 1
+                    // One overloaded server timing out is what the fallback list is for; two is a stalled link.
+                    if (timeouts >= 2) {
+                        reasons.add("$host: " + (e.message ?: L("net.timedOut")))
+                        throw OverpassClientError.AllEndpointsFailed(reasons)
+                    }
+                }
                 Outcome.Failed(e.message ?: L("net.loadError"))
             }
             when (outcome) {

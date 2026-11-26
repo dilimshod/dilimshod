@@ -42,6 +42,7 @@ import uz.roadvis.core.RouteFacts
 import uz.roadvis.core.RouteFeature
 import uz.roadvis.core.RouteFeatureKind
 import uz.roadvis.core.RouteProgress
+import uz.roadvis.core.ReroutePolicy
 import uz.roadvis.core.RouteProgressTracker
 import uz.roadvis.core.RouteSource
 import uz.roadvis.core.RouteTimeline
@@ -109,6 +110,8 @@ class NavigationController(val app: AppState, context: Context) {
 
     companion object {
         const val MIN_REROUTE_INTERVAL_MS = 15_000L
+        /** Fixes less accurate than this (metres) never count towards off-route or start a reroute. */
+        const val MAX_REROUTE_ACCURACY = 65f
         const val INCIDENT_REFRESH_MS = 30_000L
         const val CAMERA_MERGE_DISTANCE = 100.0
         const val FEATURE_LOOKAHEAD = 2_000.0
@@ -186,6 +189,12 @@ class NavigationController(val app: AppState, context: Context) {
     private var incidentLoopJob: Job? = null
     private var rerouteJob: Job? = null
     private var lastRerouteAt: Long? = null
+    /** Consecutive failed reroutes of the current off-route episode (retry interval 15, 30, 60, 120 s). */
+    private var rerouteFailureCount = 0
+    /** "Rerouting" was already spoken in the current off-route episode. */
+    private var rerouteAnnounced = false
+    private val currentRerouteIntervalMs: Long
+        get() = (ReroutePolicy.retryInterval(MIN_REROUTE_INTERVAL_MS / 1000.0, rerouteFailureCount) * 1000).toLong()
     private val speedSamples = ArrayDeque<Pair<Long, Double>>()
     private val announcedFeatureIDs = HashSet<String>()
     private val announcedIncidentIDs = HashSet<java.util.UUID>()
@@ -317,7 +326,13 @@ class NavigationController(val app: AppState, context: Context) {
                 origin == null || !origin.isValid -> Outcome.Failed(L("navErr.noLocation"))
                 else -> try {
                     // OSRM's public car profile has no toll / highway avoidance: drop routes violating the preference.
-                    val filtered = osrm.routes(origin, target, lang).filter { !(avoidTolls && it.hasTolls) && !(avoidHighways && it.hasHighways) }
+                    val found = if (heading != null) {
+                        // OSRM answers "NoSegment" when no road matches the bearing: retry once without it.
+                        try { osrm.routes(origin, target, lang, heading) }
+                        catch (e: CancellationException) { throw e }
+                        catch (e: OsrmServerException) { osrm.routes(origin, target, lang, null) }
+                    } else osrm.routes(origin, target, lang, null)
+                    val filtered = found.filter { !(avoidTolls && it.hasTolls) && !(avoidHighways && it.hasHighways) }
                     if (filtered.isEmpty()) Outcome.Skipped(L("engine.osrmAvoid")) else Outcome.Routes(filtered)
                 } catch (e: CancellationException) { throw e } catch (e: Exception) { Outcome.Failed(e.message ?: L("navErr.osrm")) }
             }
@@ -417,11 +432,13 @@ class NavigationController(val app: AppState, context: Context) {
         roadInfo.loadRouteFeatures(polyline)
     }
 
-    /** Valhalla trace_attributes for the selected option first, then the others (comparison cards). */
+    /** Valhalla trace_attributes for the selected option first, then, in the preview only, the others (comparison cards). */
     private suspend fun loadAttributes(selectedId: Int, generation: Int) {
         val order = listOf(selectedId) + routeOptions.map { it.id }.filter { it != selectedId }
         for (id in order) {
             if (generation != contextGeneration) return
+            // Alternatives only feed the comparison cards, which exist only in the preview.
+            if (id != selectedId && state != State.PREVIEWING) return
             if (optionEdges[id] != null) continue
             val option = routeOptions.firstOrNull { it.id == id } ?: continue
             val polyline = option.route.polyline
@@ -442,7 +459,7 @@ class NavigationController(val app: AppState, context: Context) {
                     routeEdges = edges
                     edgeSignalDistances = Valhalla.signalDistances(edges)
                     isLoadingRouteAttributes = false
-                    progress?.let { currentEdge = Valhalla.attributes(it.distanceAlong, edges) }
+                    progress?.let { if (state == State.NAVIGATING) currentEdge = if (isMatchedToRoute(it)) Valhalla.attributes(it.distanceAlong, edges) else null }
                     rebuildTimeline()
                     syncBus()
                 }
@@ -523,7 +540,19 @@ class NavigationController(val app: AppState, context: Context) {
         val polyline = option.route.polyline
         val cumulative = if (contextCumulative.size == polyline.size) contextCumulative else null
         val items = incidents.along(polyline, cumulative)
-        if (items != incidentsOnRoute) { incidentsOnRoute = items; rebuildTimeline() }
+        if (items != incidentsOnRoute) {
+            if (state == State.NAVIGATING) {
+                // A mark the driver just made at the current position is not "ahead": never voice it back.
+                val known = incidentsOnRoute.map { it.id }.toSet()
+                for (item in items) {
+                    if (item.id !in known && ReroutePolicy.isIncidentAtOrBehind(item.distanceAlongRoute, distanceAlong)) {
+                        announcedIncidentIDs.add(item.id)
+                    }
+                }
+            }
+            incidentsOnRoute = items
+            rebuildTimeline()
+        }
     }
 
     private fun startIncidentLoop() {
@@ -552,6 +581,8 @@ class NavigationController(val app: AppState, context: Context) {
         speedSamples.clear()
         averageSpeedKmh = null
         lastRerouteAt = null
+        rerouteFailureCount = 0
+        rerouteAnnounced = false
         errorMessage = null
         state = State.NAVIGATING
         if (contextOptionID != option.id) reloadRouteContext()
@@ -601,6 +632,8 @@ class NavigationController(val app: AppState, context: Context) {
         rerouteJob?.cancel(); rerouteJob = null
         recalculationGeneration += 1
         isRecalculating = false
+        rerouteFailureCount = 0
+        rerouteAnnounced = false
         tracker = null
         activeOptionID = null
         if (notifyDriveEnd) app.endDrive(arrived = false)
@@ -651,6 +684,8 @@ class NavigationController(val app: AppState, context: Context) {
         rerouteJob?.cancel(); rerouteJob = null
         incidentLoopJob?.cancel(); incidentLoopJob = null
         congestion = null
+        // The road card falls back to the live OSM road (and its limit) once the route is finished.
+        currentEdge = null
         isWaitingAtSignal = false
         upcomingFeatures = emptyList()
         if (settings.voiceGuidanceEnabled) {
@@ -666,29 +701,40 @@ class NavigationController(val app: AppState, context: Context) {
         val dest = destination ?: return
         if (state != State.NAVIGATING || isRecalculating) return
         val now = System.currentTimeMillis()
-        lastRerouteAt?.let { if (now - it < MIN_REROUTE_INTERVAL_MS) return }
+        lastRerouteAt?.let { if (now - it < currentRerouteIntervalMs) return }
         lastRerouteAt = now
         recalculationGeneration += 1
         val token = recalculationGeneration
         isRecalculating = true
         val generation = planGeneration
-        if (settings.voiceGuidanceEnabled) {
+        // Spoken once per off-route episode: retries after a failure stay silent.
+        if (settings.voiceGuidanceEnabled && !rerouteAnnounced) {
+            rerouteAnnounced = true
             app.speech.speak(VoicePhrase.fixed("rerouting", L("voice.rerouting")), SpeechPriority.HIGH)
         }
         try {
             val planned = computeRoutes(dest)
             val first = planned.options.firstOrNull()
             if (generation != planGeneration || token != recalculationGeneration || state != State.NAVIGATING || first == null) return
+            rerouteFailureCount = 0
+            rerouteAnnounced = false
+            // A retried OSRM route ignores the travel direction: prefer the fastest option that starts the way the
+            // car is moving, so the new route does not begin with a U-turn the driver is not making.
+            val heading = if ((location.speedKmh ?: 0.0) >= 5) location.travelDirection else null
+            val chosen = planned.options.getOrNull(
+                ReroutePolicy.preferredIndex(planned.options.map { it.route.polyline }, heading)) ?: first
             applyOptions(planned)
-            beginGuidance(first)
+            beginGuidance(chosen)
             reloadRouteContext()
-            publishActiveRoute(first)
+            publishActiveRoute(chosen)
             location.location?.let { handleFix(it) }
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
             if (generation != planGeneration || token != recalculationGeneration || state != State.NAVIGATING) return
-            errorMessage = L("route.rerouteFailed") + " " + (e.message ?: "")
+            rerouteFailureCount += 1
+            // Only the first failure of the episode shows the banner, so a dismissed banner does not come back.
+            if (rerouteFailureCount == 1) errorMessage = L("route.rerouteFailed") + " " + (e.message ?: "")
         } finally {
             if (token == recalculationGeneration) isRecalculating = false
         }
@@ -696,7 +742,7 @@ class NavigationController(val app: AppState, context: Context) {
 
     private fun requestReroute() {
         if (isRecalculating || rerouteJob != null) return
-        lastRerouteAt?.let { if (System.currentTimeMillis() - it < MIN_REROUTE_INTERVAL_MS) return }
+        lastRerouteAt?.let { if (System.currentTimeMillis() - it < currentRerouteIntervalMs) return }
         rerouteJob = scope.launch {
             try { recalculate() } finally { rerouteJob = null }
         }
@@ -712,12 +758,24 @@ class NavigationController(val app: AppState, context: Context) {
         val speed = if (fix.hasSpeed() && fix.speed >= 0) fix.speed * 3.6 else null
         recordSpeed(speed, fix.time)
         val accuracy = if (fix.hasAccuracy()) fix.accuracy.toDouble() else null
-        val current = tracker.update(position, accuracy)
+        // Poor fixes still advance the progress when they match the route but never count towards off-route.
+        val reliable = fix.hasAccuracy() && fix.accuracy <= MAX_REROUTE_ACCURACY
+        // The GPS course is only meaningful while moving.
+        val course = if (fix.hasBearing() && (speed ?: 0.0) >= 10) fix.bearing.toDouble() else null
+        val current = tracker.update(position, accuracy, countsTowardsOffRoute = reliable, course = course)
         progress = current
         if (current.hasArrived) { arrive(); return }
         syncRouteSignals()
         updateRoadContext(current, speed)
-        if (current.isOffRoute) { requestReroute(); return }
+        if (current.isOffRoute) {
+            // The reroute waits for a trustworthy fix so the new route starts from the real position.
+            if (reliable) requestReroute()
+            return
+        }
+        if (rerouteFailureCount != 0 || rerouteAnnounced) {
+            rerouteFailureCount = 0
+            rerouteAnnounced = false
+        }
         announceManeuver(current, speed)
         announceHazard(current, speed)
         announceIncident(current)
@@ -735,7 +793,9 @@ class NavigationController(val app: AppState, context: Context) {
 
     private fun updateRoadContext(current: RouteProgress, speedKmh: Double?) {
         val along = current.distanceAlong
-        val edge = Valhalla.attributes(along, routeEdges)
+        // The route edge (speed limit) applies only while the fix is matched to the route: off it the progress is
+        // frozen at the last matched point and the live OSM road must be used instead.
+        val edge = if (isMatchedToRoute(current)) Valhalla.attributes(along, routeEdges) else null
         if (edge != currentEdge) currentEdge = edge
         refreshUpcomingFeatures(along)
         var next = signals.upcoming(along, 1).firstOrNull()?.distanceAhead
@@ -745,6 +805,10 @@ class NavigationController(val app: AppState, context: Context) {
         congestion = if (current.isOffRoute) null
         else CongestionEstimator.level(averageSpeedKmh, currentEdge?.typicalSpeedKmh, isWaitingAtSignal)
     }
+
+    /** True while the latest fix lies on the route line (not merely "not yet confirmed off-route"). */
+    private fun isMatchedToRoute(current: RouteProgress): Boolean =
+        !current.isOffRoute && current.crossTrackDistance <= (tracker?.offRouteThreshold ?: 50.0)
 
     private fun refreshUpcomingFeatures(along: Double) {
         val ahead = visibleRouteFeatures.filter {

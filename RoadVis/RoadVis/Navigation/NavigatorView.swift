@@ -499,9 +499,7 @@ struct NavigatorView: View {
             nav.placeSearch.addRecent(item)
         }
         showSearch = false
-        Task {
-            await nav.planRoutes(to: item)
-        }
+        nav.startPlanning(to: item)
     }
 
     /// Writes the height of the view it is attached to (as a background) into `height`.

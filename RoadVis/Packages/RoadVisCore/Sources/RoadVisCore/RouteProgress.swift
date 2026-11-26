@@ -91,6 +91,10 @@ public final class RouteProgressTracker {
     private var lastSegment = 0
     private var lastAlong = 0.0
     private var offRouteCount = 0
+    /// False until a fix has matched this route (start in a yard / parking lot, or a reroute that still begins at the
+    /// road-snapped point): until then only moving AWAY from the line counts as off-route.
+    private var hasBeenOnRoute = false
+    private var minOffRouteDistance = Double.infinity
 
     public var totalDistance: Double { cumulative.last ?? 0 }
 
@@ -116,7 +120,12 @@ public final class RouteProgressTracker {
         self.maneuverDistances = starts
     }
 
-    public func update(position: GeoPoint, horizontalAccuracy: Double? = nil) -> RouteProgress {
+    /// - Parameter countsTowardsOffRoute: pass false for a poor fix (low GPS accuracy): it still advances the progress
+    ///   when it matches the route, but a far-off position neither counts towards nor clears the off-route state.
+    /// - Parameter course: optional GPS course (degrees clockwise from north, only meaningful while moving): route
+    ///   segments running against it by more than 100° are not matched while a continuous candidate exists.
+    public func update(position: GeoPoint, horizontalAccuracy: Double? = nil,
+                       countsTowardsOffRoute: Bool = true, course: Double? = nil) -> RouteProgress {
         let total = totalDistance
         let threshold = offRouteThreshold + min(50, max(0, (horizontalAccuracy ?? 0) - 10))
 
@@ -125,13 +134,42 @@ public final class RouteProgressTracker {
         if polyline.count >= 2 {
             let lo = max(0, lastSegment - 5)
             let hi = min(polyline.count - 1, lastSegment + 80)
-            if lo < hi {
-                projection = Geo.project(position, onto: polyline, cumulative: cumulative, segmentRange: lo..<hi)
+            // 1) Continuity first: the nearest candidate that keeps the progress within [-30 m, +150 m] of the last
+            //    match. Prevents snapping to the return leg of an out-and-back section (U-turn at a median break).
+            let minAlong = lastAlong - 30
+            let maxAlong = lastAlong + 150
+            var i = lo
+            while i < hi {
+                if cumulative[i] > maxAlong { break }
+                if cumulative[i + 1] >= minAlong,
+                   let candidate = Geo.project(position, onto: polyline, cumulative: cumulative,
+                                               segmentRange: i..<(i + 1)),
+                   candidate.distanceAlong >= minAlong, candidate.distanceAlong <= maxAlong,
+                   candidate.distanceFromLine <= threshold,
+                   course.map({ Geo.angleDifference(candidate.segmentBearing, $0) <= 100 }) ?? true {
+                    if let best = projection {
+                        // A candidate much further along (the opposite carriageway just before the U-turn) must be
+                        // clearly nearer, not merely within GPS noise of the current one.
+                        let jumpsAhead = candidate.distanceAlong - best.distanceAlong > 40
+                        if candidate.distanceFromLine + (jumpsAhead ? 10 : 0) < best.distanceFromLine {
+                            projection = candidate
+                        }
+                    } else {
+                        projection = candidate
+                    }
+                }
+                i += 1
             }
-            if projection == nil || projection!.distanceFromLine > threshold {
-                if let full = Geo.project(position, onto: polyline, cumulative: cumulative),
-                   full.distanceFromLine < (projection?.distanceFromLine ?? .infinity) {
-                    projection = full
+            // 2) No continuous candidate on the route: the wide window, then the whole route.
+            if projection == nil {
+                if lo < hi {
+                    projection = Geo.project(position, onto: polyline, cumulative: cumulative, segmentRange: lo..<hi)
+                }
+                if projection == nil || projection!.distanceFromLine > threshold {
+                    if let full = Geo.project(position, onto: polyline, cumulative: cumulative),
+                       full.distanceFromLine < (projection?.distanceFromLine ?? .infinity) {
+                        projection = full
+                    }
                 }
             }
         } else {
@@ -147,8 +185,22 @@ public final class RouteProgressTracker {
         }
 
         if proj.distanceFromLine > threshold {
-            offRouteCount += 1
+            if !countsTowardsOffRoute {
+                // Poor fix: the progress holds and the off-route state stays as it was.
+            } else if hasBeenOnRoute {
+                offRouteCount += 1
+            } else {
+                // Not on this route yet: off-route only when the car moves away from the line, not while it stands
+                // still or approaches (otherwise every reroute would start off-route again — a reroute storm).
+                minOffRouteDistance = min(minOffRouteDistance, proj.distanceFromLine)
+                if proj.distanceFromLine > minOffRouteDistance + offRouteThreshold {
+                    offRouteCount += 1
+                } else {
+                    offRouteCount = 0
+                }
+            }
         } else {
+            hasBeenOnRoute = true
             offRouteCount = 0
             lastSegment = proj.segmentIndex
             lastAlong = proj.distanceAlong
@@ -251,5 +303,45 @@ public struct VoicePromptScheduler: Sendable {
     static func lowercasingFirst(_ s: String) -> String {
         guard let first = s.first else { return s }
         return first.lowercased() + s.dropFirst()
+    }
+}
+
+/// Reroute policy helpers (pure logic shared by the navigation service and its tests).
+public enum ReroutePolicy {
+    /// Bearing (degrees clockwise from north) from the first point of `polyline` to its first point at least
+    /// `minDistance` metres away; nil for a polyline shorter than that.
+    public static func initialBearing(of polyline: [GeoPoint], minDistance: Double = 15) -> Double? {
+        guard let first = polyline.first else { return nil }
+        for point in polyline.dropFirst() where Geo.distance(first, point) >= minDistance {
+            return Geo.bearing(from: first, to: point)
+        }
+        return nil
+    }
+
+    /// Index of the route to follow after a reroute: the first one (routes are ordered fastest first) that starts
+    /// within `tolerance` degrees of the travel `heading`, so the new route does not begin with a U-turn the driver
+    /// is not making. Falls back to 0 when the heading is unknown or no route matches.
+    public static func preferredIndex(polylines: [[GeoPoint]], heading: Double?, tolerance: Double = 90) -> Int {
+        guard let heading, heading.isFinite else { return 0 }
+        for (index, polyline) in polylines.enumerated() {
+            if let bearing = initialBearing(of: polyline), Geo.angleDifference(bearing, heading) <= tolerance {
+                return index
+            }
+        }
+        return 0
+    }
+
+    /// Minimum pause before the next automatic reroute: `base` doubled per consecutive failure, capped at
+    /// `maximum` (15, 30, 60, 120 s for the defaults).
+    public static func retryInterval(base: Double = 15, failures: Int, maximum: Double = 120) -> Double {
+        let exponent = Double(min(max(failures, 0), 3))
+        return min(base * pow(2, exponent), maximum)
+    }
+
+    /// True for a newly listed incident that lies at or behind the car (within `margin` metres ahead): a mark the
+    /// driver just made at the current position must not be voiced back as "ahead".
+    public static func isIncidentAtOrBehind(distanceAlongRoute: Double, carDistanceAlong: Double,
+                                            margin: Double = 30) -> Bool {
+        distanceAlongRoute <= carDistanceAlong + margin
     }
 }

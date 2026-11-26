@@ -38,15 +38,21 @@ public enum OSRM {
 
     /// `GET {endpoint}/route/v1/driving/{lon},{lat};{lon},{lat}?overview=full&geometries=polyline6&steps=true&alternatives=true&annotations=true`.
     /// Returns nil when the endpoint is not an http(s) URL with a host or a coordinate is invalid.
+    /// `heading` (optional) adds `bearings={deg},45;` for the origin.
     public static func routeURL(endpoint: String, from origin: GeoPoint, to destination: GeoPoint,
-                                alternatives: Bool = true) -> URL? {
+                                alternatives: Bool = true, heading: Double? = nil) -> URL? {
         guard origin.isValid, destination.isValid else { return nil }
         var base = endpoint.trimmingCharacters(in: .whitespacesAndNewlines)
         while base.hasSuffix("/") { base.removeLast() }
         let coordinates = [origin, destination]
             .map { String(format: "%.6f,%.6f", $0.longitude, $0.latitude) }
             .joined(separator: ";")
-        let query = "overview=full&geometries=polyline6&steps=true&alternatives=\(alternatives)&annotations=true"
+        var query = "overview=full&geometries=polyline6&steps=true&alternatives=\(alternatives)&annotations=true"
+        // Travel direction at the origin (degrees clockwise from north, ±45°) so the route does not start backwards;
+        // the destination's entry stays empty.
+        if let heading, heading.isFinite {
+            query += "&bearings=\(Int(Geo.normalizeDegrees(heading).rounded()) % 360),45;"
+        }
         guard let url = URL(string: "\(base)/route/v1/driving/\(coordinates)?\(query)"),
               let scheme = url.scheme?.lowercased(), scheme == "https" || scheme == "http",
               url.host != nil else { return nil }

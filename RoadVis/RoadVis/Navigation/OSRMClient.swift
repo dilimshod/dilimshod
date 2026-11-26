@@ -67,8 +67,9 @@ actor OSRMClient {
     }
 
     /// Car routes (main + alternatives) with Russian instructions built from the OSRM maneuvers.
-    func routes(from: GeoPoint, to: GeoPoint) async throws -> [NavRoute] {
-        guard let url = OSRM.routeURL(endpoint: endpoint, from: from, to: to) else {
+    /// `heading` (travel direction, degrees) makes the route start the way the car is moving.
+    func routes(from: GeoPoint, to: GeoPoint, heading: Double? = nil) async throws -> [NavRoute] {
+        guard let url = OSRM.routeURL(endpoint: endpoint, from: from, to: to, heading: heading) else {
             throw OSRMClientError.invalidEndpoint(endpoint)
         }
         let previous = queueTail
