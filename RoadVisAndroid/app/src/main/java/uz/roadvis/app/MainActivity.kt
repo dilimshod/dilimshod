@@ -37,6 +37,13 @@ class MainActivity : ComponentActivity() {
         setContent { RootScreen(state) }
     }
 
+    override fun onStop() {
+        super.onStop()
+        // Save battery: keep GPS in the background only while navigating or recording a trip.
+        val state = (application as RoadVisApp).state
+        if (!state.bus.isNavigating && !state.bus.isRecordingTrip) state.location.stop()
+    }
+
     override fun onResume() {
         super.onResume()
         (application as RoadVisApp).state.start()
