@@ -15,7 +15,10 @@ import SwiftUI
 /// tap-to-open detail card still has the estimates of any track. Percentages are detector *confidence*.
 ///
 /// A pedestrian on / about to enter the roadway (`pedestrianHazards`) gets a thicker glowing bracket in red (danger)
-/// or orange (caution) that pulses gently.
+/// or orange (caution) that pulses gently. Persons the colour heuristic takes for a traffic police officer (blue, shield
+/// badge, "≈ YHXX xodimi") or a road worker (orange, hammer, "≈ Yo‘l ishchisi") get their own colour and label — they
+/// are never drawn as a pedestrian hazard. Pedestrians on the sidewalk are not in `tracks` at all (filtered by the
+/// worker with the roadway zone).
 ///
 /// This view never takes touches; `TrackHitLayer` provides the tappable areas.
 struct DetectionOverlayView: View {
@@ -87,6 +90,7 @@ struct DetectionOverlayView: View {
     /// Single-line label text: "Легковой · Chevrolet" (confident make only); traffic lights: "Светофор · Красный".
     static func compactTitleText(for track: TrackedObject) -> String {
         if track.kind == .trafficLight { return titleText(for: track) }
+        if let role = track.roadStaffRole { return role.approximateName }
         if let make = confidentMakeText(for: track) {
             return track.kind.localizedName + " · " + make
         }
@@ -111,6 +115,9 @@ struct DetectionOverlayView: View {
 
     /// "Легковой · Chevrolet"; traffic lights: "Светофор · Красный".
     static func titleText(for track: TrackedObject) -> String {
+        if let role = track.roadStaffRole {
+            return role.approximateName + " (" + L("role.heuristic") + ")"
+        }
         if track.kind == .trafficLight {
             if let color = track.lightColor, color != .unknown {
                 return "\(track.kind.localizedName) · \(color.localizedName)"
@@ -215,10 +222,11 @@ private struct TrackBoxView: View {
     }
 
     /// Highlighted like the lead vehicle (thicker glowing bracket, stronger fill).
-    private var isEmphasized: Bool { isLead || hazard != nil }
+    private var isEmphasized: Bool { isLead || hazard != nil || track.roadStaffRole != nil }
 
     private var color: Color {
         if let hazard { return RVTheme.pedestrianColor(hazard) }
+        if let roleColor = RVTheme.roleColor(track.roadStaffRole) { return roleColor }
         return isLead && leadStatus != .unknown ? RVTheme.statusColor(leadStatus) : RVTheme.kindColor(track.kind)
     }
 
@@ -306,7 +314,7 @@ private struct TrackLabelChip: View {
             if track.kind == .trafficLight {
                 TrafficLightDotView(color: track.lightColor ?? .unknown, size: 8)
             } else {
-                Image(systemName: isLead ? "car.rear.fill" : track.kind.symbolName)
+                Image(systemName: isLead ? "car.rear.fill" : (track.roadStaffRole?.symbolName ?? track.kind.symbolName))
                     .font(.system(size: 9, weight: .bold))
                     .foregroundStyle(color)
             }

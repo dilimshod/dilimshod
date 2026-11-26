@@ -196,6 +196,10 @@ private struct LiveDetectionLayer: View {
                 EgoCorridorOverlay(corridor: pipeline.egoCorridor, imageSize: pipeline.frameSize,
                                    tint: status == .unknown ? .white : RVTheme.statusColor(status))
             }
+            if DriverAssistSettings.shared.showRoadwayBoundary, let zone = pipeline.roadwayZone {
+                RoadwayBoundaryOverlay(zone: zone, imageSize: pipeline.frameSize)
+                    .transition(.opacity)
+            }
             if DriverAssistSettings.shared.showLaneOverlay, let lane = pipeline.laneEstimate {
                 LaneOverlay(estimate: lane, imageSize: pipeline.frameSize, departureSide: pipeline.laneDepartureSide)
             }
@@ -258,21 +262,27 @@ private struct TrackDetailLayer: View {
     }
 }
 
-/// Pedestrian warning capsule bound to the pipeline (separate view: it re-renders with every processed frame).
+/// Pedestrian warning capsule bound to the pipeline (separate view: it re-renders with every processed frame). Without a
+/// pedestrian hazard an officer / road worker on the roadway gets its own blue / orange capsule.
 private struct PedestrianBannerSlot: View {
     let pipeline: RecognitionPipeline
 
     var body: some View {
         let hazard = pipeline.topPedestrianHazard
+        let staff = hazard == nil ? pipeline.topRoadStaff : nil
         ZStack {
             if let hazard {
                 PedestrianHazardBanner(hazard: hazard)
+                    .transition(.scale(scale: 0.85).combined(with: .opacity))
+            } else if let staff {
+                RoadStaffBanner(sighting: staff)
                     .transition(.scale(scale: 0.85).combined(with: .opacity))
             }
         }
         .frame(maxWidth: 360)
         .animation(RVTheme.snappy, value: hazard?.level)
         .animation(RVTheme.snappy, value: hazard == nil)
+        .animation(RVTheme.snappy, value: staff?.role)
     }
 }
 

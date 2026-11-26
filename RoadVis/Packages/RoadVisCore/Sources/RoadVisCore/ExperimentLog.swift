@@ -15,6 +15,8 @@ public struct ExperimentRecord: Codable, Hashable, Sendable {
     public var distanceMeters: Double?
     public var estimatedSpeedKmh: Double?
     public var lightColor: TrafficLightColor?
+    /// Person role (colour heuristic ≈): pedestrian / trafficOfficer / roadWorker; nil for other classes / undecided.
+    public var personRole: PersonRole?
     public var latitude: Double?
     public var longitude: Double?
     public var ownSpeedKmh: Double?
@@ -29,7 +31,8 @@ public struct ExperimentRecord: Codable, Hashable, Sendable {
                 confidence: Double, box: BBox, make: String? = nil, makeConfidence: Double? = nil,
                 distanceMeters: Double? = nil, estimatedSpeedKmh: Double? = nil,
                 lightColor: TrafficLightColor? = nil, latitude: Double? = nil, longitude: Double? = nil,
-                ownSpeedKmh: Double? = nil, isConfirmed: Bool = true, trackHits: Int? = nil, isLead: Bool = false) {
+                ownSpeedKmh: Double? = nil, isConfirmed: Bool = true, trackHits: Int? = nil, isLead: Bool = false,
+                personRole: PersonRole? = nil) {
         self.timestamp = timestamp
         self.frameIndex = frameIndex
         self.trackID = trackID
@@ -48,6 +51,7 @@ public struct ExperimentRecord: Codable, Hashable, Sendable {
         self.isConfirmed = isConfirmed
         self.trackHits = trackHits
         self.isLead = isLead
+        self.personRole = personRole
     }
 }
 
@@ -109,7 +113,7 @@ public final class ExperimentLog {
     }
 
     public func detectionsCSV() -> String {
-        var lines = ["timestamp,frame,track_id,class,label,confidence,x,y,width,height,make,make_confidence,distance_m_est,speed_kmh_est,light_color,lat,lon,own_speed_kmh,confirmed,track_hits,is_lead"]
+        var lines = ["timestamp,frame,track_id,class,label,confidence,x,y,width,height,make,make_confidence,distance_m_est,speed_kmh_est,light_color,person_role_est,lat,lon,own_speed_kmh,confirmed,track_hits,is_lead"]
         lines.reserveCapacity(records.count + 1)
         let f = ISO8601DateFormatter()
         f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
@@ -127,6 +131,7 @@ public final class ExperimentLog {
                 Self.num(r.distanceMeters, 1),
                 Self.num(r.estimatedSpeedKmh, 1),
                 r.lightColor?.rawValue ?? "",
+                r.personRole?.rawValue ?? "",
                 Self.num(r.latitude, 6), Self.num(r.longitude, 6),
                 Self.num(r.ownSpeedKmh, 1),
                 r.isConfirmed ? "1" : "0",

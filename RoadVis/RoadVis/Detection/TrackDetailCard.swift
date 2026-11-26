@@ -14,7 +14,7 @@ struct TrackDetailCard: View {
     /// Card size used to place it next to its box.
     static let estimatedSize = CGSize(width: 236, height: 180)
 
-    private var kindColor: Color { RVTheme.kindColor(track.kind) }
+    private var kindColor: Color { RVTheme.roleColor(track.roadStaffRole) ?? RVTheme.kindColor(track.kind) }
     private var leadColor: Color { RVTheme.statusColor(assessment?.status ?? .unknown) }
 
     var body: some View {
@@ -91,7 +91,7 @@ struct TrackDetailCard: View {
                 if track.kind == .trafficLight {
                     TrafficLightDotView(color: track.lightColor ?? .unknown, size: 14)
                 } else {
-                    Image(systemName: track.kind.symbolName)
+                    Image(systemName: track.roadStaffRole?.symbolName ?? track.kind.symbolName)
                         .font(.system(size: 13, weight: .bold))
                         .foregroundStyle(kindColor)
                 }
@@ -100,9 +100,13 @@ struct TrackDetailCard: View {
             .background(kindColor.opacity(0.18), in: Circle())
 
             VStack(alignment: .leading, spacing: 2) {
-                Text(track.kind.localizedName)
+                Text(verbatim: track.roadStaffRole?.approximateName ?? track.kind.localizedName)
                     .font(RVTheme.font(15, weight: .bold))
-                if let make = track.make, let confidence = track.makeConfidence {
+                if track.roadStaffRole != nil {
+                    Text(l: "role.heuristic")
+                        .font(RVTheme.font(11, weight: .medium))
+                        .foregroundStyle(.white.opacity(0.6))
+                } else if let make = track.make, let confidence = track.makeConfidence {
                     Text(verbatim: "\(make) · " + L("track.makeConfidence", Int((min(max(confidence, 0), 1) * 100).rounded())))
                         .font(RVTheme.font(11, weight: .semibold))
                         .foregroundStyle(.white.opacity(0.8))

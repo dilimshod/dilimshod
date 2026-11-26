@@ -62,6 +62,10 @@ final class RecognitionWorker: @unchecked Sendable {
         var laneEstimate: LaneEstimate?
         /// Pedestrians on / about to enter the roadway, most urgent first (empty when the feature is off).
         var pedestrianHazards: [PedestrianHazard]
+        /// Traffic officers / road workers (colour heuristic) on or at the roadway, nearest first (empty when off).
+        var roadStaff: [RoadStaffSighting]
+        /// Smoothed roadway zone that separates the roadway from the sidewalk (nil while persons are not tracked).
+        var roadwayZone: RoadwayZone?
         /// Own-lane corridor the lead was picked from (centre follows a confident lane estimate).
         var corridor: EgoCorridor
     }
@@ -103,11 +107,13 @@ final class RecognitionWorker: @unchecked Sendable {
     // MARK: Queue-confined
     private let detector = VehicleDetector()
     private let makeClassifier = MakeClassifier()
-    private let tracker = ObjectTracker()
+    /// Persons are counted only once they are on / at the roadway (`PersonSceneResult.relevantIDs`).
+    private let tracker = ObjectTracker(config: ObjectTracker.Config(deferredCountKinds: [.person]))
     private let estimator = MonocularSpeedEstimator()
     private let leadTracker = LeadVehicleTracker()
     private let laneDetector = LaneDetector()
     private let pedestrianDetector = PedestrianHazardDetector()
+    private let roadwayEstimator = RoadwayZoneEstimator()
     private var lastLaneUptime: TimeInterval = -.infinity
     private var laneEstimate: LaneEstimate?
     /// Smoothed corridor centre X (follows `LaneEstimate.laneCenterX` when the lane estimate is confident).
@@ -187,6 +193,7 @@ final class RecognitionWorker: @unchecked Sendable {
                 leadTracker.reset()
                 laneDetector.reset()
                 pedestrianDetector.reset()
+                roadwayEstimator.reset()
                 laneEstimate = nil
                 corridorCenterX = 0.5
             }
@@ -214,6 +221,7 @@ final class RecognitionWorker: @unchecked Sendable {
             leadTracker.reset()
             laneDetector.reset()
             pedestrianDetector.reset()
+            roadwayEstimator.reset()
             laneEstimate = nil
             corridorCenterX = 0.5
             makeClassifier.reset()
@@ -293,13 +301,14 @@ final class RecognitionWorker: @unchecked Sendable {
                                       uniqueCounts: tracker.uniqueCounts, fps: fpsEstimate, inferenceMs: 0,
                                       lightColor: nil, frameSize: CGSize(width: width, height: height),
                                       processedFrames: processedFrames, leadVehicle: nil,
-                                      laneEstimate: laneEstimate, pedestrianHazards: [],
-                                      corridor: leadTracker.corridor))
+                                      laneEstimate: laneEstimate, pedestrianHazards: [], roadStaff: [],
+                                      roadwayZone: nil, corridor: leadTracker.corridor))
             }
             return
         }
         var detections = result.detections
         classifyTrafficLights(&detections, in: pixelBuffer, width: width, height: height)
+        classifyPersonRoles(&detections, in: pixelBuffer, width: width, height: height)
 
         let countsBeforeUpdate = tracker.uniqueCounts
         var tracks = tracker.update(detections: detections, timestamp: timestamp)
@@ -309,8 +318,16 @@ final class RecognitionWorker: @unchecked Sendable {
                                   geometry: geometry, timestamp: timestamp)
         let leadVehicle = updateLeadVehicle(tracks: tracks, inputs: frameInputs, geometry: geometry,
                                             timestamp: timestamp)
-        let pedestrianHazards = updatePedestrians(tracks: tracks, inputs: frameInputs, geometry: geometry,
-                                                  timestamp: timestamp)
+        // Roadway / sidewalk split: persons outside the roadway zone (not moving toward it) are dropped here, before
+        // drawing, counting and logging.
+        let scene = updatePedestrians(tracks: tracks, inputs: frameInputs, geometry: geometry, timestamp: timestamp)
+        if !scene.filteredIDs.isEmpty {
+            tracks.removeAll { scene.filteredIDs.contains($0.id) }
+        }
+        tracker.markRelevant(trackIDs: Array(scene.relevantIDs))
+        let warningsOn = frameInputs.pedestrianWarningsEnabled
+        let pedestrianHazards = warningsOn ? scene.hazards : []
+        let roadStaff = warningsOn ? scene.staff : []
 
         if frameInputs.makeRecognitionEnabled, makeClassifier.status.isReady {
             // Votes become visible in the tracks of the next frame.
@@ -341,7 +358,9 @@ final class RecognitionWorker: @unchecked Sendable {
                             uniqueCounts: uniqueCounts, fps: fpsEstimate, inferenceMs: inferenceEstimate,
                             lightColor: lightColor, frameSize: CGSize(width: width, height: height),
                             processedFrames: processedFrames, leadVehicle: leadVehicle, laneEstimate: laneEstimate,
-                            pedestrianHazards: pedestrianHazards, corridor: leadTracker.corridor)
+                            pedestrianHazards: pedestrianHazards, roadStaff: roadStaff,
+                            roadwayZone: frameInputs.detection.trackPedestrians ? roadwayEstimator.zone : nil,
+                            corridor: leadTracker.corridor)
         outputHandler?(output)
     }
 
@@ -366,19 +385,25 @@ final class RecognitionWorker: @unchecked Sendable {
         return leadTracker.update(tracks: tracks, geometry: geometry, timestamp: timestamp)
     }
 
-    /// Pedestrians on / about to enter the roadway ahead (own-lane corridor with the same horizon as the lead tracker).
+    /// Persons vs the roadway zone (lane markings extended by the typical number of lanes, or the own-lane corridor
+    /// widened, same horizon as the lead tracker): pedestrian hazards, officers / road workers, and the sidewalk
+    /// persons to drop. Runs whenever persons are tracked — the sidewalk filter applies even with warnings off.
     private func updatePedestrians(tracks: [TrackedObject], inputs: Inputs, geometry: CameraGeometry,
-                                   timestamp: TimeInterval) -> [PedestrianHazard] {
-        guard inputs.pedestrianWarningsEnabled, inputs.detection.trackPedestrians else {
+                                   timestamp: TimeInterval) -> PersonSceneResult {
+        guard inputs.detection.trackPedestrians else {
             pedestrianDetector.reset()
-            return []
+            roadwayEstimator.reset()
+            return PersonSceneResult()
         }
         let horizon = min(0.8, max(0.1, inputs.corridorHorizon))
         if pedestrianDetector.corridor.horizonY != horizon {
             pedestrianDetector.corridor = EgoCorridor(horizonY: horizon)
         }
-        return pedestrianDetector.update(tracks: tracks, ownSpeedKmh: inputs.ownSpeedKmh, geometry: geometry,
-                                         timestamp: timestamp)
+        roadwayEstimator.config.roadWidthFactor = pedestrianDetector.roadWidthFactor
+        pedestrianDetector.roadway = roadwayEstimator.update(lane: inputs.laneDetectionEnabled ? laneEstimate : nil,
+                                                             corridor: pedestrianDetector.corridor)
+        return pedestrianDetector.evaluate(tracks: tracks, ownSpeedKmh: inputs.ownSpeedKmh, geometry: geometry,
+                                           timestamp: timestamp)
     }
 
     /// Runs the lane detector at ≈ 5 Hz on a downsampled (≤ 160 px wide) marking-brightness copy of the locked BGRA
@@ -439,6 +464,31 @@ final class RecognitionWorker: @unchecked Sendable {
         }
     }
 
+    /// Guesses the role of every person (traffic officer / road worker / pedestrian) from the hi-vis vest colour of the
+    /// torso band (`PersonRoleClassifier`, colour heuristic); the tracker votes over the last frames.
+    private func classifyPersonRoles(_ detections: inout [Detection], in pixelBuffer: CVPixelBuffer,
+                                     width: Int, height: Int) {
+        guard detections.contains(where: { $0.kind == .person }),
+              CVPixelBufferGetPixelFormatType(pixelBuffer) == kCVPixelFormatType_32BGRA,
+              !CVPixelBufferIsPlanar(pixelBuffer) else { return }
+        guard CVPixelBufferLockBaseAddress(pixelBuffer, .readOnly) == kCVReturnSuccess else { return }
+        defer { _ = CVPixelBufferUnlockBaseAddress(pixelBuffer, .readOnly) }
+        guard let base = CVPixelBufferGetBaseAddress(pixelBuffer) else { return }
+        let bytesPerRow = CVPixelBufferGetBytesPerRow(pixelBuffer)
+        for index in detections.indices where detections[index].kind == .person {
+            let box = detections[index].box.clamped
+            let rectWidth = Int((box.width * Double(width)).rounded(.up))
+            let rectHeight = Int((box.height * Double(height)).rounded(.up))
+            guard rectWidth >= 8, rectHeight >= PersonRoleClassifier.minBoxHeightPixels else { continue }
+            // About 20 samples across the box width keeps the cost constant for near and far persons.
+            let step = max(1, rectWidth / 20)
+            detections[index].personRole = PersonRoleClassifier.classifyBGRA(
+                base: UnsafeRawPointer(base), width: width, height: height, bytesPerRow: bytesPerRow,
+                rectX: Int((box.x * Double(width)).rounded(.down)), rectY: Int((box.y * Double(height)).rounded(.down)),
+                rectWidth: rectWidth, rectHeight: rectHeight, step: step)
+        }
+    }
+
     /// Exponential moving averages of the processing rate and the inference time.
     private func updateStatistics(timestamp: TimeInterval, inferenceMs: Double) {
         if let last = lastFrameTimestamp {
@@ -482,7 +532,7 @@ final class RecognitionWorker: @unchecked Sendable {
                 distanceMeters: track.distanceMeters, estimatedSpeedKmh: track.estimatedSpeedKmh,
                 lightColor: track.lightColor, latitude: inputs.latitude, longitude: inputs.longitude,
                 ownSpeedKmh: inputs.ownSpeedKmh, isConfirmed: track.isConfirmed, trackHits: track.hits,
-                isLead: track.id == leadTrackID))
+                isLead: track.id == leadTrackID, personRole: track.kind == .person ? track.personRole : nil))
         }
     }
 

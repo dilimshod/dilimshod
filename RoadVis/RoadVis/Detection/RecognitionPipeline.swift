@@ -93,6 +93,14 @@ final class RecognitionPipeline {
     private(set) var pedestrianHazards: [PedestrianHazard] = []
     /// The most urgent pedestrian hazard (for the banner / PiP badge).
     var topPedestrianHazard: PedestrianHazard? { pedestrianHazards.first }
+    /// Traffic officers / road workers (colour heuristic ≈) on or at the roadway, nearest first. Empty while pedestrian
+    /// warnings or pedestrian detection are off. They are never pedestrian hazards (blue / orange banner instead).
+    private(set) var roadStaff: [RoadStaffSighting] = []
+    /// The nearest officer / road worker (for the banner when there is no pedestrian hazard).
+    var topRoadStaff: RoadStaffSighting? { roadStaff.first }
+    /// Roadway zone that separates the roadway from the sidewalk (persons outside it are not recognised); nil while
+    /// persons are not tracked or the camera is stopped.
+    private(set) var roadwayZone: RoadwayZone?
     /// Camera-based driving events (tailgating, collision risk, lane departure, red-light running, STOP ignored), with
     /// GPS coordinate and speed. Only NEW events (repeats within 8 s are collapsed). Called on the main actor.
     @ObservationIgnored var onDrivingEvent: ((DrivingEvent) -> Void)?
@@ -145,6 +153,7 @@ final class RecognitionPipeline {
     /// Uptime when the worker last reported a lead vehicle.
     @ObservationIgnored private var lastLeadUptime: TimeInterval = -.infinity
     @ObservationIgnored private var lastPedestrianUptime: TimeInterval = -.infinity
+    @ObservationIgnored private var lastRoadStaffUptime: TimeInterval = -.infinity
 
     /// How long a confirmed track missed by the detector stays on screen, seconds.
     static let trackHoldSeconds: TimeInterval = 0.3
@@ -403,6 +412,14 @@ final class RecognitionPipeline {
             hazards = pedestrianHazards
         }
         if pedestrianHazards != hazards { pedestrianHazards = hazards }
+        var staff = assist.pedestrianWarningsEnabled ? output.roadStaff : []
+        if !staff.isEmpty {
+            lastRoadStaffUptime = now
+        } else if assist.pedestrianWarningsEnabled, now - lastRoadStaffUptime < Self.pedestrianHoldSeconds {
+            staff = roadStaff
+        }
+        if roadStaff != staff { roadStaff = staff }
+        if roadwayZone != output.roadwayZone { roadwayZone = output.roadwayZone }
         refreshFollowingDistance(fromFrame: true)
         updateDriverAssist(output, now: now)
     }
@@ -451,7 +468,8 @@ final class RecognitionPipeline {
                                      collisionThresholdSeconds: settings.followingDistancePolicy.collisionWarningSeconds,
                                      laneDeparture: departure, laneOffset: estimate?.egoOffset,
                                      tracks: fresh, geometry: geometry,
-                                     pedestrianHazards: assist.pedestrianWarningsEnabled ? output.pedestrianHazards : [])
+                                     pedestrianHazards: assist.pedestrianWarningsEnabled ? output.pedestrianHazards : [],
+                                     roadStaff: assist.pedestrianWarningsEnabled ? output.roadStaff : [])
         let events = eventMonitor.update(input)
         if let onDrivingEvent {
             for event in events { onDrivingEvent(event) }
@@ -495,6 +513,7 @@ final class RecognitionPipeline {
         recentTracks.removeAll()
         lastLeadUptime = -.infinity
         lastPedestrianUptime = -.infinity
+        lastRoadStaffUptime = -.infinity
         if !tracks.isEmpty { tracks = [] }
         if !visibleCounts.isEmpty { visibleCounts = [:] }
         if fps != 0 { fps = 0 }
@@ -507,6 +526,8 @@ final class RecognitionPipeline {
         if laneEstimate != nil { laneEstimate = nil }
         if laneDepartureSide != nil { laneDepartureSide = nil }
         if !pedestrianHazards.isEmpty { pedestrianHazards = [] }
+        if !roadStaff.isEmpty { roadStaff = [] }
+        if roadwayZone != nil { roadwayZone = nil }
         laneDeparture.reset()
         lastLaneTimestamp = nil
         eventMonitor.reset()

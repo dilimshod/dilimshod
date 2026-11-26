@@ -59,6 +59,10 @@ enum CoachPhrases {
             return format("coach.overLimit", limit)
         case .greenLightGo:
             return text("coach.green")
+        case .trafficOfficerAhead:
+            return text("coach.trafficOfficer")
+        case .roadWorkersAhead:
+            return text("coach.roadWorkers")
         }
     }
 

@@ -66,6 +66,10 @@ struct CameraPiPView: View {
                 PedestrianHazardBadge(hazard: hazard)
                     .padding(.top, 5)
                     .transition(.scale(scale: 0.8).combined(with: .opacity))
+            } else if isLive, let staff = pipeline.topRoadStaff {
+                RoadStaffBadge(sighting: staff)
+                    .padding(.top, 5)
+                    .transition(.scale(scale: 0.8).combined(with: .opacity))
             }
         }
         .animation(RVTheme.snappy, value: pipeline.topPedestrianHazard == nil)

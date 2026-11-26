@@ -9,8 +9,8 @@ struct DriverAssistFrame: Sendable {
     var confirmedStopSignIDs: [Int]
 }
 
-/// Voice coach for beginner drivers: following distance, pedestrians on the roadway, red / green traffic light, lane
-/// departure and road signs. A pedestrian danger (pedestrian in the own lane ahead) also gives a warning haptic.
+/// Voice coach for beginner drivers: following distance, pedestrians on the roadway, traffic police officer / road works
+/// ahead (vest-colour heuristic, 20 s per track), red / green traffic light, lane departure and road signs. A pedestrian danger (pedestrian in the own lane ahead) also gives a warning haptic.
 ///
 /// Inputs: camera cues from `RecognitionPipeline` (every processed frame), own speed from `LocationService`, the current
 /// road's speed limit (`RoadInfoService`) and — while navigating — the OSM features and speed limits along the route
@@ -92,6 +92,7 @@ final class DriverCoach {
         engine.update(input)
         let hazards = assist.pedestrianWarningsEnabled ? recognition.pedestrianHazards : []
         engine.updatePedestrians(hazards, speedKmh: input.speedKmh, now: now)
+        engine.updateRoadStaff(assist.pedestrianWarningsEnabled ? recognition.roadStaff : [], now: now)
         pedestrianHaptic(hazards, now: now)
         if engine.toggles.signs {
             for id in frame.confirmedStopSignIDs {
@@ -140,7 +141,8 @@ final class DriverCoach {
                             laneDeparture: voice && assist.laneDepartureEnabled,
                             signs: voice && assist.signAnnouncementsEnabled,
                             trafficLights: voice && assist.trafficLightHintsEnabled,
-                            pedestrians: voice && assist.pedestrianWarningsEnabled)
+                            pedestrians: voice && assist.pedestrianWarningsEnabled,
+                            roadStaff: voice && assist.pedestrianWarningsEnabled)
     }
 
     /// Warning haptic when a pedestrian danger appears (once per track per `pedestrianHapticCooldown`).

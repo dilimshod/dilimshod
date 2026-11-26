@@ -21,6 +21,20 @@ enum RVTheme {
     /// Pedestrian on the roadway, caution — orange.
     static let pedestrianCaution = Color(red: 1.0, green: 0.55, blue: 0.1)
 
+    /// Traffic police officer (YHXX, colour heuristic) — blue.
+    static let trafficOfficer = Color(red: 0.22, green: 0.52, blue: 1.0)
+    /// Road worker (orange vest, colour heuristic) — vivid orange.
+    static let roadWorker = Color(red: 1.0, green: 0.45, blue: 0.0)
+
+    /// Box / banner colour of an officer or road worker; nil for an ordinary pedestrian.
+    static func roleColor(_ role: PersonRole?) -> Color? {
+        switch role {
+        case .trafficOfficer: return trafficOfficer
+        case .roadWorker: return roadWorker
+        case .pedestrian, .none: return nil
+        }
+    }
+
     /// Box / banner colour of a pedestrian hazard: red (danger) or orange (caution).
     static func pedestrianColor(_ level: PedestrianHazardLevel) -> Color {
         level == .danger ? danger : pedestrianCaution

@@ -20,6 +20,7 @@ final class DriverAssistSettings {
         static let trafficLightHintsEnabled = "rv.trafficLightHints"
         static let laneWarningMinSpeedKmh = "rv.laneWarningMinSpeedKmh"
         static let pedestrianWarningsEnabled = "rv.pedestrianWarnings"
+        static let showRoadwayBoundary = "rv.showRoadwayBoundary"
     }
 
     /// Master switch of the spoken coaching (lane, signs, traffic lights).
@@ -36,6 +37,9 @@ final class DriverAssistSettings {
     var pedestrianWarningsEnabled: Bool {
         didSet { defaults.set(pedestrianWarningsEnabled, forKey: Keys.pedestrianWarningsEnabled) }
     }
+    /// Draw the roadway / sidewalk boundary (two subtle dashed lines) over the camera picture. Persons outside it are
+    /// not recognised either way.
+    var showRoadwayBoundary: Bool { didSet { defaults.set(showRoadwayBoundary, forKey: Keys.showRoadwayBoundary) } }
     /// Short alert tones (e.g. forward-collision beep). Independent of voice prompts and the 🔊 mute button.
     var alertSoundsEnabled: Bool { didSet { defaults.set(alertSoundsEnabled, forKey: "rv.alertSounds") } }
     /// Lane-departure warnings only at or above this GPS speed, km/h.
@@ -58,6 +62,7 @@ final class DriverAssistSettings {
         trafficLightHintsEnabled = bool(Keys.trafficLightHintsEnabled, true)
         pedestrianWarningsEnabled = bool(Keys.pedestrianWarningsEnabled, true)
         alertSoundsEnabled = bool("rv.alertSounds", true)
+        showRoadwayBoundary = bool(Keys.showRoadwayBoundary, true)
         let speed = defaults.object(forKey: Keys.laneWarningMinSpeedKmh) == nil
             ? 40 : defaults.double(forKey: Keys.laneWarningMinSpeedKmh)
         laneWarningMinSpeedKmh = min(90, max(20, speed))
@@ -107,6 +112,9 @@ struct DriverAssistSettingsSection: View {
             }
             Toggle(isOn: $settings.showLaneOverlay) {
                 Label(L("assist.showLanes"), systemImage: "line.diagonal")
+            }
+            Toggle(isOn: $settings.showRoadwayBoundary) {
+                Label(L("assist.showRoadway"), systemImage: "road.lanes")
             }
             VStack(alignment: .leading, spacing: 4) {
                 HStack {
