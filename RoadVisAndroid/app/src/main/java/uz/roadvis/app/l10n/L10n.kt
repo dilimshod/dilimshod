@@ -46,7 +46,7 @@ object LocalizationManager {
         language = AppLanguage.fromRaw(p.getString(AppLanguage.STORAGE_KEY, null))
     }
 
-    fun setLanguage(lang: AppLanguage) {
+    fun select(lang: AppLanguage) {
         if (lang == language) return
         language = lang
         prefs?.edit()?.putString(AppLanguage.STORAGE_KEY, lang.raw)?.apply()
