@@ -18,6 +18,8 @@ final class AppSettings {
     var showSpeedEstimates: Bool { didSet { defaults.set(showSpeedEstimates, forKey: Keys.showSpeedEstimates) } }
     var trackPedestrians: Bool { didSet { defaults.set(trackPedestrians, forKey: Keys.trackPedestrians) } }
     var detectTrafficLights: Bool { didSet { defaults.set(detectTrafficLights, forKey: Keys.detectTrafficLights) } }
+    /// Camera video stabilization: "off" | "standard" (default) | "strong" (see `CameraService.StabilizationLevel`).
+    var videoStabilization: String { didSet { defaults.set(videoStabilization, forKey: Keys.videoStabilization) } }
     /// Save per-frame detections and unique-vehicle summary to CSV for research.
     var recordExperimentLog: Bool { didSet { defaults.set(recordExperimentLog, forKey: Keys.recordExperimentLog) } }
 
@@ -123,6 +125,7 @@ final class AppSettings {
         showSpeedEstimates = bool(Keys.showSpeedEstimates, true)
         trackPedestrians = bool(Keys.trackPedestrians, true)
         detectTrafficLights = bool(Keys.detectTrafficLights, true)
+        videoStabilization = string(Keys.videoStabilization, "standard")
         recordExperimentLog = bool(Keys.recordExperimentLog, false)
         followingDistanceEnabled = bool(Keys.followingDistanceEnabled, true)
         followingTimeGapDry = double(Keys.followingTimeGapDry, 2)
@@ -203,6 +206,7 @@ final class AppSettings {
         static let showSpeedEstimates = "rv.showSpeedEstimates"
         static let trackPedestrians = "rv.trackPedestrians"
         static let detectTrafficLights = "rv.detectTrafficLights"
+        static let videoStabilization = "rv.videoStabilization"
         static let recordExperimentLog = "rv.recordExperimentLog"
         static let followingDistanceEnabled = "rv.followingDistanceEnabled"
         static let followingTimeGapDry = "rv.followingTimeGapDry"

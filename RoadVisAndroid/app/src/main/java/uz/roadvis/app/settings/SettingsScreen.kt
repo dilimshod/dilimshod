@@ -34,6 +34,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -163,6 +164,17 @@ private fun RecognitionSection(app: AppState) {
         ToggleRow(L("settings.rec.speed"), s.showSpeedEstimates, { s.showSpeedEstimates = it })
         ToggleRow(L("settings.rec.pedestrians"), s.trackPedestrians, { s.trackPedestrians = it })
         ToggleRow(L("settings.rec.lights"), s.detectTrafficLights, { s.detectTrafficLights = it })
+        RowDivider()
+        Text(L("settings.rec.stabilization"), color = Color.White, fontSize = 16.sp,
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
+        ChoiceRows(
+            listOf("off" to L("settings.rec.stabilization.off"), "standard" to L("settings.rec.stabilization.standard"),
+                "strong" to L("settings.rec.stabilization.strong")),
+            s.videoStabilization, { s.videoStabilization = it },
+        )
+        Text(L("settings.rec.stabilization.hint"), color = Color.White.copy(alpha = 0.6f), fontSize = 12.sp,
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp))
+        RowDivider()
         ToggleRow(L("settings.rec.log"), s.recordExperimentLog, { s.recordExperimentLog = it })
     }
 }

@@ -28,12 +28,38 @@ import kotlin.math.max
  * rotated upright by CameraX) feeding [RecognitionWorker]. Both use cases share the aspect ratio, so the normalized
  * boxes of the analysed frame line up with the picture. Main thread only.
  */
-class CameraBinding(private val context: Context, private val controller: RecognitionController) {
+class CameraBinding(
+    private val context: Context,
+    private val controller: RecognitionController,
+    /**
+     * Electronic stabilization (CameraX preview stabilization = Camera2 PREVIEW_STABILIZATION). Per the Camera2
+     * contract it stabilizes the preview AND all other non-RAW streams with the same quality, so the analysed frames
+     * stay aligned with the picture under the boxes. Used only where the device reports support; lens OIS is left to
+     * the device default. It crops the frame slightly.
+     */
+    private val stabilization: Boolean = true,
+) {
     private val selector16x9 = ResolutionSelector.Builder()
         .setAspectRatioStrategy(AspectRatioStrategy.RATIO_16_9_FALLBACK_AUTO_STRATEGY)
         .build()
 
-    val preview: Preview = Preview.Builder().setResolutionSelector(selector16x9).build()
+    private var preview: Preview? = null
+    private var pendingRotation: Int = Surface.ROTATION_0
+
+    /** True when preview stabilization is active on the bound camera. */
+    var stabilizationActive: Boolean = false
+        private set
+
+    private fun buildPreview(p: ProcessCameraProvider): Preview {
+        preview?.let { return it }
+        val supported = stabilization && try {
+            Preview.getPreviewCapabilities(p.getCameraInfo(CameraSelector.DEFAULT_BACK_CAMERA)).isStabilizationSupported
+        } catch (_: Throwable) { false }
+        stabilizationActive = supported
+        val builder = Preview.Builder().setResolutionSelector(selector16x9).setTargetRotation(pendingRotation)
+        if (supported) builder.setPreviewStabilizationEnabled(true)
+        return builder.build().also { preview = it }
+    }
 
     val analysis: ImageAnalysis = ImageAnalysis.Builder()
         .setResolutionSelector(
@@ -55,7 +81,7 @@ class CameraBinding(private val context: Context, private val controller: Recogn
     /** Binds preview + analysis to [owner] (idempotent for the same owner). */
     fun bind(owner: LifecycleOwner, previewView: PreviewView, rotation: Int) {
         setRotation(rotation)
-        preview.setSurfaceProvider(previewView.surfaceProvider)
+        preview?.setSurfaceProvider(previewView.surfaceProvider)
         if (boundOwner === owner && camera != null) return
         val future = ProcessCameraProvider.getInstance(context)
         future.addListener({
@@ -65,8 +91,28 @@ class CameraBinding(private val context: Context, private val controller: Recogn
             }
             provider = p
             try {
-                p.unbind(preview, analysis)
-                val cam = p.bindToLifecycle(owner, CameraSelector.DEFAULT_BACK_CAMERA, preview, analysis)
+                preview?.let { p.unbind(it) }
+                p.unbind(analysis)
+                val pv = try {
+                    buildPreview(p)
+                } catch (t: Throwable) {
+                    // Never lose the camera over stabilization: fall back to a plain preview.
+                    stabilizationActive = false
+                    Preview.Builder().setResolutionSelector(selector16x9).build().also { preview = it }
+                }
+                pv.setSurfaceProvider(previewView.surfaceProvider)
+                val cam = try {
+                    p.bindToLifecycle(owner, CameraSelector.DEFAULT_BACK_CAMERA, pv, analysis)
+                } catch (t: Throwable) {
+                    if (!stabilizationActive) throw t
+                    // Some devices report support but refuse the combination: retry without stabilization.
+                    p.unbind(pv)
+                    stabilizationActive = false
+                    val plain = Preview.Builder().setResolutionSelector(selector16x9).setTargetRotation(pendingRotation).build()
+                    preview = plain
+                    plain.setSurfaceProvider(previewView.surfaceProvider)
+                    p.bindToLifecycle(owner, CameraSelector.DEFAULT_BACK_CAMERA, plain, analysis)
+                }
                 camera = cam
                 boundOwner = owner
                 controller.cameraError = null
@@ -91,7 +137,7 @@ class CameraBinding(private val context: Context, private val controller: Recogn
     }
 
     fun unbind() {
-        provider?.unbind(preview, analysis)
+        provider?.let { p -> preview?.let { p.unbind(it) }; p.unbind(analysis) }
         camera?.cameraInfo?.cameraState?.let { state -> boundOwner?.let { state.removeObservers(it) } }
         camera = null
         boundOwner = null
@@ -101,7 +147,8 @@ class CameraBinding(private val context: Context, private val controller: Recogn
     /** Follows the display rotation so analysis frames stay upright and the preview stays aligned. */
     fun setRotation(rotation: Int) {
         val r = when (rotation) { Surface.ROTATION_90, Surface.ROTATION_180, Surface.ROTATION_270 -> rotation; else -> Surface.ROTATION_0 }
-        if (preview.targetRotation != r) preview.targetRotation = r
+        pendingRotation = r
+        preview?.let { if (it.targetRotation != r) it.targetRotation = r }
         if (analysis.targetRotation != r) analysis.targetRotation = r
     }
 

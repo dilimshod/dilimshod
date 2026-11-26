@@ -81,6 +81,16 @@ private struct SettingsRecognitionSection: View {
             Toggle(L("settings.rec.speed"), isOn: $settings.showSpeedEstimates)
             Toggle(L("settings.rec.pedestrians"), isOn: $settings.trackPedestrians)
             Toggle(L("settings.rec.lights"), isOn: $settings.detectTrafficLights)
+            VStack(alignment: .leading, spacing: 4) {
+                Picker(L("settings.rec.stabilization"), selection: $settings.videoStabilization) {
+                    Text(l: "settings.rec.stabilization.off").tag("off")
+                    Text(l: "settings.rec.stabilization.standard").tag("standard")
+                    Text(l: "settings.rec.stabilization.strong").tag("strong")
+                }
+                Text(l: "settings.rec.stabilization.hint")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
             Toggle(L("settings.rec.log"), isOn: $settings.recordExperimentLog)
                 .onChange(of: settings.recordExperimentLog) { _, _ in
                     app.tripRecorder.syncCameraCSV()

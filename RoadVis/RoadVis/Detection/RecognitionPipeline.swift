@@ -626,6 +626,7 @@ final class RecognitionPipeline {
         let storedPortrait: Double? = settings.autoHorizonPortrait > 0 ? settings.autoHorizonPortrait : nil
         let storedLandscape: Double? = settings.autoHorizonLandscape > 0 ? settings.autoHorizonLandscape : nil
         let hood = settings.hoodLengthMeters
+        camera.setStabilization(CameraService.StabilizationLevel(setting: settings.videoStabilization))
         let lanes = assist.laneDetectionNeeded
         let pedestrians = assist.pedestrianWarningsEnabled
         worker.update { inputs in
@@ -656,6 +657,7 @@ final class RecognitionPipeline {
             _ = settings.corridorHorizon
             _ = settings.autoHorizonEnabled
             _ = settings.hoodLengthMeters
+            _ = settings.videoStabilization
             _ = settings.followingTimeGapDry
             _ = settings.stoppedGapMeters
             _ = settings.reactionTimeSeconds

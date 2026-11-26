@@ -53,6 +53,8 @@ class AppSettings(context: Context) {
     var showSpeedEstimates by Pref("rv.showSpeedEstimates", true)
     var trackPedestrians by Pref("rv.trackPedestrians", true)
     var detectTrafficLights by Pref("rv.detectTrafficLights", true)
+    /** Camera video stabilization: "off" | "standard" (default) | "strong" (Android uses one level for both on-modes). */
+    var videoStabilization by Pref("rv.videoStabilization", "standard")
     var recordExperimentLog by Pref("rv.recordExperimentLog", false)
 
     // Following distance

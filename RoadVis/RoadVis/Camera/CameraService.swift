@@ -61,6 +61,7 @@ final class CameraService: NSObject, @unchecked Sendable {
     private var storedIsRunning = false
     private var storedIsInterrupted = false
     private var storedRotationAngle: Double = 90
+    private var stabilizationLevel: StabilizationLevel = .standard
 
     private var sessionObservations: [NSKeyValueObservation] = []
     private var notificationTokens: [NSObjectProtocol] = []
@@ -117,6 +118,58 @@ final class CameraService: NSObject, @unchecked Sendable {
 
     /// Rotation angle (degrees) currently applied to the video data output.
     var videoRotationAngle: Double { withLock { storedRotationAngle } }
+
+    // MARK: - Video stabilization
+
+    /// Electronic video stabilization of the camera picture (in addition to the lens OIS, which iOS always uses).
+    /// The SAME mode is applied to the video data output (recognition) and to every preview layer connection, so the
+    /// boxes drawn over the preview stay aligned with the stabilized picture. Stabilization crops the frame a little
+    /// and adds a few frames of latency; `.strong` (cinematic extended) smooths more but delays more.
+    enum StabilizationLevel: String, CaseIterable, Sendable {
+        case off, standard, strong
+
+        init(setting: String) { self = StabilizationLevel(rawValue: setting) ?? .standard }
+
+        /// Modes to try in order of preference (the first one the active format supports is used).
+        var candidateModes: [AVCaptureVideoStabilizationMode] {
+            switch self {
+            case .off: return [.off]
+            case .standard: return [.standard, .auto]
+            case .strong: return [.cinematicExtended, .cinematic, .standard, .auto]
+            }
+        }
+    }
+
+    /// Selects the stabilization level (persisted by the caller). Applied on the session queue.
+    func setStabilization(_ level: StabilizationLevel) {
+        sessionQueue.async { [weak self] in
+            guard let self else { return }
+            self.stabilizationLevel = level
+            self.applyStabilization()
+        }
+    }
+
+    /// Mode actually in use on the recognition output (nil before the session is configured).
+    private(set) var activeStabilizationMode: AVCaptureVideoStabilizationMode? {
+        get { withLock { storedStabilizationMode } }
+        set { withLock { storedStabilizationMode = newValue } }
+    }
+    private var storedStabilizationMode: AVCaptureVideoStabilizationMode?
+
+    /// Session queue: applies `stabilizationLevel` to the data output and to all preview connections of the session.
+    private func applyStabilization() {
+        guard let device else { return }
+        let format = device.activeFormat
+        let mode = stabilizationLevel.candidateModes.first {
+            $0 == .off || format.isVideoStabilizationModeSupported($0)
+        } ?? .off
+        for connection in session.connections where connection.isVideoStabilizationSupported {
+            if connection.preferredVideoStabilizationMode != mode {
+                connection.preferredVideoStabilizationMode = mode
+            }
+        }
+        activeStabilizationMode = mode
+    }
 
     // MARK: - Start / stop
 
@@ -201,6 +254,7 @@ final class CameraService: NSObject, @unchecked Sendable {
         withLock { storedFieldOfView = fov.isFinite && fov > 10 && fov < 170 ? fov : Self.fallbackFieldOfView }
 
         refreshRotationCoordinator()
+        applyStabilization()
     }
 
     /// 30 fps, continuous autofocus and auto-exposure.
@@ -292,7 +346,11 @@ final class CameraService: NSObject, @unchecked Sendable {
         let token = NotificationCenter.default.addObserver(forName: .cameraPreviewLayerDidChange,
                                                            object: session, queue: nil) { [weak self] _ in
             guard let self else { return }
-            self.sessionQueue.async { [weak self] in self?.refreshRotationCoordinator() }
+            self.sessionQueue.async { [weak self] in
+                self?.refreshRotationCoordinator()
+                // A new preview layer connection starts unstabilized: give it the same mode as the data output.
+                self?.applyStabilization()
+            }
         }
         notificationTokens.append(token)
     }

@@ -137,7 +137,7 @@ fun CameraScreen(app: AppState, isActive: Boolean) {
                 }
             }
         } else {
-            CameraPreview(c, granted)
+            CameraPreview(c, granted, app.settings.videoStabilization != "off")
             if (isActive) {
                 val expanded = c.assist.distanceHUDExpanded
                 val insets = if (landscape) LabelInsets(70f, if (expanded) 270f else 200f, 70f, 80f)
@@ -160,7 +160,7 @@ private fun hasCameraPermission(context: android.content.Context): Boolean =
 
 /** The CameraX preview (TextureView, so the root crossfade alpha applies) bound while permission is granted. */
 @Composable
-private fun CameraPreview(c: RecognitionController, granted: Boolean) {
+private fun CameraPreview(c: RecognitionController, granted: Boolean, stabilization: Boolean) {
     val context = LocalContext.current
     @Suppress("DEPRECATION")
     val owner = androidx.compose.ui.platform.LocalLifecycleOwner.current
@@ -171,9 +171,10 @@ private fun CameraPreview(c: RecognitionController, granted: Boolean) {
             scaleType = PreviewView.ScaleType.FILL_CENTER
         }
     }
-    val binding = remember { CameraBinding(context.applicationContext, c) }
+    // A new binding (and a re-bind) when the stabilization setting changes: CameraX fixes it when the Preview is built.
+    val binding = remember(stabilization) { CameraBinding(context.applicationContext, c, stabilization) }
     AndroidView(factory = { previewView }, modifier = Modifier.fillMaxSize())
-    DisposableEffect(owner, granted) {
+    DisposableEffect(owner, granted, binding) {
         if (granted) binding.bind(owner, previewView, previewView.display?.rotation ?: 0)
         onDispose { if (granted) binding.unbind() }
     }

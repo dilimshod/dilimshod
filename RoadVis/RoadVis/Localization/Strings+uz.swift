@@ -25,6 +25,11 @@ enum UzStrings {
         "settings.fd.calib.done": "Kapot uzunligi: %@ m saqlandi",
         "settings.fd.calib.noLead": "Kalibrlash uchun boshqa mashina orqasida to‘xtang va kamera ekranini oching.",
         "settings.fd.calib.hint": "Oldingi mashina orqasida to‘xtab, bamperlar orasidagi haqiqiy masofani kiriting va «Hozir kalibrlash»ni bosing.",
+        "settings.rec.stabilization": "Video stabilizatsiyasi",
+        "settings.rec.stabilization.off": "O‘chiq",
+        "settings.rec.stabilization.standard": "Standart",
+        "settings.rec.stabilization.strong": "Kuchli",
+        "settings.rec.stabilization.hint": "Telefon silkinishini kamaytiradi. Kuchli rejim tasvirni silliqroq qiladi, lekin ogohlantirishlar biroz kechikadi va kadr biroz qirqiladi. Eng yaxshi natija uchun telefonni mustahkam ushlagichga o‘rnating.",
         "settings.fd.horizonAuto": "Ufq chizig‘ini avtomatik aniqlash",
         "settings.fd.horizonAuto.hint": "Tezlik 30 km/soatdan yuqori bo‘lib, ikkala yo‘l chizig‘i ko‘ringanda ufq ular kesishadigan nuqta bo‘yicha o‘lchanadi. Slayder — boshlang‘ich qiymat; avtomatik rejim o‘chirilganda ham shu qiymat ishlatiladi.",
 
