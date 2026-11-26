@@ -25,6 +25,8 @@ enum UzStrings {
         "settings.fd.calib.done": "Kapot uzunligi: %@ m saqlandi",
         "settings.fd.calib.noLead": "Kalibrlash uchun boshqa mashina orqasida to‘xtang va kamera ekranini oching.",
         "settings.fd.calib.hint": "Oldingi mashina orqasida to‘xtab, bamperlar orasidagi haqiqiy masofani kiriting va «Hozir kalibrlash»ni bosing.",
+        "settings.fd.horizonAuto": "Ufq chizig‘ini avtomatik aniqlash",
+        "settings.fd.horizonAuto.hint": "Tezlik 30 km/soatdan yuqori bo‘lib, ikkala yo‘l chizig‘i ko‘ringanda ufq ular kesishadigan nuqta bo‘yicha o‘lchanadi. Slayder — boshlang‘ich qiymat; avtomatik rejim o‘chirilganda ham shu qiymat ishlatiladi.",
 
         // MARK: Common
         "common.done": "Tayyor",

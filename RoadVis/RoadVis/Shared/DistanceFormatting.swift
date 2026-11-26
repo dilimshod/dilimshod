@@ -83,9 +83,11 @@ enum FollowingDistanceText {
         return "≈ " + RVFormat.gapMeters(meters)
     }
 
-    /// Recommended gap, e.g. "≥ 33 м".
+    /// Recommended gap, e.g. "≥ 33 м"; "—" while the own speed is unknown (no GPS fix: the norm cannot be computed,
+    /// and the assessment is no longer treated as "standing still").
     static func recommended(_ assessment: FollowingDistanceAssessment) -> String {
-        "≥ " + RVFormat.normMeters(assessment.recommendedDistanceMeters)
+        guard assessment.ownSpeedKmh != nil else { return "—" }
+        return "≥ " + RVFormat.normMeters(assessment.recommendedDistanceMeters)
     }
 
     /// Caption under the distance on the animated line: "1,4 с · норма ≥ 33 м" (moving) or "норма ≥ 2 м" (standing).

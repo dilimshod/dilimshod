@@ -46,7 +46,11 @@ public enum YOLODecoder {
                 guard score >= confidenceThreshold, score.isFinite else { continue }
                 let x1 = Double(values[base]), y1 = Double(values[base + 1])
                 let x2 = Double(values[base + 2]), y2 = Double(values[base + 3])
-                let cls = Int(values[base + 5].rounded())
+                // `Int(Float)` traps on NaN / infinity / out-of-range values (FP16 overflow, corrupted output).
+                let clsValue = values[base + 5].rounded()
+                guard clsValue.isFinite, clsValue >= 0, clsValue < 10_000,
+                      x1.isFinite, y1.isFinite, x2.isFinite, y2.isFinite else { continue }
+                let cls = Int(clsValue)
                 if let box = mapper.box(x1: x1, y1: y1, x2: x2, y2: y2) {
                     detections.append(RawDetection(box: box, score: score, classIndex: cls))
                 }

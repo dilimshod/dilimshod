@@ -54,7 +54,10 @@ public struct RedLightRunningDetector: Sendable {
             let color = t.lightColor ?? .unknown
             if var e = entries[t.id] {
                 e.box = t.box
-                if color != .unknown { e.color = color }
+                // No latch here: the tracker already smooths the colour and holds it ≈ 1 s without a readable lamp
+                // (`ObjectTracker.lightColorMaxAge`), so a lamp cropped at the top edge in its last frames still
+                // counts as red, while a light unreadable for longer no longer yields a red-light event.
+                e.color = color
                 e.lastSeen = timestamp
                 e.speedAtLastSeen = speedKmh
                 entries[t.id] = e
@@ -78,8 +81,9 @@ public struct RedLightRunningDetector: Sendable {
 }
 
 /// Detects "did not stop at a STOP sign": a confirmed STOP sign within `armDistance` metres ahead arms an episode;
-/// when the sign has been out of sight for `passTimeout` seconds the episode ends, and if the own speed never dropped
-/// below `stopSpeedKmh` meanwhile, it is a violation. Distance from the box width with a typical sign width.
+/// when the sign has been out of sight for `passTimeout` seconds the episode can end — but it stays open while the
+/// driver may still be braking to the line (not yet past the sign by `passMarginMeters`, not speeding up again, at most
+/// `maxEpisodeAfterLost` seconds). If the own speed never dropped below `stopSpeedKmh` meanwhile, it is a violation. Distance from the box width with a typical sign width.
 public struct StopSignComplianceMonitor: Sendable {
     public struct Config: Sendable {
         public var armDistance: Double
@@ -90,8 +94,21 @@ public struct StopSignComplianceMonitor: Sendable {
         /// Only arm while moving at least this fast (else the car is already stopped), km/h.
         public var minArmSpeedKmh: Double
 
+        /// After `passTimeout` the episode stays open while the car may still be braking to the line. It is judged
+        /// once the car has travelled the sign's last distance plus this margin, metres (a roadside sign leaves the
+        /// field of view ≈ 6–11 m before it is reached).
+        public var passMarginMeters: Double
+        /// Hard cap of the episode after the sign was lost, seconds.
+        public var maxEpisodeAfterLost: TimeInterval
+        /// Speeding up by this much above the lowest speed of the episode ends it (the driver is leaving), km/h.
+        public var resumeDeltaKmh: Double
+
         public init(armDistance: Double = 30, stopSpeedKmh: Double = 5, passTimeout: TimeInterval = 2.5,
-                    signWidthMeters: Double = 0.7, minArmSpeedKmh: Double = 8) {
+                    signWidthMeters: Double = 0.7, minArmSpeedKmh: Double = 8, passMarginMeters: Double = 10,
+                    maxEpisodeAfterLost: TimeInterval = 10, resumeDeltaKmh: Double = 2) {
+            self.passMarginMeters = passMarginMeters
+            self.maxEpisodeAfterLost = maxEpisodeAfterLost
+            self.resumeDeltaKmh = resumeDeltaKmh
             self.armDistance = armDistance
             self.stopSpeedKmh = stopSpeedKmh
             self.passTimeout = passTimeout
@@ -114,6 +131,9 @@ public struct StopSignComplianceMonitor: Sendable {
     private var minSpeed: Double = .infinity
     private var lastSignSeen: TimeInterval = -.infinity
     private var speedKnown = true
+    private var lastSignDistance: Double = 0
+    private var travelledSinceSeen: Double = 0
+    private var lastUpdate: TimeInterval?
 
     public init(config: Config = Config()) {
         self.config = config
@@ -125,6 +145,8 @@ public struct StopSignComplianceMonitor: Sendable {
         armedAt = nil
         minSpeed = .infinity
         speedKnown = true
+        travelledSinceSeen = 0
+        lastUpdate = nil
     }
 
     /// Approximate distance of a STOP sign box, metres.
@@ -144,13 +166,34 @@ public struct StopSignComplianceMonitor: Sendable {
                 armedDistance = d
                 minSpeed = speed
                 speedKnown = true
+                lastSignDistance = d
+                travelledSinceSeen = 0
+                lastUpdate = timestamp
             }
             return nil
         }
         if let speed = speedKmh { minSpeed = min(minSpeed, speed) } else { speedKnown = false }
-        guard timestamp - lastSignSeen >= config.passTimeout, let start = armedAt else { return nil }
+        let dt = max(0, min(timestamp - (lastUpdate ?? timestamp), 1.0))
+        lastUpdate = timestamp
+        if !signs.isEmpty {
+            travelledSinceSeen = 0
+            if let d = nearest { lastSignDistance = d }
+            return nil
+        }
+        travelledSinceSeen += (speedKmh ?? 0) / 3.6 * dt
+        let lost = timestamp - lastSignSeen
+        guard lost >= config.passTimeout, let start = armedAt else { return nil }
+        let stopped = speedKnown && minSpeed < config.stopSpeedKmh
+        // Still approaching the line: not yet past the sign, not accelerating again, hard cap not reached.
+        let passed = travelledSinceSeen >= lastSignDistance + config.passMarginMeters
+        let resumed = speedKmh.map { $0 >= minSpeed + config.resumeDeltaKmh } ?? true
+        if !stopped, !passed, !resumed, lost < config.maxEpisodeAfterLost { return nil }
         armedAt = nil
-        defer { minSpeed = .infinity }
+        defer {
+            minSpeed = .infinity
+            travelledSinceSeen = 0
+            lastUpdate = nil
+        }
         guard speedKnown, minSpeed.isFinite, minSpeed >= config.stopSpeedKmh else { return nil }
         return Violation(minSpeedKmh: minSpeed, armedDistance: armedDistance, duration: timestamp - start)
     }

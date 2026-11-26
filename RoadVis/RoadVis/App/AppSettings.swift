@@ -39,6 +39,12 @@ final class AppSettings {
     var showEgoCorridor: Bool { didSet { defaults.set(showEgoCorridor, forKey: Keys.showEgoCorridor) } }
     /// Horizon line for the lane corridor (fraction of the frame height) — depends on how the phone is mounted.
     var corridorHorizon: Double { didSet { defaults.set(corridorHorizon, forKey: Keys.corridorHorizon) } }
+    /// Measure the horizon from the lane vanishing point while driving (`LaneHorizonEstimator`); `corridorHorizon`
+    /// is then the start value and the fallback.
+    var autoHorizonEnabled: Bool { didSet { defaults.set(autoHorizonEnabled, forKey: Keys.autoHorizonEnabled) } }
+    /// Last measured horizon for portrait / landscape frames (0 = nothing measured yet).
+    var autoHorizonPortrait: Double { didSet { defaults.set(autoHorizonPortrait, forKey: Keys.autoHorizonPortrait) } }
+    var autoHorizonLandscape: Double { didSet { defaults.set(autoHorizonLandscape, forKey: Keys.autoHorizonLandscape) } }
 
     // MARK: Navigation
     var voiceGuidanceEnabled: Bool { didSet { defaults.set(voiceGuidanceEnabled, forKey: Keys.voiceGuidanceEnabled) } }
@@ -100,7 +106,7 @@ final class AppSettings {
         func string(_ key: String, _ fallback: String) -> String {
             defaults.string(forKey: key) ?? fallback
         }
-        detectionConfidence = double(Keys.detectionConfidence, 0.45)
+        detectionConfidence = double(Keys.detectionConfidence, DetectionThresholds.defaultGlobal)
         nmsIoUThreshold = double(Keys.nmsIoUThreshold, 0.45)
         makeRecognitionEnabled = bool(Keys.makeRecognitionEnabled, true)
         showDistanceEstimates = bool(Keys.showDistanceEstimates, true)
@@ -117,6 +123,9 @@ final class AppSettings {
         distanceWarningsEnabled = bool(Keys.distanceWarningsEnabled, true)
         showEgoCorridor = bool(Keys.showEgoCorridor, false)
         corridorHorizon = double(Keys.corridorHorizon, 0.42)
+        autoHorizonEnabled = bool(Keys.autoHorizonEnabled, true)
+        autoHorizonPortrait = double(Keys.autoHorizonPortrait, 0)
+        autoHorizonLandscape = double(Keys.autoHorizonLandscape, 0)
 
         voiceGuidanceEnabled = bool(Keys.voiceGuidanceEnabled, true)
         avoidTolls = bool(Keys.avoidTolls, false)
@@ -175,7 +184,9 @@ final class AppSettings {
     }
 
     private enum Keys {
-        static let detectionConfidence = "rv.detectionConfidence"
+        /// ".v2": the default went from 0.45 to `DetectionThresholds.defaultGlobal` (0.30) and the slider now moves
+        /// every class threshold, so values stored by earlier versions are not carried over.
+        static let detectionConfidence = "rv.detectionConfidence.v2"
         static let nmsIoUThreshold = "rv.nmsIoUThreshold"
         static let makeRecognitionEnabled = "rv.makeRecognitionEnabled"
         static let showDistanceEstimates = "rv.showDistanceEstimates"
@@ -191,6 +202,9 @@ final class AppSettings {
         static let distanceWarningsEnabled = "rv.distanceWarningsEnabled"
         static let showEgoCorridor = "rv.showEgoCorridor"
         static let corridorHorizon = "rv.corridorHorizon"
+        static let autoHorizonEnabled = "rv.autoHorizonEnabled"
+        static let autoHorizonPortrait = "rv.autoHorizonPortrait"
+        static let autoHorizonLandscape = "rv.autoHorizonLandscape"
         static let voiceGuidanceEnabled = "rv.voiceGuidanceEnabled"
         static let avoidTolls = "rv.avoidTolls"
         static let avoidHighways = "rv.avoidHighways"

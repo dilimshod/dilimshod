@@ -86,7 +86,7 @@ enum class VehicleKind(val raw: String) {
                 "bus", "minibus", "coach", "trolleybus" -> BUS
                 "motorcycle", "motorbike", "moped", "scooter", "motor" -> MOTORCYCLE
                 "bicycle", "bike", "cyclist" -> BICYCLE
-                "person", "pedestrian", "people" -> PERSON
+                "person", "pedestrian", "people", "rider" -> PERSON // "rider": BDD100K class
                 "traffic light", "trafficlight", "traffic signal" -> TRAFFIC_LIGHT
                 "stop sign", "stopsign" -> STOP_SIGN
                 else -> null

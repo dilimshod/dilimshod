@@ -135,7 +135,7 @@ final class VisionLogicTests: XCTestCase {
 
     func testPerClassConfidenceFilter() {
         let tracker = ObjectTracker(config: .init(minHits: 1))
-        _ = tracker.update(detections: [Detection(kind: .trafficLight, label: "traffic light", confidence: 0.42,
+        _ = tracker.update(detections: [Detection(kind: .trafficLight, label: "traffic light", confidence: 0.25,
                                                   box: BBox(x: 0.5, y: 0.1, width: 0.02, height: 0.05))], timestamp: 0)
         XCTAssertNil(tracker.uniqueCounts[.trafficLight])
         _ = tracker.update(detections: [Detection(kind: .trafficLight, label: "traffic light", confidence: 0.6,

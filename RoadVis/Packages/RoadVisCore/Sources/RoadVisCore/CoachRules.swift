@@ -182,7 +182,7 @@ public struct CoachRules: Sendable {
 
 // MARK: - Traffic-light coaching (camera)
 
-/// The traffic light the coach looks at (largest confirmed light of the frame).
+/// The traffic light the coach looks at (the confirmed light ahead that most likely applies to the own lane).
 public struct ObservedTrafficLight: Hashable, Sendable {
     public var trackID: Int
     public var color: TrafficLightColor
@@ -194,11 +194,69 @@ public struct ObservedTrafficLight: Hashable, Sendable {
         self.box = box
     }
 
-    /// Largest confirmed, currently seen traffic light of `tracks`.
-    public static func largest(in tracks: [TrackedObject]) -> ObservedTrafficLight? {
-        tracks.filter { $0.kind == .trafficLight && $0.isConfirmed && $0.missed == 0 }
+    /// Largest confirmed, currently seen traffic light AHEAD (box centre inside `aheadX`, the same range as
+    /// `TrafficLightCoach.Config.aheadMinX…aheadMaxX`). Filtering before choosing matters: a larger light off to the
+    /// side (pedestrian / cross-street signal) must not hide the red light straight ahead.
+    public static func largest(in tracks: [TrackedObject], aheadX: ClosedRange<Double> = 0.2...0.8) -> ObservedTrafficLight? {
+        tracks.filter { $0.kind == .trafficLight && $0.isConfirmed && $0.missed == 0 && aheadX.contains($0.box.midX) }
             .max { $0.box.area < $1.box.area }
             .map { ObservedTrafficLight(trackID: $0.id, color: $0.lightColor ?? .unknown, box: $0.box) }
+    }
+}
+
+/// Chooses the traffic light that applies to the own lane instead of simply the largest box (the largest one is often
+/// a pedestrian signal at the kerb or a head for the cross street). All constants are reasoning (no intersection video
+/// was evaluated); errors are kept on the safe side by the red-wins rule.
+public enum TrafficLightSelection {
+    /// A light this far (fraction of the image width) from the corridor centre scores 0 and is never chosen.
+    public static let maxLateralOffset: Double = 0.35
+    /// Lights lower than this share of the tallest candidate are dropped (the next intersection's far lights).
+    public static let minRelativeHeight: Double = 0.6
+    /// When the runner-up scores at least this share of the best, colours disagree and one of them is red → red.
+    public static let conservativeScoreRatio: Double = 0.85
+    /// Hits a light track needs before it can drive the indicator / coach (≈ 0.35 s at 15 fps).
+    public static let minHits: Int = 5
+
+    /// A light WITHOUT a stable colour is drawn / counted only when its best detector score is this far above the
+    /// class threshold (0.30 + 0.20 = the 0.50 floor used before the threshold was lowered for recall: box precision
+    /// of low-score lights was only ≈ 50–58 % at 0.25 on BDD100K). With a stable colour every tracked light is shown.
+    public static let uncolouredDisplayMargin: Double = 0.20
+
+    /// False for a low-score traffic-light track without a readable colour (most likely not a light facing us).
+    public static func isDisplayable(_ track: TrackedObject, classThreshold: Double) -> Bool {
+        guard track.kind == .trafficLight else { return true }
+        if let color = track.lightColor, color != .unknown { return true }
+        return max(track.confidence, track.peakConfidence) >= classThreshold + uncolouredDisplayMargin
+    }
+
+    /// Candidates: confirmed light tracks seen on this frame with at least `minHits` hits, a stable KNOWN colour
+    /// (the tracker's time-window vote) and the box top above the horizon. Score = box height × (1 − lateral offset
+    /// from the corridor centre ÷ `maxLateralOffset`).
+    public static func ownLane(in tracks: [TrackedObject], corridorCenterX: Double = 0.5, horizonY: Double = 0.42,
+                               minHits: Int = minHits) -> ObservedTrafficLight? {
+        let candidates = tracks.filter { t in
+            guard t.kind == .trafficLight, t.isConfirmed, t.missed == 0, t.hits >= minHits else { return false }
+            guard let color = t.lightColor, color != .unknown else { return false }
+            return t.box.minY < horizonY
+        }
+        guard let tallest = candidates.map({ $0.box.height }).max(), tallest > 0 else { return nil }
+        var scored: [(track: TrackedObject, score: Double)] = []
+        for t in candidates where t.box.height >= minRelativeHeight * tallest {
+            let lateral = min(1, abs(t.box.midX - corridorCenterX) / maxLateralOffset)
+            let score = t.box.height * (1 - lateral)
+            if score > 0 { scored.append((t, score)) }
+        }
+        scored.sort { $0.score != $1.score ? $0.score > $1.score : $0.track.id < $1.track.id }
+        guard let best = scored.first else { return nil }
+        var chosen = best.track
+        if scored.count > 1 {
+            let second = scored[1]
+            if second.score >= conservativeScoreRatio * best.score, second.track.lightColor != best.track.lightColor,
+               second.track.lightColor == .red {
+                chosen = second.track
+            }
+        }
+        return ObservedTrafficLight(trackID: chosen.id, color: chosen.lightColor ?? .unknown, box: chosen.box)
     }
 }
 
@@ -239,7 +297,10 @@ public struct TrafficLightCoach: Sendable {
     private var redTrack: Int?
     private var redSince: TimeInterval?
     private var warnedRedTracks = Set<Int>()
-    private var sawRedWhileStopped = false
+    /// Track of the red light the car is waiting at. "Green, you can go" is only said for the SAME track turning
+    /// green — a green on another track (pedestrian / cross-street signal) can never produce it. If the tracker
+    /// re-IDs the light at the colour change the hint is skipped, which is the safe failure.
+    private var waitingRedTrack: Int?
     private var greenSince: TimeInterval?
 
     public init(config: Config = Config()) {
@@ -249,7 +310,7 @@ public struct TrafficLightCoach: Sendable {
     public mutating func reset() {
         redTrack = nil
         redSince = nil
-        sawRedWhileStopped = false
+        waitingRedTrack = nil
         greenSince = nil
     }
 
@@ -276,7 +337,7 @@ public struct TrafficLightCoach: Sendable {
         // Waiting at a red light → green.
         guard speedKmh != nil else { return nil }
         if speed >= config.movingSpeedKmh {
-            sawRedWhileStopped = false
+            waitingRedTrack = nil
             greenSince = nil
             return nil
         }
@@ -286,15 +347,18 @@ public struct TrafficLightCoach: Sendable {
         }
         switch light.color {
         case .red, .yellow:
-            if light.color == .red { sawRedWhileStopped = true }
+            if light.color == .red { waitingRedTrack = light.trackID }
             greenSince = nil
         case .green:
-            guard sawRedWhileStopped else { return nil }
+            guard light.trackID == waitingRedTrack else {
+                greenSince = nil
+                return nil
+            }
             let since = greenSince ?? timestamp
             greenSince = since
             let leadOK = (leadDistanceMeters ?? .infinity) >= config.minLeadGapMeters
             if timestamp - since >= config.greenHold, leadOK {
-                sawRedWhileStopped = false
+                waitingRedTrack = nil
                 greenSince = nil
                 return .greenLightGo
             }

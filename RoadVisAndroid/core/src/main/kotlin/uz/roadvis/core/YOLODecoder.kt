@@ -40,9 +40,15 @@ object YOLODecoder {
                 val base = i * 6
                 val score = values[base + 4].toDouble()
                 if (!(score >= confidenceThreshold && score.isFinite())) continue
-                val cls = values[base + 5].toDouble().rounded().toInt()
-                val box = mapper.box(values[base].toDouble(), values[base + 1].toDouble(),
-                    values[base + 2].toDouble(), values[base + 3].toDouble())
+                val x1 = values[base].toDouble(); val y1 = values[base + 1].toDouble()
+                val x2 = values[base + 2].toDouble(); val y2 = values[base + 3].toDouble()
+                // Guard against NaN / infinity / out-of-range class values (FP16 overflow, corrupted output).
+                val clsValue = values[base + 5].toDouble().rounded()
+                if (!(clsValue.isFinite() && clsValue >= 0 && clsValue < 10_000 &&
+                        x1.isFinite() && y1.isFinite() && x2.isFinite() && y2.isFinite())
+                ) continue
+                val cls = clsValue.toInt()
+                val box = mapper.box(x1, y1, x2, y2)
                 if (box != null) detections.add(RawDetection(box, score, cls))
             }
             return detections.sortedByDescending { it.score }.take(maxDetections)

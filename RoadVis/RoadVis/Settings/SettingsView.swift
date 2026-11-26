@@ -196,6 +196,10 @@ private struct SettingsFollowingDistanceSection: View {
                         .accessibilityLabel(L("settings.fd.horizon.a11y"))
                         .accessibilityValue(settingsPercent(settings.corridorHorizon))
                 }
+                Toggle(L("settings.fd.horizonAuto"), isOn: $settings.autoHorizonEnabled)
+                Text(l: "settings.fd.horizonAuto.hint")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
             }
             .disabled(!settings.followingDistanceEnabled)
             NavigationLink {

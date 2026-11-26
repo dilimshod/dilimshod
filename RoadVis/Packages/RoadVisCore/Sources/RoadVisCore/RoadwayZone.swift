@@ -49,8 +49,13 @@ public struct RoadwayZone: Hashable, Sendable {
 
     /// Zone from the confident own-lane markings, extended outward by `extraLanesLeft` / `extraLanesRight` lane widths.
     /// nil when no line reaches `minConfidence` or the result is implausible.
+    /// - Parameter aspectScale: lane-width factor of the frame relative to 16:9 landscape
+    ///   (`LaneDetector.aspectScale`, ≈ 3.16 in portrait): the 0.2…2.5 plausibility limits of the lane width at the
+    ///   bottom edge are for landscape and are multiplied by it.
     public static func fromLanes(_ estimate: LaneEstimate, horizonY: Double, extraLanesLeft: Double,
-                                 extraLanesRight: Double, minConfidence: Double) -> RoadwayZone? {
+                                 extraLanesRight: Double, minConfidence: Double,
+                                 aspectScale: Double = 1) -> RoadwayZone? {
+        let k = aspectScale.isFinite ? max(0.5, aspectScale) : 1
         let l = estimate.leftConfidence >= minConfidence ? estimate.left : nil
         let r = estimate.rightConfidence >= minConfidence ? estimate.right : nil
         let ref = estimate.referenceY
@@ -82,7 +87,7 @@ public struct RoadwayZone: Hashable, Sendable {
         }
         let widthBottom = rightLine.bottom - leftLine.bottom
         let widthTop = rightLine.top - leftLine.top
-        guard widthBottom > 0.2, widthBottom < 2.5, widthTop > -0.05,
+        guard widthBottom > 0.2 * k, widthBottom < 2.5 * k, widthTop > -0.05,
               leftLine.bottom.isFinite, rightLine.bottom.isFinite else { return nil }
         leftLine.bottom -= extraLanesLeft * widthBottom
         leftLine.top -= extraLanesLeft * max(0, widthTop)
@@ -144,6 +149,9 @@ public final class RoadwayZoneEstimator {
         public var minLaneConfidence: Double
         /// EMA weight of a new zone (1 = no smoothing).
         public var smoothing: Double
+        /// Lane-width factor of the frame relative to 16:9 landscape (`LaneDetector.aspectScale`); set by the owner
+        /// from the frame size.
+        public var aspectScale: Double = 1
 
         public init(roadWidthFactor: Double = 2.2, extraLanesLeft: Double = 1, extraLanesRight: Double = 1,
                     minLaneConfidence: Double = 0.45, smoothing: Double = 0.25) {
@@ -171,7 +179,8 @@ public final class RoadwayZoneEstimator {
         if let lane, let z = RoadwayZone.fromLanes(lane, horizonY: corridor.horizonY,
                                                    extraLanesLeft: config.extraLanesLeft,
                                                    extraLanesRight: config.extraLanesRight,
-                                                   minConfidence: config.minLaneConfidence) {
+                                                   minConfidence: config.minLaneConfidence,
+                                                   aspectScale: config.aspectScale) {
             return z
         }
         return RoadwayZone.fromCorridor(corridor, widthFactor: config.roadWidthFactor)

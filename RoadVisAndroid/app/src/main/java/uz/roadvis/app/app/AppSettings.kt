@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.SharedPreferences
 import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.mutableStateOf
+import uz.roadvis.core.DetectionThresholds
 import uz.roadvis.core.SoundMode
 import kotlin.properties.ReadWriteProperty
 import kotlin.reflect.KProperty
@@ -44,7 +45,8 @@ class AppSettings(context: Context) {
     }
 
     // Recognition
-    var detectionConfidence by Pref("rv.detectionConfidence", 0.45)
+    /** ".v2": new default and the slider now moves every class threshold, so older stored values are not carried over. */
+    var detectionConfidence by Pref("rv.detectionConfidence.v2", DetectionThresholds.DEFAULT_GLOBAL_NANO)
     var nmsIoUThreshold by Pref("rv.nmsIoUThreshold", 0.45)
     var makeRecognitionEnabled by Pref("rv.makeRecognitionEnabled", true)
     var showDistanceEstimates by Pref("rv.showDistanceEstimates", true)
@@ -64,6 +66,14 @@ class AppSettings(context: Context) {
     var distanceWarningsEnabled by Pref("rv.distanceWarningsEnabled", true)
     var showEgoCorridor by Pref("rv.showEgoCorridor", false)
     var corridorHorizon by Pref("rv.corridorHorizon", 0.42)
+    /**
+     * Measure the horizon from the lane vanishing point while driving (`LaneHorizonEstimator`); [corridorHorizon] is
+     * then the start value and the fallback.
+     */
+    var autoHorizonEnabled by Pref("rv.autoHorizonEnabled", true)
+    /** Last measured horizon for portrait / landscape frames (0 = nothing measured yet). */
+    var autoHorizonPortrait by Pref("rv.autoHorizonPortrait", 0.0)
+    var autoHorizonLandscape by Pref("rv.autoHorizonLandscape", 0.0)
 
     // Driver assist sounds
     private fun legacyBool(key: String): Boolean? = if (prefs.contains(key)) prefs.getBoolean(key, false) else null

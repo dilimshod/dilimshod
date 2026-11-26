@@ -117,8 +117,69 @@ class LaneDetectorTest {
         for (i in 0 until 5) detector.process(SyntheticRoad.image(10.0, 150.0, seed = (i + 1).toLong()), i * 0.2)
         val before = detector.process(SyntheticRoad.image(10.0, 150.0), 1.2).leftConfidence
         var after = 1.0
-        for (i in 0 until 4) after = detector.process(SyntheticRoad.image(null, null, seed = (i + 50).toLong()), 1.4 + i * 0.2).leftConfidence
+        // The detector analyses the maximum of the last 3 lane frames (dashed lines), so the markings stay in the
+        // analysed picture for 2 more frames (0.4 s at 5 Hz) before the decay starts: 2 + 4 frames here.
+        for (i in 0 until 6) after = detector.process(SyntheticRoad.image(null, null, seed = (i + 50).toLong()), 1.4 + i * 0.2).leftConfidence
         assertTrue(after < before * 0.5)
+        // Without accumulation the old 4-frame bound holds.
+        val single = LaneDetector(LaneDetector.Config(accumulateFrames = 1))
+        for (i in 0 until 5) single.process(SyntheticRoad.image(10.0, 150.0, seed = (i + 1).toLong()), i * 0.2)
+        val singleBefore = single.process(SyntheticRoad.image(10.0, 150.0), 1.2).leftConfidence
+        var singleAfter = 1.0
+        for (i in 0 until 4) singleAfter = single.process(SyntheticRoad.image(null, null, seed = (i + 50).toLong()), 1.4 + i * 0.2).leftConfidence
+        assertTrue(singleAfter < singleBefore * 0.5)
+    }
+
+    // Aspect-aware lane limits (portrait frames)
+
+    @Test fun aspectScale() {
+        assertEquals(1.0, LaneDetector.aspectScale(1920, 1080), 1e-9)
+        assertEquals(3.155, LaneDetector.aspectScale(160, 284), 0.01)   // 9:16 portrait
+        assertEquals(4.0 / 3.0, LaneDetector.aspectScale(640, 480), 1e-9)
+        assertEquals(1.0, LaneDetector.aspectScale(0, 10), 0.0)
+        assertEquals(4.0, LaneDetector.aspectScale(100, 1000), 0.0)     // clamped
+    }
+
+    /**
+     * Realistic portrait geometry: a 3.5 m lane seen from 1.2 m is ≈ 2.8 image widths wide at the ROI bottom, so the
+     * lines reach the bottom row far outside the frame. With the landscape limit (2.2) one of the two correctly
+     * detected lines was halved every frame and dropped below 0.45.
+     */
+    @Test fun portraitLaneWithRealisticWidthKeepsBothLines() {
+        val detector = LaneDetector()
+        var estimate = LaneEstimate.empty()
+        for (i in 0 until 30) {
+            estimate = detector.process(SyntheticRoad.image(-142.0, 302.0, dashed = false, seed = (i + 1).toLong()), i * 0.2)
+        }
+        assertTrue(estimate.leftConfidence >= 0.45)
+        assertTrue(estimate.rightConfidence >= 0.45)
+        assertEquals(0.5, estimate.laneCenterX ?: 0.0, 0.08)
+        assertEquals(0.0, estimate.egoOffset ?: 9.0, 0.1)
+        val width = (estimate.right?.x(estimate.referenceY) ?: 0.0) - (estimate.left?.x(estimate.referenceY) ?: 0.0)
+        assertTrue(width > 2.2)     // wider than the landscape limit — and accepted
+    }
+
+    /** One visible line in portrait: the lane centre uses the default lane width scaled by the aspect (0.9 × 3.16). */
+    @Test fun portraitSingleLineUsesScaledDefaultWidth() {
+        val detector = LaneDetector()
+        var estimate = LaneEstimate.empty()
+        for (i in 0 until 6) estimate = detector.process(SyntheticRoad.image(-142.0, null, seed = (i + 3).toLong()), i * 0.2)
+        val left = estimate.left!!
+        assertNull(estimate.right)
+        val k = LaneDetector.aspectScale(160, 284)
+        assertEquals(left.x(estimate.referenceY) + 0.45 * k, estimate.laneCenterX ?: 0.0, 0.02)
+        assertEquals(0.5, estimate.laneCenterX ?: 0.0, 0.2)
+    }
+
+    /** Rotation: the state of the previous frame shape is dropped (normalized x means something else). */
+    @Test fun aspectChangeResetsState() {
+        val detector = LaneDetector()
+        for (i in 0 until 5) detector.process(SyntheticRoad.image(10.0, 150.0, seed = (i + 1).toLong()), i * 0.2)
+        val landscape = LaneImage(160, 90, 95)
+        landscape[0, 0] = 95
+        val estimate = detector.process(landscape, 1.2)
+        assertNull(estimate.left)
+        assertNull(estimate.right)
     }
 
     @Test fun yellowMarkingFromBGRA() {

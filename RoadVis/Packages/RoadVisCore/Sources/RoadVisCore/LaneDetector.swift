@@ -15,7 +15,10 @@ import Foundation
 //  4. Hough voting separately for the left and the right half with slope constraints (angle to the horizontal between
 //     `minAngleDegrees` and `maxAngleDegrees`, line must reach the centre area at the horizon), then least-squares refit
 //     of the inliers.
+//     The three thresholds adapt per frame to the measured pixel noise and road brightness (`adaptiveThresholds`),
+//     and the marking image is the pixel-wise maximum of the last `accumulateFrames` lane frames (dashed lines).
 //  5. Temporal smoothing (EMA of the line end points, outlier rejection, confidence decay when missed).
+//  6. The intersection of the two raw fits (vanishing point) is published per frame for `LaneHorizonEstimator`.
 
 /// Single-channel 8-bit image (row-major, top-left origin).
 public struct LaneImage: Sendable {
@@ -206,14 +209,28 @@ public final class LaneDetector {
         /// Confidence multiplier per frame without a detection.
         public var missDecay: Double
         /// Typical lane width at the reference row (normalized) used when only one line is visible; refined online.
+        /// The value (and the 0.25…2.2 plausibility limits of `process`) is for a 16:9 LANDSCAPE frame; for other
+        /// frame shapes they are multiplied by `LaneDetector.aspectScale` (≈ 3.16 for 9:16 portrait).
         public var defaultLaneWidth: Double
+        /// Derive `minBrightness` / `ridgeContrast` / `localContrast` per frame from the pixel noise and the road
+        /// brightness of the ROI (`LaneDetector.adaptiveThresholds`). The three configured values then act as the
+        /// upper bound of the brightness floor and as the fallback when the ROI is too small to sample.
+        public var adaptiveThresholds: Bool
+        /// The detector analyses the pixel-wise maximum of the last this-many lane frames (1 = single frame).
+        public var accumulateFrames: Int
+
+        /// Frames accumulated by default. Measured on synthetic images only (both lines dashed with 25 % duty,
+        /// 50 km/h at 5 Hz, no lateral motion): both lines reached confidence 0.45 on 23 of 55 single frames
+        /// (mean 0.45), on 55 of 55 with the maximum of 2 frames (mean 0.73) and of 3 frames (mean 0.81).
+        public static let defaultAccumulateFrames: Int = 3
 
         public init(horizonY: Double = EgoCorridor.default.horizonY, roiTopMargin: Double = 0.04,
                     roiBottom: Double = 0.96, egoX: Double = 0.5, minBrightness: Int = 85,
                     ridgeContrast: Int = 14, localContrast: Int = 18, markingWidthAtBottom: Double = 0.035,
                     minAngleDegrees: Double = 18, maxAngleDegrees: Double = 86, minRowCoverage: Double = 0.12,
                     fullRowCoverage: Double = 0.45, smoothing: Double = 0.4, missDecay: Double = 0.8,
-                    defaultLaneWidth: Double = 0.9) {
+                    defaultLaneWidth: Double = 0.9, adaptiveThresholds: Bool = true,
+                    accumulateFrames: Int = Config.defaultAccumulateFrames) {
             self.horizonY = horizonY
             self.roiTopMargin = roiTopMargin
             self.roiBottom = roiBottom
@@ -229,6 +246,8 @@ public final class LaneDetector {
             self.smoothing = smoothing
             self.missDecay = missDecay
             self.defaultLaneWidth = defaultLaneWidth
+            self.adaptiveThresholds = adaptiveThresholds
+            self.accumulateFrames = max(1, accumulateFrames)
         }
     }
 
@@ -243,6 +262,35 @@ public final class LaneDetector {
     private var left: SideState?
     private var right: SideState?
     private var laneWidth: Double
+    /// Aspect factor of the frames seen so far (1 until the first frame); a change (rotation) restarts the state.
+    private var aspect: Double = 1
+    /// Previous lane frames (newest last) for the pixel-wise maximum, with the horizon they were analysed with.
+    private var previousImages: [(image: LaneImage, time: TimeInterval)] = []
+    private var accumulationHorizon: Double = -1
+    /// Vanishing point of the two RAW fits of the last processed frame (nil unless both lines were fitted).
+    public private(set) var lastVanishingPoint: LaneVanishingPoint?
+
+    /// Lane frames further apart than this are not accumulated, seconds (the lane detector runs at ≈ 5 Hz; at
+    /// 0.5 s the car has moved too far for the dashes of two frames to belong to one picture).
+    static let accumulateMaxGap: TimeInterval = 0.5
+    /// The two lines may cross by this much (fraction of the width) at the middle row of the ROI before the weaker
+    /// side is distrusted.
+    static let crossingTolerance: Double = 0.05
+
+    /// Plausible lane width at the ROI bottom for a 16:9 landscape frame, fractions of the image width. A 3.5 m lane
+    /// seen from 1.2 m is (3.5 / 1.2) × (0.96 − 0.42) × H / W ≈ 0.89 there (flat-ground geometry, independent of the
+    /// field of view) — and ≈ 2.8 in 9:16 portrait, which is why the limits are scaled by `aspectScale`.
+    static let minLaneWidth: Double = 0.25
+    static let maxLaneWidthLandscape: Double = 2.2
+    /// Bottom-x jump (fraction of the width, landscape) above which a new fit is treated as a stray line.
+    static let bottomJumpLandscape: Double = 0.15
+
+    /// Lane-width factor of a frame relative to 16:9 landscape: (H / W) ÷ (9 / 16). 1 for 16:9 landscape,
+    /// ≈ 3.16 for 9:16 portrait, 1.33 for 4:3 landscape. Clamped to 0.75…4.
+    public static func aspectScale(width: Int, height: Int) -> Double {
+        guard width > 0, height > 0 else { return 1 }
+        return min(4, max(0.75, (Double(height) / Double(width)) / (9.0 / 16.0)))
+    }
 
     public init(config: Config = Config()) {
         self.config = config
@@ -252,20 +300,105 @@ public final class LaneDetector {
     public func reset() {
         left = nil
         right = nil
-        laneWidth = config.defaultLaneWidth
+        laneWidth = config.defaultLaneWidth * aspect
+        previousImages.removeAll()
+        lastVanishingPoint = nil
+    }
+
+    /// Changes the horizon row and keeps the smoothed lines where they are in the image (their stored top x is the
+    /// x AT the horizon row, so it is re-evaluated at the new row). Use this instead of assigning
+    /// `config.horizonY` while the detector is running.
+    public func setHorizon(_ horizonY: Double) {
+        let old = config.horizonY
+        guard horizonY.isFinite, abs(horizonY - old) > 1e-9 else { return }
+        let span = config.roiBottom - old
+        if abs(span) > 1e-6 {
+            let factor = (config.roiBottom - horizonY) / span
+            if var l = left {
+                l.topX = l.bottomX + (l.topX - l.bottomX) * factor
+                left = l
+            }
+            if var r = right {
+                r.topX = r.bottomX + (r.topX - r.bottomX) * factor
+                right = r
+            }
+        }
+        config.horizonY = horizonY
+    }
+
+    /// Pixel-wise maximum of `image` and the recent frames (same size, same horizon, close in time). Dashed lines
+    /// show only part of their strokes on one frame; the car's forward motion moves them along the same image line.
+    /// Lateral motion smears the accumulated line, which lowers the fit confidence rather than inventing a line.
+    private func accumulated(_ image: LaneImage, timestamp: TimeInterval) -> LaneImage {
+        let frames = max(1, config.accumulateFrames)
+        if abs(accumulationHorizon - config.horizonY) > 1e-9 {
+            // Rows above the horizon are blanked by the caller; frames made for another horizon do not mix.
+            previousImages.removeAll()
+            accumulationHorizon = config.horizonY
+        }
+        previousImages.removeAll {
+            $0.image.width != image.width || $0.image.height != image.height
+                || timestamp - $0.time > Self.accumulateMaxGap * Double(frames - 1) || timestamp < $0.time
+        }
+        if let newest = previousImages.last, timestamp - newest.time > Self.accumulateMaxGap {
+            previousImages.removeAll()
+        }
+        var result = image
+        if frames > 1, !previousImages.isEmpty {
+            result.pixels.withUnsafeMutableBufferPointer { out in
+                for entry in previousImages {
+                    entry.image.pixels.withUnsafeBufferPointer { other in
+                        let n = min(out.count, other.count)
+                        for i in 0..<n where other[i] > out[i] { out[i] = other[i] }
+                    }
+                }
+            }
+        }
+        if frames > 1 {
+            previousImages.append((image, timestamp))
+            if previousImages.count > frames - 1 { previousImages.removeFirst(previousImages.count - (frames - 1)) }
+        } else {
+            previousImages.removeAll()
+        }
+        return result
     }
 
     /// Analyses one frame and returns the smoothed estimate.
     @discardableResult
     public func process(_ image: LaneImage, timestamp: TimeInterval) -> LaneEstimate {
-        let fits = Self.detectLines(in: image, config: config)
+        let k = Self.aspectScale(width: image.width, height: image.height)
+        if abs(k - aspect) > 0.01 {
+            // Frame shape changed (rotation, first frame): normalized x of the old state means something else.
+            aspect = k
+            left = nil
+            right = nil
+            laneWidth = config.defaultLaneWidth * k
+        }
+        let analysed = accumulated(image, timestamp: timestamp)
+        let fits = Self.detectLines(in: analysed, config: config)
         let w = Double(max(1, image.width))
-        left = Self.smooth(left, fit: fits.left, width: w, config: config)
-        right = Self.smooth(right, fit: fits.right, width: w, config: config)
+        lastVanishingPoint = Self.vanishingPoint(left: fits.left, right: fits.right, width: w,
+                                                 height: Double(max(1, image.height)), config: config)
+        left = Self.smooth(left, fit: fits.left, width: w, aspect: k, config: config)
+        right = Self.smooth(right, fit: fits.right, width: w, aspect: k, config: config)
         // Plausibility: lane width at the bottom must be sensible, otherwise trust the weaker side less.
         if let l = left, let r = right {
             let width = r.bottomX - l.bottomX
-            if width < 0.25 || width > 2.2 || r.topX < l.topX - 0.05 {
+            // Crossing check at the MIDDLE row of the ROI, not at the configured horizon. Two correct lines meet at
+            // the REAL horizon and are crossed above it, so with a configured horizon above the real one the old
+            // check (at the configured horizon) halved the weaker side on every frame (measured, synthetic:
+            // configured 0.42 / true 0.48–0.60 left one side at 0.20–0.23, below the 0.45 that lane departure and
+            // the roadway zone need). Lines that are crossed half-way down the road picture are implausible for
+            // any horizon the estimator accepts (≤ 0.70 with the ROI bottom at 0.96).
+            let span = config.roiBottom - config.horizonY
+            let roiTop = config.horizonY + config.roiTopMargin
+            let middle = (roiTop + config.roiBottom) / 2
+            let f = abs(span) > 1e-6 ? (config.roiBottom - middle) / span : 1
+            let leftTop = l.bottomX + (l.topX - l.bottomX) * f
+            let rightTop = r.bottomX + (r.topX - r.bottomX) * f
+            // Only the upper limit scales with the aspect (the lower one is a sanity bound for any frame shape).
+            if width < Self.minLaneWidth || width > Self.maxLaneWidthLandscape * k
+                || rightTop < leftTop - Self.crossingTolerance {
                 if l.confidence < r.confidence { left?.confidence *= 0.5 } else { right?.confidence *= 0.5 }
             } else if l.confidence >= 0.5, r.confidence >= 0.5 {
                 laneWidth += 0.1 * (width - laneWidth)
@@ -308,7 +441,8 @@ public final class LaneDetector {
                             timestamp: timestamp)
     }
 
-    private static func smooth(_ state: SideState?, fit: LaneLineFit?, width: Double, config: Config) -> SideState? {
+    private static func smooth(_ state: SideState?, fit: LaneLineFit?, width: Double, aspect: Double,
+                               config: Config) -> SideState? {
         guard let fit else {
             guard var s = state else { return nil }
             s.confidence *= config.missDecay
@@ -318,7 +452,8 @@ public final class LaneDetector {
         guard var s = state else {
             return SideState(bottomX: bx, topX: tx, confidence: fit.confidence * 0.6)
         }
-        let jump = abs(bx - s.bottomX) > 0.15 || abs(tx - s.topX) > 0.1
+        // The bottom x is extrapolated far outside a portrait frame, so only its threshold scales with the aspect.
+        let jump = abs(bx - s.bottomX) > bottomJumpLandscape * aspect || abs(tx - s.topX) > 0.1
         if jump && s.confidence >= 0.3 && s.outliers < 2 {
             // Probably a stray line (crack, kerb, car edge): ignore it unless it persists.
             s.outliers += 1
@@ -335,6 +470,95 @@ public final class LaneDetector {
 
     // MARK: - Per-frame detection (stateless, testable)
 
+    // Adaptive candidate thresholds. All numbers below were measured on SYNTHETIC 160×284 road images with uniform
+    // pixel noise (scratchpad/lane/core/Tests/RoadVisCoreTests/ExpLane.swift) — real roads have structured clutter
+    // (shadows, cracks, headlight glare on wet asphalt) that this noise model does not contain, and no night drive
+    // was evaluated. With the fixed 85 / 14 / 18: a night road (road 30 / marking 70, or 20 / 50) gave no lines at
+    // all, worn paint (95 / 108) gave none, and 20 of 200 raw side fits on EMPTY roads with noise up to ±20 were
+    // false lines. With the factors below: night 0.80, worn 0.60, day unchanged at 0.80, 0 of 200 false fits.
+    // Merely lowering the fixed thresholds (45 / 10 / 12) fixed night but gave 70 of 160 false fits.
+    /// Ridge contrast = this × noise (median |p[x] − p[x+2]| of the ROI)…
+    static let adaptiveRidgeFactor: Double = 3.0
+    /// …clamped to this range.
+    static let adaptiveRidgeRange: ClosedRange<Int> = 8...40
+    /// Local contrast = this × noise…
+    static let adaptiveLocalFactor: Double = 3.5
+    static let adaptiveLocalRange: ClosedRange<Int> = 10...45
+    /// Lowest brightness floor (the floor is road median + local contrast, at most `Config.minBrightness`).
+    static let adaptiveMinBrightnessFloor: Int = 30
+    /// Sampling of the ROI for the noise estimate: every 4th row, every 3rd pixel.
+    static let adaptiveRowStep: Int = 4
+    static let adaptivePixelStep: Int = 3
+
+    /// Per-frame candidate thresholds from the ROI's pixel noise and median brightness; `config`'s own values when
+    /// `config.adaptiveThresholds` is off or the ROI is too small.
+    public static func adaptiveThresholds(in image: LaneImage, config: Config)
+        -> (minBrightness: Int, ridgeContrast: Int, localContrast: Int) {
+        let fixed = (minBrightness: config.minBrightness, ridgeContrast: config.ridgeContrast,
+                     localContrast: config.localContrast)
+        guard config.adaptiveThresholds else { return fixed }
+        let w = image.width, h = image.height
+        guard w >= 16, h >= 16 else { return fixed }
+        let yTop = max(1, Int(Double(h) * min(0.95, config.horizonY + config.roiTopMargin)))
+        let yBottom = min(h - 1, Int(Double(h) * config.roiBottom))
+        guard yBottom - yTop >= 6 else { return fixed }
+        // Histograms instead of sorting (values are 0…255).
+        var diffHistogram = [Int](repeating: 0, count: 256)
+        var valueHistogram = [Int](repeating: 0, count: 256)
+        var count = 0
+        image.pixels.withUnsafeBufferPointer { px in
+            var y = yTop
+            while y <= yBottom {
+                let row = y * w
+                var x = 0
+                while x + 2 < w {
+                    let a = Int(px[row + x]), b = Int(px[row + x + 2])
+                    diffHistogram[abs(a - b)] += 1
+                    valueHistogram[a] += 1
+                    count += 1
+                    x += adaptivePixelStep
+                }
+                y += adaptiveRowStep
+            }
+        }
+        guard count >= 32 else { return fixed }
+        func median(_ histogram: [Int]) -> Int {
+            // Element at index count / 2 of the sorted samples.
+            var seen = 0
+            for (value, n) in histogram.enumerated() {
+                seen += n
+                if seen > count / 2 { return value }
+            }
+            return 255
+        }
+        let noise = Double(median(diffHistogram))
+        let road = median(valueHistogram)
+        let ridge = min(adaptiveRidgeRange.upperBound,
+                        max(adaptiveRidgeRange.lowerBound, Int((adaptiveRidgeFactor * noise).rounded())))
+        let local = min(adaptiveLocalRange.upperBound,
+                        max(adaptiveLocalRange.lowerBound, Int((adaptiveLocalFactor * noise).rounded())))
+        let brightness = min(config.minBrightness, max(adaptiveMinBrightnessFloor, road + local))
+        return (brightness, ridge, local)
+    }
+
+    /// Intersection of the two raw fits of one frame (nil unless both exist and are not parallel).
+    public static func vanishingPoint(left: LaneLineFit?, right: LaneLineFit?, width: Double, height: Double,
+                                      config: Config) -> LaneVanishingPoint? {
+        guard let left, let right, width > 0, height > 0 else { return nil }
+        // Same rows as `detectLines`: the fits give x at the ROI bottom row and at the configured horizon row.
+        let yb = Double(min(Int(height) - 1, Int(height * config.roiBottom)))
+        let yh = height * config.horizonY
+        let dl = left.horizonX - left.bottomX, dr = right.horizonX - right.bottomX
+        let denominator = dl - dr
+        guard abs(denominator) > 1e-6 else { return nil }
+        let u = (right.bottomX - left.bottomX) / denominator      // fraction of (yb − yh) above the bottom row
+        let x = left.bottomX + dl * u
+        let y = yb - u * (yb - yh)
+        guard x.isFinite, y.isFinite else { return nil }
+        return LaneVanishingPoint(x: x / width, y: y / height,
+                                  confidence: min(left.confidence, right.confidence))
+    }
+
     /// Marking candidate pixels of the ROI (pixel coordinates).
     public static func candidatePoints(in image: LaneImage, config: Config) -> [(x: Int, y: Int)] {
         let w = image.width, h = image.height
@@ -342,6 +566,10 @@ public final class LaneDetector {
         let yTop = max(1, Int(Double(h) * min(0.95, config.horizonY + config.roiTopMargin)))
         let yBottom = min(h - 1, Int(Double(h) * config.roiBottom))
         guard yBottom - yTop >= 6 else { return [] }
+        let thresholds = adaptiveThresholds(in: image, config: config)
+        let minBrightness = thresholds.minBrightness
+        let ridgeContrast = thresholds.ridgeContrast
+        let localContrast = thresholds.localContrast
         let window = max(4, w / 8)
         var points: [(x: Int, y: Int)] = []
         points.reserveCapacity(1024)
@@ -356,12 +584,12 @@ public final class LaneDetector {
                 guard w > 2 * d + 2 else { continue }
                 for x in d..<(w - d) {
                     let v = Int(px[row + x])
-                    guard v >= config.minBrightness else { continue }
+                    guard v >= minBrightness else { continue }
                     let l = Int(px[row + x - d]), r = Int(px[row + x + d])
-                    guard v - max(l, r) >= config.ridgeContrast else { continue }
+                    guard v - max(l, r) >= ridgeContrast else { continue }
                     let a = max(0, x - window), b = min(w, x + window + 1)
                     let mean = (prefix[b] - prefix[a]) / max(1, b - a)
-                    guard v - mean >= config.localContrast else { continue }
+                    guard v - mean >= localContrast else { continue }
                     points.append((x, y))
                 }
             }
@@ -385,21 +613,26 @@ public final class LaneDetector {
             let pt = (x: Double(p.x), y: Double(p.y))
             if pt.x < egoPx { leftPts.append(pt) } else { rightPts.append(pt) }
         }
-        let leftFit = fitSide(leftPts, side: .left, width: w, yb: yb, yh: yh, roiRows: roiRows, config: config)
-        let rightFit = fitSide(rightPts, side: .right, width: w, yb: yb, yh: yh, roiRows: roiRows, config: config)
+        let k = aspectScale(width: image.width, height: image.height)
+        let leftFit = fitSide(leftPts, side: .left, width: w, yb: yb, yh: yh, roiRows: roiRows, aspect: k, config: config)
+        let rightFit = fitSide(rightPts, side: .right, width: w, yb: yb, yh: yh, roiRows: roiRows, aspect: k,
+                               config: config)
         return (leftFit, rightFit)
     }
 
     private static func fitSide(_ pts: [(x: Double, y: Double)], side: LaneSide, width w: Double, yb: Double, yh: Double,
-                                roiRows: Int, config: Config) -> LaneLineFit? {
+                                roiRows: Int, aspect k: Double, config: Config) -> LaneLineFit? {
         guard pts.count >= 6 else { return nil }
         // Line model: x = xb + s · (yb − y); s = cot(angle) > 0 for the left line (it leans right going up), < 0 right.
         let sMin = 1 / tan(config.maxAngleDegrees * .pi / 180)
         let sMax = 1 / tan(config.minAngleDegrees * .pi / 180)
         let slopeBins = 48
-        let binWidth = max(1.0, w / 80)
-        let xbMin = side == .left ? -w : 0.35 * w
-        let xbMax = side == .left ? 0.65 * w : 2 * w
+        // Bottom-intercept range: one image width beyond the frame in 16:9 landscape, `k` widths for taller frames
+        // (in portrait the own-lane lines reach the ROI bottom ≈ 0.9 widths outside the frame). Identical to the
+        // previous range for k = 1; wider bins keep the accumulator bounded.
+        let binWidth = max(1.0, w / 80 * max(1, k / 2))
+        let xbMin = side == .left ? -w * k : 0.35 * w
+        let xbMax = side == .left ? 0.65 * w : (1 + k) * w
         let xbBins = max(1, Int((xbMax - xbMin) / binWidth) + 1)
         // At the horizon the own-lane lines converge near the centre.
         let horizonMin = 0.12 * w, horizonMax = 0.88 * w

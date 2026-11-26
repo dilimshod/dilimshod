@@ -78,8 +78,11 @@ data class RoadwayZone(
          */
         fun fromLanes(
             estimate: LaneEstimate, horizonY: Double, extraLanesLeft: Double,
-            extraLanesRight: Double, minConfidence: Double,
+            extraLanesRight: Double, minConfidence: Double, aspectScale: Double = 1.0,
         ): RoadwayZone? {
+            // Lane-width factor of the frame relative to 16:9 landscape (`LaneDetector.aspectScale`, ≈ 3.16 in
+            // portrait): the 0.2…2.5 plausibility limits of the bottom lane width are for landscape.
+            val k = if (aspectScale.isFinite()) max(0.5, aspectScale) else 1.0
             val l = if (estimate.leftConfidence >= minConfidence) estimate.left else null
             val r = if (estimate.rightConfidence >= minConfidence) estimate.right else null
             val ref = estimate.referenceY
@@ -108,7 +111,7 @@ data class RoadwayZone(
             }
             val widthBottom = rb - lb
             val widthTop = rt - lt
-            if (!(widthBottom > 0.2 && widthBottom < 2.5 && widthTop > -0.05 && lb.isFinite() && rb.isFinite())) return null
+            if (!(widthBottom > 0.2 * k && widthBottom < 2.5 * k && widthTop > -0.05 && lb.isFinite() && rb.isFinite())) return null
             lb -= extraLanesLeft * widthBottom
             lt -= extraLanesLeft * max(0.0, widthTop)
             rb += extraLanesRight * widthBottom
@@ -130,6 +133,8 @@ class RoadwayZoneEstimator(var config: Config = Config()) {
         val minLaneConfidence: Double = 0.45,
         /** EMA weight of a new zone (1 = no smoothing). */
         val smoothing: Double = 0.25,
+        /** Lane-width factor of the frame relative to 16:9 landscape (`LaneDetector.aspectScale`); set by the owner. */
+        val aspectScale: Double = 1.0,
     )
 
     var zone: RoadwayZone? = null
@@ -143,7 +148,7 @@ class RoadwayZoneEstimator(var config: Config = Config()) {
     fun target(lane: LaneEstimate?, corridor: EgoCorridor): RoadwayZone {
         if (lane != null) {
             val z = RoadwayZone.fromLanes(lane, corridor.horizonY, config.extraLanesLeft, config.extraLanesRight,
-                config.minLaneConfidence)
+                config.minLaneConfidence, config.aspectScale)
             if (z != null) return z
         }
         return RoadwayZone.fromCorridor(corridor, config.roadWidthFactor)

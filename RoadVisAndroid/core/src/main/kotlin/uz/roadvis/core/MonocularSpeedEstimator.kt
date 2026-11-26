@@ -60,6 +60,16 @@ class MonocularSpeedEstimator(val windowSeconds: Double = 1.5, val maxDistance: 
     fun update(tracks: List<TrackedObject>, ownSpeedKmh: Double?, geometry: CameraGeometry, timestamp: Double): List<TrackedObject> {
         val result = tracks.map { it.copy() }
         for (t in result) {
+            if (t.missed > 0) {
+                // Coasted track (predicted box, see `ObjectTracker.Config.coastFrames`): no new sample — a predicted
+                // box height is not a measurement. The last measured distance stays on screen; speeds are withheld.
+                val recent = (history[t.id] ?: emptyList<Sample>()).takeLast(3).map { it.z }.sorted()
+                t.distanceMeters = if (recent.isEmpty()) null else recent[recent.size / 2]
+                t.relativeSpeedKmh = null
+                t.estimatedSpeedKmh = null
+                if (recent.isNotEmpty()) lastSeen[t.id] = timestamp
+                continue
+            }
             val realH = t.kind.typicalHeightMeters
             val z = if (realH != null && t.box.maxY < 0.985 && t.box.minY > 0.005)
                 MonocularDistance.distance(realH, t.box.height, geometry) else null

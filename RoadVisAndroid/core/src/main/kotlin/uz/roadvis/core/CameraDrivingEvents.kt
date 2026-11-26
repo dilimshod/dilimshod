@@ -41,7 +41,9 @@ class RedLightRunningDetector(var config: Config = Config()) {
             val e = entries[t.id]
             if (e != null) {
                 e.box = t.box
-                if (color != TrafficLightColor.UNKNOWN) e.color = color
+                // No latch here: the tracker already smooths the colour and holds it ≈ 1 s without a readable lamp
+                // (`ObjectTracker.lightColorMaxAge`), so a light unreadable for longer no longer yields a red-light event.
+                e.color = color
                 e.lastSeen = timestamp
                 e.speedAtLastSeen = speedKmh
                 seen.add(t.id)
@@ -81,6 +83,15 @@ class StopSignComplianceMonitor(var config: Config = Config()) {
         val signWidthMeters: Double = 0.7,
         /** Only arm while moving at least this fast, km/h. */
         val minArmSpeedKmh: Double = 8.0,
+        /**
+         * After `passTimeout` the episode stays open while the car may still be braking to the line. It is judged once
+         * the car has travelled the sign's last distance plus this margin, metres.
+         */
+        val passMarginMeters: Double = 10.0,
+        /** Hard cap of the episode after the sign was lost, seconds. */
+        val maxEpisodeAfterLost: Double = 10.0,
+        /** Speeding up by this much above the lowest speed of the episode ends it (the driver is leaving), km/h. */
+        val resumeDeltaKmh: Double = 2.0,
     )
 
     data class Violation(
@@ -96,6 +107,9 @@ class StopSignComplianceMonitor(var config: Config = Config()) {
     private var minSpeed = Double.POSITIVE_INFINITY
     private var lastSignSeen = Double.NEGATIVE_INFINITY
     private var speedKnown = true
+    private var lastSignDistance = 0.0
+    private var travelledSinceSeen = 0.0
+    private var lastUpdate: Double? = null
 
     val isArmed: Boolean get() = armedAt != null
 
@@ -103,6 +117,8 @@ class StopSignComplianceMonitor(var config: Config = Config()) {
         armedAt = null
         minSpeed = Double.POSITIVE_INFINITY
         speedKnown = true
+        travelledSinceSeen = 0.0
+        lastUpdate = null
     }
 
     /** Approximate distance of a STOP sign box, metres. */
@@ -121,15 +137,34 @@ class StopSignComplianceMonitor(var config: Config = Config()) {
                 armedDistance = nearest
                 minSpeed = speedKmh
                 speedKnown = true
+                lastSignDistance = nearest
+                travelledSinceSeen = 0.0
+                lastUpdate = timestamp
             }
             return null
         }
         if (speedKmh != null) minSpeed = min(minSpeed, speedKmh) else speedKnown = false
+        val dt = max(0.0, min(timestamp - (lastUpdate ?: timestamp), 1.0))
+        lastUpdate = timestamp
+        if (signs.isNotEmpty()) {
+            travelledSinceSeen = 0.0
+            if (nearest != null) lastSignDistance = nearest
+            return null
+        }
+        travelledSinceSeen += (speedKmh ?: 0.0) / 3.6 * dt
+        val lost = timestamp - lastSignSeen
         val start = armedAt
-        if (timestamp - lastSignSeen < config.passTimeout || start == null) return null
+        if (lost < config.passTimeout || start == null) return null
+        val stopped = speedKnown && minSpeed < config.stopSpeedKmh
+        // Still approaching the line: not yet past the sign, not accelerating again, hard cap not reached.
+        val passed = travelledSinceSeen >= lastSignDistance + config.passMarginMeters
+        val resumed = speedKmh?.let { it >= minSpeed + config.resumeDeltaKmh } ?: true
+        if (!stopped && !passed && !resumed && lost < config.maxEpisodeAfterLost) return null
         armedAt = null
         val ms = minSpeed
         minSpeed = Double.POSITIVE_INFINITY
+        travelledSinceSeen = 0.0
+        lastUpdate = null
         if (!(speedKnown && ms.isFinite() && ms >= config.stopSpeedKmh)) return null
         return Violation(ms, armedDistance, timestamp - start)
     }

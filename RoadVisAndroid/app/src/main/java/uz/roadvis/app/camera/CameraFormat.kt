@@ -154,7 +154,10 @@ object FollowingDistanceText {
         return "≈ " + CamFmt.gapMeters(meters)
     }
 
-    fun recommended(a: FollowingDistanceAssessment): String = "≥ " + CamFmt.normMeters(a.recommendedDistanceMeters)
+    fun recommended(a: FollowingDistanceAssessment): String =
+        // "—" while the own speed is unknown (no GPS fix: the norm cannot be computed, and the assessment is no
+        // longer treated as "standing still").
+        if (a.ownSpeedKmh == null) "—" else "≥ " + CamFmt.normMeters(a.recommendedDistanceMeters)
 
     fun movingNorm(a: FollowingDistanceAssessment, policy: FollowingDistancePolicy): String {
         val gap = policy.timeGap(a.condition)

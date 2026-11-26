@@ -155,11 +155,13 @@ public enum FollowingDistanceCalculator {
     public static func assess(distanceMeters: Double?, ownSpeedKmh: Double?, relativeSpeedKmh: Double?,
                               policy: FollowingDistancePolicy, condition: RoadSurfaceCondition) -> FollowingDistanceAssessment {
         let speed = ownSpeedKmh.map { max(0, $0) }
-        let stopped = (speed ?? 0) < policy.stoppedSpeedKmh
+        // Unknown own speed (no GPS fix: tunnel, first seconds) is NOT "standing still": the gap norm cannot be
+        // judged then, but the collision branch below still works from the camera closing speed.
+        let stopped = speed.map { $0 < policy.stoppedSpeedKmh } ?? false
         let recommended = recommendedDistance(speedKmh: speed, policy: policy, condition: condition)
         var a = FollowingDistanceAssessment(distanceMeters: distanceMeters, ownSpeedKmh: speed, isStopped: stopped,
                                             condition: condition, recommendedDistanceMeters: recommended,
-                                            recommendedTimeGapSeconds: stopped ? nil : policy.timeGap(for: condition),
+                                            recommendedTimeGapSeconds: (stopped || speed == nil) ? nil : policy.timeGap(for: condition),
                                             stoppingDistanceMeters: nil, timeHeadwaySeconds: nil,
                                             closingSpeedKmh: nil, timeToCollisionSeconds: nil,
                                             fractionOfRecommended: nil, status: .unknown)
@@ -177,10 +179,17 @@ public enum FollowingDistanceCalculator {
                 a.timeToCollisionSeconds = d / (closing / 3.6)
             }
         }
+        let collision = (a.timeToCollisionSeconds ?? .infinity) < policy.collisionWarningSeconds
+        guard speed != nil else {
+            // Own speed unknown: `fractionOfRecommended` stays nil so the tailgating monitor / "too close" coach do
+            // not fire against the 2 m stopped norm; only the time-to-collision can raise a warning.
+            a.status = collision ? .danger : .unknown
+            return a
+        }
         let fraction = d / max(0.1, recommended)
         a.fractionOfRecommended = fraction
 
-        if let ttc = a.timeToCollisionSeconds, ttc < policy.collisionWarningSeconds, !stopped {
+        if collision, !stopped {
             a.status = .danger
         } else if fraction >= 1 {
             a.status = .safe
@@ -256,6 +265,33 @@ public struct EgoCorridor: Hashable, Codable, Sendable {
         return offset <= centerFraction || overlapFraction(box) >= minOverlap
     }
 
+    /// Frame aspect (width : height) the default half widths are tuned for.
+    public static let referenceAspect: Double = 16.0 / 9.0
+    /// Upper bound of the aspect compensation (a 9:16 portrait frame needs ≈ 3.16).
+    public static let maxAspectScale: Double = 4
+
+    /// How much wider (in fractions of the image WIDTH) the own lane is at a given row of a frame of this size
+    /// than in the 16:9 landscape frame the defaults are tuned for. On flat ground the lane width at a row is
+    /// `lane_m / cameraHeight_m × (y − horizon) × H / W` image widths — independent of the field of view — so it
+    /// scales with H / W: 1 for 16:9 landscape, (16/9)² ≈ 3.16 for 9:16 portrait. Never below 1.
+    public static func aspectScale(imageWidth: Double, imageHeight: Double) -> Double {
+        guard imageWidth > 0, imageHeight > 0, imageWidth.isFinite, imageHeight.isFinite else { return 1 }
+        return min(maxAspectScale, max(1, (imageHeight / imageWidth) * referenceAspect))
+    }
+
+    /// Own-lane corridor for a frame of the given size: the 16:9 landscape defaults with the bottom half width
+    /// compensated for the frame aspect (`aspectScale`). In portrait the bottom half width exceeds 0.5 — that is
+    /// intended (the lane is wider than the picture at the bottom edge); it is only compared, and drawing clips.
+    /// With the fixed landscape widths a portrait corridor was only ≈ 0.4–0.5 m wide at 5–10 m (derived from the
+    /// flat-ground geometry above, camera 1.2 m high; not measured on a device).
+    public static func forFrame(centerX: Double = 0.5, horizonY: Double = 0.42, imageWidth: Double,
+                                imageHeight: Double) -> EgoCorridor {
+        var corridor = EgoCorridor(centerX: centerX, horizonY: horizonY)
+        let scale = aspectScale(imageWidth: imageWidth, imageHeight: imageHeight)
+        corridor.bottomHalfWidth = corridor.horizonHalfWidth + (corridor.bottomHalfWidth - corridor.horizonHalfWidth) * scale
+        return corridor
+    }
+
     /// Corridor polygon (bottom-left, top-left, top-right, bottom-right) for drawing.
     public var polygon: [(x: Double, y: Double)] {
         [(centerX - bottomHalfWidth, 1), (centerX - horizonHalfWidth, horizonY),
@@ -282,10 +318,12 @@ public struct LeadVehicle: Hashable, Sendable {
 /// Selects the lead vehicle — the vehicle directly AHEAD in the own lane, not one in the adjacent lane — and estimates
 /// its distance by fusing the apparent width and height of its box with typical vehicle dimensions.
 ///
-/// Selection: only confirmed vehicles seen on this frame that are strictly ahead (`EgoCorridor.isStrictlyAhead`) and
+/// Selection: only confirmed vehicles seen on this frame (or coasted by the tracker for ≤ `coastMissed` frames — then
+/// only the current lead, whose last measured distance is repeated) that are strictly ahead (`EgoCorridor.isStrictlyAhead`) and
 /// whose box does not touch the left / right frame edge (a car passing in the adjacent lane) are candidates. Among them
 /// the lowest score wins: closeness rank (boxes whose bottom edges are within `rankTolerance` share a rank) plus
-/// `lateralPenalty` × the normalized lateral offset, so a centred car beats a slightly closer off-centre one. The
+/// `lateralPenalty` × the normalized lateral offset, so a centred car beats a slightly closer off-centre one — but a
+/// candidate that is clearly nearer (`dominanceRatio`) always beats a farther one, however centred that one is. The
 /// current lead is kept (hysteresis) unless another candidate scores better by `switchMargin`; it is dropped at once
 /// when it leaves the strict zone.
 public final class LeadVehicleTracker {
@@ -300,6 +338,12 @@ public final class LeadVehicleTracker {
         public var lateralPenalty: Double = 2
         /// Bottom edges closer than this (fraction of the height) share a closeness rank.
         public var rankTolerance: Double = 0.03
+        /// A candidate whose bottom edge is this many times farther below the horizon than another's (≈ that many
+        /// times nearer on flat ground — distance ∝ 1 / (maxY − horizonY), orientation independent) always beats it,
+        /// whatever the lateral offsets. 1.5 keeps "centred car beats a slightly closer off-centre one" (ratio 1.16
+        /// in the existing test) and makes a car at 8 m beat a centred one at 25 m (ratio ≈ 3.1). Reasoning, not tuned
+        /// on video.
+        public var dominanceRatio: Double = 1.5
         /// Another candidate must score better by this to replace the current lead.
         public var switchMargin: Double = 0.5
 
@@ -312,9 +356,25 @@ public final class LeadVehicleTracker {
     /// windscreen sees the lead from ~2 m behind the bumper, so the reported gap subtracts this.
     public var cameraToBumperMeters: Double = 0
     private var currentID: Int?
+    /// Class of the current lead: the distance cue uses typical sizes per class, so a class-vote flip
+    /// (truck ↔ car on one track) restarts the smoothing instead of being read as a closing speed.
+    private var currentKind: VehicleKind?
     private var smoothed: Double?
     private var samples: [(t: TimeInterval, d: Double)] = []
     private var lostSince: TimeInterval?
+    /// Box, cue description and closing speed of the last frame on which the lead was really detected.
+    private var lastBox: BBox?
+    private var lastMethod: String?
+    private var lastRelativeSpeedKmh: Double?
+
+    /// A coasted track (`TrackedObject.missed` ≥ 1, box predicted by `ObjectTracker`) may stay / become the lead for
+    /// this many missed frames. Same replay measurement as `ObjectTracker.Config.defaultCoastFrames`: lead dropouts
+    /// shorter than 1 s fell from 262 to 53 and lead ID switches from 62 to 32 with 3 frames.
+    public var coastMissed: Int = ObjectTracker.Config.defaultCoastFrames
+    /// When the lead's track ID changes but the new box overlaps the previous lead box at least this much (and the
+    /// class is the same), it is the same vehicle under a new ID: the smoothed distance and the closing-speed
+    /// samples are kept. Reasoning, not measured.
+    public var sameVehicleIoU: Double = 0.5
 
     public init(corridor: EgoCorridor = .default, selection: SelectionConfig = SelectionConfig()) {
         self.corridor = corridor
@@ -323,9 +383,13 @@ public final class LeadVehicleTracker {
 
     public func reset() {
         currentID = nil
+        currentKind = nil
         smoothed = nil
         samples.removeAll()
         lostSince = nil
+        lastBox = nil
+        lastMethod = nil
+        lastRelativeSpeedKmh = nil
     }
 
     /// Raw (unsmoothed) distance for a box, or nil when no cue is usable.
@@ -355,7 +419,28 @@ public final class LeadVehicleTracker {
     }
 
     public func update(tracks: [TrackedObject], geometry: CameraGeometry, timestamp: TimeInterval) -> LeadVehicle? {
-        let chosen = selectLead(from: tracks)
+        var chosen = selectLead(from: tracks)
+        if let coasted = chosen, coasted.missed > 0,
+           !(coasted.id == currentID && coasted.kind == currentKind && smoothed != nil) {
+            // Only the CURRENT lead may be bridged by a predicted box. Any other coasted track has no measured
+            // distance and must not hide a vehicle that is really detected on this frame.
+            chosen = selectLead(from: tracks.filter { $0.missed == 0 })
+        }
+        if let lead = chosen, lead.missed > 0 {
+            // Coasted lead: the box is a prediction. Show the last smoothed distance and do NOT add a sample, so
+            // neither the distance nor the closing-speed regression is fed by extrapolated boxes.
+            guard lead.id == currentID, lead.kind == currentKind, let value = smoothed else {
+                // A coasted track that was not the lead on its last detected frame has no measured distance.
+                if lostSince == nil { lostSince = timestamp }
+                if let since = lostSince, timestamp - since > 0.8 { reset() }
+                return nil
+            }
+            lostSince = nil
+            let gap = max(0.2, value - max(0, cameraToBumperMeters))
+            return LeadVehicle(trackID: lead.id, kind: lead.kind, box: lead.box, distanceMeters: gap,
+                               cameraDistanceMeters: value, relativeSpeedKmh: lastRelativeSpeedKmh,
+                               method: lastMethod ?? "")
+        }
         guard let lead = chosen, let (raw, method) = Self.rawDistance(for: lead.kind, box: lead.box, geometry: geometry),
               raw.isFinite, raw > 0.3, raw < 150 else {
             if lostSince == nil { lostSince = timestamp }
@@ -363,11 +448,19 @@ public final class LeadVehicleTracker {
             return nil
         }
         lostSince = nil
-        if lead.id != currentID {
+        if lead.id != currentID || lead.kind != currentKind {
+            // Same vehicle under a new track ID (the old track was lost and the detector re-found the car where it
+            // was): keep the smoothing. A class change always restarts it (different typical sizes).
+            let sameVehicle = lead.kind == currentKind && (lastBox.map { $0.iou(lead.box) >= sameVehicleIoU } ?? false)
             currentID = lead.id
-            smoothed = nil
-            samples.removeAll()
+            currentKind = lead.kind
+            if !sameVehicle {
+                smoothed = nil
+                samples.removeAll()
+            }
         }
+        lastBox = lead.box
+        lastMethod = method
         let alpha = 0.35
         let value = smoothed.map { $0 + alpha * (raw - $0) } ?? raw
         smoothed = value
@@ -389,6 +482,7 @@ public final class LeadVehicleTracker {
                 if abs(kmh) < 150 { rel = kmh }
             }
         }
+        lastRelativeSpeedKmh = rel
         let gap = max(0.2, value - max(0, cameraToBumperMeters))
         return LeadVehicle(trackID: lead.id, kind: lead.kind, box: lead.box, distanceMeters: gap,
                            cameraDistanceMeters: value, relativeSpeedKmh: rel, method: method)
@@ -421,15 +515,21 @@ extension LeadVehicleTracker {
     /// Lead candidates (strictly ahead, not at a side edge) with their selection score (lower is better).
     func scoredCandidates(_ tracks: [TrackedObject]) -> [(track: TrackedObject, score: Double)] {
         let candidates = tracks.filter {
-            $0.isConfirmed && $0.missed == 0 && $0.kind.isVehicle && $0.kind != .bicycle
+            $0.isConfirmed && $0.missed <= coastMissed && $0.kind.isVehicle && $0.kind != .bicycle
                 && !touchesSideEdge($0.box)
                 && corridor.isStrictlyAhead($0.box, centerFraction: selection.centerFraction,
                                             minOverlap: selection.minOverlap)
         }
         return candidates.map { track in
-            let closer = candidates.filter { $0.box.maxY > track.box.maxY + selection.rankTolerance }.count
+            let own = max(0.01, track.box.maxY - corridor.horizonY)
+            var closer = 0.0
+            for other in candidates where other.box.maxY > track.box.maxY + selection.rankTolerance {
+                let dominated = (other.box.maxY - corridor.horizonY) >= selection.dominanceRatio * own
+                // `lateral` is capped at 2, so 2 × lateralPenalty outweighs any lateral difference.
+                closer += dominated ? 1 + 2 * selection.lateralPenalty : 1
+            }
             let lateral = min(2, corridor.lateralOffset(track.box) ?? 2)
-            return (track, Double(closer) + selection.lateralPenalty * lateral)
+            return (track, closer + selection.lateralPenalty * lateral)
         }
     }
 

@@ -146,12 +146,14 @@ object FollowingDistanceCalculator {
         policy: FollowingDistancePolicy, condition: RoadSurfaceCondition,
     ): FollowingDistanceAssessment {
         val speed = ownSpeedKmh?.let { max(0.0, it) }
-        val stopped = (speed ?: 0.0) < policy.stoppedSpeedKmh
+        // Unknown own speed (no GPS fix: tunnel, first seconds) is NOT "standing still": the gap norm cannot be
+        // judged then, but the collision branch below still works from the camera closing speed.
+        val stopped = speed?.let { it < policy.stoppedSpeedKmh } ?: false
         val recommended = recommendedDistance(speed, policy, condition)
         val a = FollowingDistanceAssessment(
             distanceMeters = distanceMeters, ownSpeedKmh = speed, isStopped = stopped, condition = condition,
             recommendedDistanceMeters = recommended,
-            recommendedTimeGapSeconds = if (stopped) null else policy.timeGap(condition),
+            recommendedTimeGapSeconds = if (stopped || speed == null) null else policy.timeGap(condition),
         )
         if (speed != null && !stopped) {
             a.stoppingDistanceMeters = stoppingDistance(speed, policy.reactionTimeSeconds, condition.frictionCoefficient)
@@ -165,12 +167,18 @@ object FollowingDistanceCalculator {
             a.closingSpeedKmh = closing
             if (closing > 3) a.timeToCollisionSeconds = d / (closing / 3.6)
         }
+        val collision = (a.timeToCollisionSeconds ?: Double.POSITIVE_INFINITY) < policy.collisionWarningSeconds
+        if (speed == null) {
+            // Own speed unknown: `fractionOfRecommended` stays null so the tailgating monitor / "too close" coach do
+            // not fire against the 2 m stopped norm; only the time-to-collision can raise a warning.
+            a.status = if (collision) DistanceStatus.DANGER else DistanceStatus.UNKNOWN
+            return a
+        }
         val fraction = d / max(0.1, recommended)
         a.fractionOfRecommended = fraction
 
-        val ttc = a.timeToCollisionSeconds
         a.status = when {
-            ttc != null && ttc < policy.collisionWarningSeconds && !stopped -> DistanceStatus.DANGER
+            collision && !stopped -> DistanceStatus.DANGER
             fraction >= 1 -> DistanceStatus.SAFE
             fraction >= 0.5 -> DistanceStatus.CAUTION
             else -> DistanceStatus.DANGER
@@ -250,6 +258,34 @@ data class EgoCorridor(
     companion object {
         val default = EgoCorridor()
 
+        /** Frame aspect (width : height) the default half widths are tuned for. */
+        const val referenceAspect: Double = 16.0 / 9.0
+        /** Upper bound of the aspect compensation (a 9:16 portrait frame needs ≈ 3.16). */
+        const val maxAspectScale: Double = 4.0
+
+        /**
+         * How much wider (in fractions of the image WIDTH) the own lane is at a given row of a frame of this size than
+         * in the 16:9 landscape frame the defaults are tuned for. On flat ground the lane width at a row scales with
+         * H / W: 1 for 16:9 landscape, (16/9)² ≈ 3.16 for 9:16 portrait. Never below 1.
+         */
+        fun aspectScale(imageWidth: Double, imageHeight: Double): Double {
+            if (!(imageWidth > 0 && imageHeight > 0 && imageWidth.isFinite() && imageHeight.isFinite())) return 1.0
+            return min(maxAspectScale, max(1.0, (imageHeight / imageWidth) * referenceAspect))
+        }
+
+        /**
+         * Own-lane corridor for a frame of the given size: the 16:9 landscape defaults with the bottom half width
+         * compensated for the frame aspect ([aspectScale]). In portrait the bottom half width exceeds 0.5 — intended
+         * (the lane is wider than the picture at the bottom edge); it is only compared, and drawing clips.
+         */
+        fun forFrame(centerX: Double = 0.5, horizonY: Double = 0.42, imageWidth: Double, imageHeight: Double): EgoCorridor {
+            val corridor = EgoCorridor(centerX = centerX, horizonY = horizonY)
+            val scale = aspectScale(imageWidth, imageHeight)
+            return corridor.copy(
+                bottomHalfWidth = corridor.horizonHalfWidth + (corridor.bottomHalfWidth - corridor.horizonHalfWidth) * scale,
+            )
+        }
+
         /**
          * Next smoothed corridor centre X: moves toward [LaneEstimate.laneCenterX] (clamped to [range]) when the lane
          * estimate is confident (≥ [minConfidence]), otherwise back toward 0.5. [alpha] is the EMA weight per call.
@@ -304,6 +340,11 @@ class LeadVehicleTracker(
         val lateralPenalty: Double = 2.0,
         /** Bottom edges closer than this (fraction of the height) share a closeness rank. */
         val rankTolerance: Double = 0.03,
+        /**
+         * A candidate whose bottom edge is this many times farther below the horizon than another's (≈ that many times
+         * nearer on flat ground) always beats it, whatever the lateral offsets. Reasoning, not tuned on video.
+         */
+        val dominanceRatio: Double = 1.5,
         /** Another candidate must score better by this to replace the current lead. */
         val switchMargin: Double = 0.5,
     )
@@ -311,19 +352,64 @@ class LeadVehicleTracker(
     /** Distance from the camera to the own front bumper (bonnet length + mount offset), metres. */
     var cameraToBumperMeters: Double = 0.0
     private var currentID: Int? = null
+    /**
+     * Class of the current lead: the distance cue uses typical sizes per class, so a class-vote flip (truck ↔ car on
+     * one track) restarts the smoothing instead of being read as a closing speed.
+     */
+    private var currentKind: VehicleKind? = null
     private var smoothed: Double? = null
     private val samples = mutableListOf<Pair<Double, Double>>() // (t, d)
     private var lostSince: Double? = null
+    /** Box, cue description and closing speed of the last frame on which the lead was really detected. */
+    private var lastBox: BBox? = null
+    private var lastMethod: String? = null
+    private var lastRelativeSpeedKmh: Double? = null
+
+    /**
+     * A coasted track (`TrackedObject.missed` ≥ 1, box predicted by `ObjectTracker`) may stay the lead for this many
+     * missed frames.
+     */
+    var coastMissed: Int = ObjectTracker.Config.defaultCoastFrames
+    /**
+     * When the lead's track ID changes but the new box overlaps the previous lead box at least this much (and the
+     * class is the same), it is the same vehicle under a new ID: the smoothing is kept. Reasoning, not measured.
+     */
+    var sameVehicleIoU: Double = 0.5
 
     fun reset() {
         currentID = null
+        currentKind = null
         smoothed = null
         samples.clear()
         lostSince = null
+        lastBox = null
+        lastMethod = null
+        lastRelativeSpeedKmh = null
     }
 
     fun update(tracks: List<TrackedObject>, geometry: CameraGeometry, timestamp: Double): LeadVehicle? {
-        val lead = selectLead(tracks)
+        var chosen = selectLead(tracks)
+        if (chosen != null && chosen.missed > 0 &&
+            !(chosen.id == currentID && chosen.kind == currentKind && smoothed != null)
+        ) {
+            // Only the CURRENT lead may be bridged by a predicted box. Any other coasted track has no measured
+            // distance and must not hide a vehicle that is really detected on this frame.
+            chosen = selectLead(tracks.filter { it.missed == 0 })
+        }
+        if (chosen != null && chosen.missed > 0) {
+            // Coasted lead: the box is a prediction. Show the last smoothed distance and do NOT add a sample.
+            val value = smoothed
+            if (!(chosen.id == currentID && chosen.kind == currentKind) || value == null) {
+                if (lostSince == null) lostSince = timestamp
+                val since = lostSince
+                if (since != null && timestamp - since > 0.8) reset()
+                return null
+            }
+            lostSince = null
+            val gap = max(0.2, value - max(0.0, cameraToBumperMeters))
+            return LeadVehicle(chosen.id, chosen.kind, chosen.box, gap, value, lastRelativeSpeedKmh, lastMethod ?: "")
+        }
+        val lead = chosen
         val rd = lead?.let { rawDistance(it.kind, it.box, geometry) }
         if (lead == null || rd == null || !rd.first.isFinite() || rd.first <= 0.3 || rd.first >= 150) {
             if (lostSince == null) lostSince = timestamp
@@ -333,11 +419,18 @@ class LeadVehicleTracker(
         }
         val (raw, method) = rd
         lostSince = null
-        if (lead.id != currentID) {
+        if (lead.id != currentID || lead.kind != currentKind) {
+            // Same vehicle under a new track ID: keep the smoothing. A class change always restarts it.
+            val sameVehicle = lead.kind == currentKind && (lastBox?.let { it.iou(lead.box) >= sameVehicleIoU } ?: false)
             currentID = lead.id
-            smoothed = null
-            samples.clear()
+            currentKind = lead.kind
+            if (!sameVehicle) {
+                smoothed = null
+                samples.clear()
+            }
         }
+        lastBox = lead.box
+        lastMethod = method
         val alpha = 0.35
         val value = smoothed?.let { it + alpha * (raw - it) } ?: raw
         smoothed = value
@@ -360,6 +453,7 @@ class LeadVehicleTracker(
                 if (abs(kmh) < 150) rel = kmh
             }
         }
+        lastRelativeSpeedKmh = rel
         val gap = max(0.2, value - max(0.0, cameraToBumperMeters))
         return LeadVehicle(lead.id, lead.kind, lead.box, gap, value, rel, method)
     }
@@ -374,14 +468,21 @@ class LeadVehicleTracker(
     /** Lead candidates (strictly ahead, not at a side edge) with their selection score (lower is better). */
     internal fun scoredCandidates(tracks: List<TrackedObject>): List<Pair<TrackedObject, Double>> {
         val candidates = tracks.filter {
-            it.isConfirmed && it.missed == 0 && it.kind.isVehicle && it.kind != VehicleKind.BICYCLE &&
+            it.isConfirmed && it.missed <= coastMissed && it.kind.isVehicle && it.kind != VehicleKind.BICYCLE &&
                 !touchesSideEdge(it.box) &&
                 corridor.isStrictlyAhead(it.box, selection.centerFraction, selection.minOverlap)
         }
         return candidates.map { track ->
-            val closer = candidates.count { it.box.maxY > track.box.maxY + selection.rankTolerance }
+            val own = max(0.01, track.box.maxY - corridor.horizonY)
+            var closer = 0.0
+            for (other in candidates) {
+                if (!(other.box.maxY > track.box.maxY + selection.rankTolerance)) continue
+                val dominated = (other.box.maxY - corridor.horizonY) >= selection.dominanceRatio * own
+                // `lateral` is capped at 2, so 2 × lateralPenalty outweighs any lateral difference.
+                closer += if (dominated) 1 + 2 * selection.lateralPenalty else 1.0
+            }
             val lateral = min(2.0, corridor.lateralOffset(track.box) ?: 2.0)
-            track to (closer.toDouble() + selection.lateralPenalty * lateral)
+            track to (closer + selection.lateralPenalty * lateral)
         }
     }
 

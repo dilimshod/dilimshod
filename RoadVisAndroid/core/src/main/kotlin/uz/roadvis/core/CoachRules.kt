@@ -1,6 +1,8 @@
 package uz.roadvis.core
 
+import kotlin.math.abs
 import kotlin.math.max
+import kotlin.math.min
 
 // Voice coaching for beginner drivers: decides WHAT to say and WHEN. No texts here — the app turns a `CoachMessage`
 // into a phrase of the current language.
@@ -177,14 +179,90 @@ class CoachRules(var config: Config = Config()) {
 
 // Traffic-light coaching (camera)
 
-/** The traffic light the coach looks at (largest confirmed light of the frame). */
+/** The traffic light the coach looks at (the confirmed light ahead that most likely applies to the own lane). */
 data class ObservedTrafficLight(val trackID: Int, val color: TrafficLightColor, val box: BBox) {
     companion object {
-        /** Largest confirmed, currently seen traffic light of [tracks]. */
-        fun largest(tracks: List<TrackedObject>): ObservedTrafficLight? =
-            tracks.filter { it.kind == VehicleKind.TRAFFIC_LIGHT && it.isConfirmed && it.missed == 0 }
+        /**
+         * Largest confirmed, currently seen traffic light AHEAD (box centre inside [aheadMinX]…[aheadMaxX], the same
+         * range as `TrafficLightCoach.Config`). Filtering before choosing matters: a larger light off to the side
+         * (pedestrian / cross-street signal) must not hide the red light straight ahead.
+         */
+        fun largest(tracks: List<TrackedObject>, aheadMinX: Double = 0.2, aheadMaxX: Double = 0.8): ObservedTrafficLight? =
+            tracks.filter {
+                it.kind == VehicleKind.TRAFFIC_LIGHT && it.isConfirmed && it.missed == 0 &&
+                    it.box.midX >= aheadMinX && it.box.midX <= aheadMaxX
+            }
                 .maxByOrNull { it.box.area }
                 ?.let { ObservedTrafficLight(it.id, it.lightColor ?: TrafficLightColor.UNKNOWN, it.box) }
+    }
+}
+
+/**
+ * Chooses the traffic light that applies to the own lane instead of simply the largest box (the largest one is often
+ * a pedestrian signal at the kerb or a head for the cross street). All constants are reasoning (no intersection video
+ * was evaluated); errors are kept on the safe side by the red-wins rule.
+ */
+object TrafficLightSelection {
+    /** A light this far (fraction of the image width) from the corridor centre scores 0 and is never chosen. */
+    const val maxLateralOffset: Double = 0.35
+    /** Lights lower than this share of the tallest candidate are dropped (the next intersection's far lights). */
+    const val minRelativeHeight: Double = 0.6
+    /** When the runner-up scores at least this share of the best, colours disagree and one of them is red → red. */
+    const val conservativeScoreRatio: Double = 0.85
+    /** Hits a light track needs before it can drive the indicator / coach (≈ 0.35 s at 15 fps). */
+    const val minHits: Int = 5
+
+    /**
+     * A light WITHOUT a stable colour is drawn / counted only when its best detector score is this far above the
+     * class threshold (0.30 + 0.20 = the 0.50 floor used before the threshold was lowered for recall). With a stable
+     * colour every tracked light is shown.
+     */
+    const val uncolouredDisplayMargin: Double = 0.20
+
+    /** False for a low-score traffic-light track without a readable colour (most likely not a light facing us). */
+    fun isDisplayable(track: TrackedObject, classThreshold: Double): Boolean {
+        if (track.kind != VehicleKind.TRAFFIC_LIGHT) return true
+        val color = track.lightColor
+        if (color != null && color != TrafficLightColor.UNKNOWN) return true
+        return max(track.confidence, track.peakConfidence) >= classThreshold + uncolouredDisplayMargin
+    }
+
+    /**
+     * Candidates: confirmed light tracks seen on this frame with at least [minHits] hits, a stable KNOWN colour (the
+     * tracker's time-window vote) and the box top above the horizon. Score = box height × (1 − lateral offset from
+     * the corridor centre ÷ [maxLateralOffset]).
+     */
+    fun ownLane(
+        tracks: List<TrackedObject>, corridorCenterX: Double = 0.5, horizonY: Double = 0.42,
+        minHits: Int = TrafficLightSelection.minHits,
+    ): ObservedTrafficLight? {
+        val candidates = tracks.filter { t ->
+            if (!(t.kind == VehicleKind.TRAFFIC_LIGHT && t.isConfirmed && t.missed == 0 && t.hits >= minHits)) return@filter false
+            val color = t.lightColor
+            if (color == null || color == TrafficLightColor.UNKNOWN) return@filter false
+            t.box.minY < horizonY
+        }
+        val tallest = candidates.maxOfOrNull { it.box.height } ?: return null
+        if (!(tallest > 0)) return null
+        val scored = mutableListOf<Pair<TrackedObject, Double>>()
+        for (t in candidates) {
+            if (t.box.height < minRelativeHeight * tallest) continue
+            val lateral = min(1.0, abs(t.box.midX - corridorCenterX) / maxLateralOffset)
+            val score = t.box.height * (1 - lateral)
+            if (score > 0) scored.add(t to score)
+        }
+        scored.sortWith { a, b -> if (a.second != b.second) b.second.compareTo(a.second) else a.first.id.compareTo(b.first.id) }
+        val best = scored.firstOrNull() ?: return null
+        var chosen = best.first
+        if (scored.size > 1) {
+            val second = scored[1]
+            if (second.second >= conservativeScoreRatio * best.second && second.first.lightColor != best.first.lightColor &&
+                second.first.lightColor == TrafficLightColor.RED
+            ) {
+                chosen = second.first
+            }
+        }
+        return ObservedTrafficLight(chosen.id, chosen.lightColor ?: TrafficLightColor.UNKNOWN, chosen.box)
     }
 }
 
@@ -211,13 +289,17 @@ class TrafficLightCoach(var config: Config = Config()) {
     private var redTrack: Int? = null
     private var redSince: Double? = null
     private var warnedRedTracks = HashSet<Int>()
-    private var sawRedWhileStopped = false
+    /**
+     * Track of the red light the car is waiting at. "Green, you can go" is only said for the SAME track turning
+     * green — a green on another track (pedestrian / cross-street signal) can never produce it.
+     */
+    private var waitingRedTrack: Int? = null
     private var greenSince: Double? = null
 
     fun reset() {
         redTrack = null
         redSince = null
-        sawRedWhileStopped = false
+        waitingRedTrack = null
         greenSince = null
     }
 
@@ -242,7 +324,7 @@ class TrafficLightCoach(var config: Config = Config()) {
 
         if (speedKmh == null) return null
         if (speed >= config.movingSpeedKmh) {
-            sawRedWhileStopped = false
+            waitingRedTrack = null
             greenSince = null
             return null
         }
@@ -252,16 +334,19 @@ class TrafficLightCoach(var config: Config = Config()) {
         }
         when (light.color) {
             TrafficLightColor.RED, TrafficLightColor.YELLOW -> {
-                if (light.color == TrafficLightColor.RED) sawRedWhileStopped = true
+                if (light.color == TrafficLightColor.RED) waitingRedTrack = light.trackID
                 greenSince = null
             }
             TrafficLightColor.GREEN -> {
-                if (!sawRedWhileStopped) return null
+                if (light.trackID != waitingRedTrack) {
+                    greenSince = null
+                    return null
+                }
                 val since = greenSince ?: timestamp
                 greenSince = since
                 val leadOK = (leadDistanceMeters ?: Double.POSITIVE_INFINITY) >= config.minLeadGapMeters
                 if (timestamp - since >= config.greenHold && leadOK) {
-                    sawRedWhileStopped = false
+                    waitingRedTrack = null
                     greenSince = null
                     return CoachMessage.GreenLightGo
                 }

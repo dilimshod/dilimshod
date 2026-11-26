@@ -24,7 +24,10 @@ data class TrackedObject(
     var make: String? = null,
     /** Mean confidence of the winning make. */
     var makeConfidence: Double? = null,
-    /** Majority of recent traffic-light colour observations. */
+    /**
+     * Stable traffic-light colour: time-window vote over the recent observations ([TrafficLightColorVote]); null
+     * while there are too few readable observations — a colour never outlives ≈ 0.8 s without a readable lamp.
+     */
     var lightColor: TrafficLightColor? = null,
     /** Rough monocular distance estimate, metres (see MonocularSpeedEstimator). */
     var distanceMeters: Double? = null,
@@ -34,6 +37,12 @@ data class TrackedObject(
     var estimatedSpeedKmh: Double? = null,
     /** Majority of recent person-role observations (≥ 5 needed; null before / for non-persons). Colour heuristic. */
     var personRole: PersonRole? = null,
+    /**
+     * Highest detector confidence the track has had so far. Gates that ask "is this a solid object?" use it instead of
+     * the latest frame's score, which dips on single frames (and may sit below the class threshold while a confirmed
+     * track is continued by a low-score detection).
+     */
+    var peakConfidence: Double = confidence,
 )
 
 /**
@@ -59,23 +68,57 @@ class ObjectTracker(val config: Config = Config()) {
         val maxAreaRatio: Double = 2.5,
         /** Unconfirmed (tentative) tracks are dropped after this many missed frames. */
         val maxMissedTentative: Int = 2,
-        /** Per-class minimum detector confidence applied before tracking (classes not listed: no extra filter). */
+        /**
+         * Per-class minimum detector confidence needed to open a track (classes not listed: no filter). Initial value
+         * of [ObjectTracker.minConfidence], which the owner may replace per frame (settings slider).
+         */
         val minConfidence: Map<VehicleKind, Double> = defaultMinConfidence,
         /** Kinds counted only when the owner marks the confirmed track relevant ([markRelevant]). */
         val deferredCountKinds: Set<VehicleKind> = emptySet(),
+        /**
+         * A detection scoring below its class minimum but at least `minimum × continuationFactor` may still continue
+         * an already confirmed track (it never opens a track). 1 = off.
+         */
+        val continuationFactor: Double = DetectionThresholds.CONTINUATION_FACTOR,
+        /** Tracks not seen for longer than this are forgotten before matching, seconds (frames may just stop). */
+        val maxIdleSeconds: Double = 3.0,
+        /**
+         * Confirmed tracks without a detection are still RETURNED by `update` for this many frames ("coasting"), with
+         * `missed ≥ 1` and the box extrapolated by the constant-velocity model. 0 = only tracks seen on the frame.
+         */
+        val coastFrames: Int = defaultCoastFrames,
+        /**
+         * Minimum IoU (predicted track box vs detection) of the second association stage, in which low-score
+         * detections continue confirmed tracks that no full-score detection matched.
+         */
+        val secondIoU: Double = defaultSecondIoU,
     ) {
         companion object {
-            val defaultMinConfidence: Map<VehicleKind, Double> =
-                mapOf(VehicleKind.TRAFFIC_LIGHT to 0.5, VehicleKind.STOP_SIGN to 0.55, VehicleKind.PERSON to 0.5)
+            /**
+             * Coasting length, 3 frames = 0.2 s at 15 fps. The value was measured on the Swift core by replaying a
+             * real drive log (see `ObjectTracker.Config.defaultCoastFrames` in Tracking.swift); not re-measured here.
+             */
+            const val defaultCoastFrames: Int = 3
+            /** Second-stage IoU (ByteTrack, arXiv 2110.06864); value from the same Swift-side replay. */
+            const val defaultSecondIoU: Double = 0.3
+            /** Thresholds at the default slider position, see [DetectionThresholds]. */
+            val defaultMinConfidence: Map<VehicleKind, Double> = DetectionThresholds.perClass()
         }
     }
+
+    /**
+     * Per-class confidence needed to open a track. Starts as [Config.minConfidence]; the app sets it from the settings
+     * slider ([DetectionThresholds.perClass]) — the same table the detector floor is derived from.
+     */
+    var minConfidence: Map<VehicleKind, Double> = config.minConfidence
 
     private class MakeVote(var count: Int, var confidenceSum: Double)
 
     private class State(var obj: TrackedObject) {
         val kindVotes = LinkedHashMap<VehicleKind, Double>()
         val makeVotes = LinkedHashMap<String, MakeVote>()
-        val colorHistory = mutableListOf<TrafficLightColor>()
+        /** Every colour observation of a traffic-light track, INCLUDING unknown (those age the state out). */
+        val colorHistory = mutableListOf<TrafficLightColorVote.Observation>()
         val roleHistory = mutableListOf<PersonRole>()
         var vdx = 0.0; var vdy = 0.0
         var dw = 0.0; var dh = 0.0
@@ -88,6 +131,9 @@ class ObjectTracker(val config: Config = Config()) {
     val uniqueCounts: Map<VehicleKind, Int> get() = _uniqueCounts
     var frameDetectionCount: Int = 0
         private set
+    /** Number of second-stage (low-score) matches so far (diagnostics / tests). */
+    var lowScoreMatches: Int = 0
+        private set
 
     val totalUniqueVehicles: Int
         get() = _uniqueCounts.entries.sumOf { if (it.key.isVehicle) it.value else 0 }
@@ -96,15 +142,45 @@ class ObjectTracker(val config: Config = Config()) {
         states.clear()
         _uniqueCounts.clear()
         frameDetectionCount = 0
+        lowScoreMatches = 0
         nextID = 1
     }
 
+    /**
+     * Forgets the live tracks but keeps the unique counters and the ID sequence. Call it when frames stop for a while
+     * (pause, background): otherwise the first frame after the gap would continue the old tracks — confirmed state,
+     * hit count, make / colour / role votes — with whatever overlaps their last boxes.
+     */
+    fun dropTracks() {
+        states.clear()
+    }
+
+    /**
+     * Feeds the detections of one frame.
+     *
+     * Returns the tracks matched on this frame (`missed == 0`) plus, for at most [Config.coastFrames] frames, the
+     * CONFIRMED tracks that were not matched: those carry `missed ≥ 1` and a box predicted by the constant-velocity
+     * model. Consumers that must not act on a predicted box (pedestrian warnings, traffic-light logic, distance
+     * samples, the research log) filter on `missed == 0`.
+     */
     fun update(detections: List<Detection>, timestamp: Double): List<TrackedObject> {
         frameDetectionCount += detections.size
 
-        val dets = detections.filter { d ->
-            val minimum = config.minConfidence[d.kind] ?: return@filter true
-            d.confidence >= minimum
+        // Tracks whose last observation is too old (frames stopped without dropTracks()) are not continued.
+        if (config.maxIdleSeconds > 0) states.removeAll { timestamp - it.obj.lastSeen > config.maxIdleSeconds }
+
+        // Per-class confidence filter with hysteresis: at or above the class minimum a detection may open a track;
+        // between `minimum × continuationFactor` and the minimum it may only continue a confirmed track.
+        val factor = min(1.0, max(0.0, config.continuationFactor))
+        val dets = ArrayList<Detection>(detections.size)
+        val canSpawn = ArrayList<Boolean>(detections.size)
+        for (d in detections) {
+            val minimum = minConfidence[d.kind] ?: 0.0
+            if (d.confidence >= minimum) {
+                dets.add(d); canSpawn.add(true)
+            } else if (d.confidence >= minimum * factor) {
+                dets.add(d); canSpawn.add(false)
+            }
         }
 
         val predicted: List<BBox> = states.map { st ->
@@ -124,6 +200,9 @@ class ObjectTracker(val config: Config = Config()) {
             val p = predicted[ti]
             for ((di, d) in dets.withIndex()) {
                 if (!compatible(st.obj.kind, d.kind)) continue
+                // Low-score detections take part only in the second stage below (ByteTrack order: a full-score
+                // detection is never left without its track because a low-score box overlapped it better).
+                if (!canSpawn[di]) continue
                 val iou = p.iou(d.box)
                 val penalty = if (st.obj.kind == d.kind) 0.0 else 0.05
                 var score = -1.0
@@ -153,11 +232,33 @@ class ObjectTracker(val config: Config = Config()) {
             apply(dets[p.det], p.track, timestamp)
         }
 
+        // Second association (ByteTrack "BYTE" step): confirmed tracks that no full-score detection matched may be
+        // continued by a low-score detection of a compatible class, by IoU on the predicted box only (no centre
+        // gate). Such a match refreshes box, velocity and `lastSeen`, but adds no hit and no class vote, and it
+        // never opens or confirms a track.
+        val lowPairs = mutableListOf<Pair3>()
+        for ((di, d) in dets.withIndex()) {
+            if (canSpawn[di]) continue
+            for ((ti, st) in states.withIndex()) {
+                if (trackMatched[ti] || !st.obj.isConfirmed || !compatible(st.obj.kind, d.kind)) continue
+                val iou = predicted[ti].iou(d.box)
+                if (iou >= config.secondIoU) lowPairs.add(Pair3(ti, di, iou))
+            }
+        }
+        lowPairs.sortByDescending { it.score }
+        for (p in lowPairs) {
+            if (trackMatched[p.track] || detMatched[p.det]) continue
+            trackMatched[p.track] = true
+            detMatched[p.det] = true
+            lowScoreMatches += 1
+            apply(dets[p.det], p.track, timestamp, lowScore = true)
+        }
+
         for (i in states.indices) if (!trackMatched[i]) states[i].obj.missed += 1
         states.removeAll { st -> st.obj.missed > (if (st.obj.isConfirmed) config.maxMissed else config.maxMissedTentative) }
 
         for ((di, d) in dets.withIndex()) {
-            if (detMatched[di]) continue
+            if (detMatched[di] || !canSpawn[di]) continue
             val st = State(TrackedObject(id = nextID, kind = d.kind, label = d.label, box = d.box,
                 confidence = d.confidence, firstSeen = timestamp, lastSeen = timestamp))
             nextID += 1
@@ -167,9 +268,10 @@ class ObjectTracker(val config: Config = Config()) {
                 st.obj.make = d.make
                 st.obj.makeConfidence = d.makeConfidence
             }
-            if (d.lightColor != null && d.lightColor != TrafficLightColor.UNKNOWN) {
-                st.colorHistory.clear(); st.colorHistory.add(d.lightColor)
-                st.obj.lightColor = d.lightColor
+            if (d.kind == VehicleKind.TRAFFIC_LIGHT) {
+                st.colorHistory.clear()
+                st.colorHistory.add(TrafficLightColorVote.Observation(timestamp, d.lightColor ?: TrafficLightColor.UNKNOWN))
+                st.obj.lightColor = TrafficLightColorVote.decide(st.colorHistory, timestamp, null)
             }
             if (d.personRole != null) {
                 st.roleHistory.clear(); st.roleHistory.add(d.personRole)
@@ -179,10 +281,22 @@ class ObjectTracker(val config: Config = Config()) {
             states.add(st)
         }
 
-        return states.filter { it.obj.missed == 0 }.map { it.obj.copy() }
+        val coast = max(0, config.coastFrames)
+        return states.mapNotNull { st ->
+            if (st.obj.missed == 0) return@mapNotNull st.obj.copy()
+            if (!(st.obj.isConfirmed && st.obj.missed <= coast)) return@mapNotNull null
+            // Coasted: the stored box stays at the last observation (re-acquisition predicts from it); only the
+            // returned copy is extrapolated. `dt` is clamped like the matching prediction above.
+            val o = st.obj.copy()
+            val dt = max(0.0, min(1.0, timestamp - o.lastSeen))
+            val w = max(0.002, o.box.width + st.dw * dt)
+            val h = max(0.002, o.box.height + st.dh * dt)
+            o.box = BBox(o.box.midX + st.vdx * dt - w / 2, o.box.midY + st.vdy * dt - h / 2, w, h)
+            o
+        }
     }
 
-    private fun apply(d: Detection, index: Int, timestamp: Double) {
+    private fun apply(d: Detection, index: Int, timestamp: Double, lowScore: Boolean = false) {
         val st = states[index]
         val old = st.obj.box
         val dt = timestamp - st.obj.lastSeen
@@ -200,18 +314,22 @@ class ObjectTracker(val config: Config = Config()) {
         val o = st.obj
         o.box = newBox
         o.confidence = d.confidence
-        o.hits += 1
+        o.peakConfidence = max(o.peakConfidence, d.confidence)
+        if (!lowScore) o.hits += 1
         o.missed = 0
         o.lastSeen = timestamp
-        o.label = d.label
-
-        st.kindVotes[d.kind] = (st.kindVotes[d.kind] ?: 0.0) + d.confidence
+        if (!lowScore) {
+            o.label = d.label
+            st.kindVotes[d.kind] = (st.kindVotes[d.kind] ?: 0.0) + d.confidence
+        }
         st.kindVotes.entries.maxByOrNull { it.value }?.let { o.kind = it.key }
         if (d.make != null && d.makeConfidence != null) addMake(st, d.make, d.makeConfidence)
-        if (d.lightColor != null && d.lightColor != TrafficLightColor.UNKNOWN) {
-            st.colorHistory.add(d.lightColor)
-            while (st.colorHistory.size > 7) st.colorHistory.removeAt(0)
-            o.lightColor = majority(st.colorHistory)
+        if (d.kind == VehicleKind.TRAFFIC_LIGHT || st.colorHistory.isNotEmpty() || o.lightColor != null) {
+            // Runs on every matched frame, also when the lamp was unreadable: unknown observations are recorded so
+            // an old colour cannot survive (it used to stay red for the life of the track).
+            st.colorHistory.add(TrafficLightColorVote.Observation(timestamp, d.lightColor ?: TrafficLightColor.UNKNOWN))
+            TrafficLightColorVote.prune(st.colorHistory, timestamp)
+            o.lightColor = TrafficLightColorVote.decide(st.colorHistory, timestamp, o.lightColor)
         }
         if (d.personRole != null) {
             st.roleHistory.add(d.personRole)
@@ -274,15 +392,64 @@ class ObjectTracker(val config: Config = Config()) {
             val twoWheel = setOf(VehicleKind.MOTORCYCLE, VehicleKind.BICYCLE)
             return (a in motor && b in motor) || (a in twoWheel && b in twoWheel)
         }
+    }
+}
 
-        private fun majority(colors: List<TrafficLightColor>): TrafficLightColor? {
-            val counts = LinkedHashMap<TrafficLightColor, Int>()
-            for (c in colors) counts[c] = (counts[c] ?: 0) + 1
-            // Prefer the most recent colour on ties.
-            return counts.entries.maxWithOrNull { a, b ->
-                if (a.value == b.value) colors.lastIndexOf(a.key).compareTo(colors.lastIndexOf(b.key))
-                else a.value.compareTo(b.value)
-            }?.key
+/**
+ * Time-window vote that turns per-frame traffic-light colour observations into a stable colour.
+ *
+ * Why time based: the old vote kept the last 7 KNOWN colours for the life of the track and ignored unknown frames, so
+ * a light that was red and then became unreadable stayed "red" indefinitely. The vote constants are reasoning — no
+ * video sequences were evaluated.
+ */
+object TrafficLightColorVote {
+    data class Observation(val time: Double, val color: TrafficLightColor)
+
+    /** Observations older than this are forgotten, seconds (≈ 12 frames at 15 fps). */
+    const val window: Double = 0.8
+    /** Known-colour votes the winner needs inside the window… */
+    const val minVotes: Int = 3
+    /** …and its share of the known votes. */
+    const val minShare: Double = 0.6
+    /** Switching to a different colour additionally needs the newest this-many known observations to agree. */
+    const val switchAgreement: Int = 2
+    /** Hard cap of stored observations (frames arrive at ≤ 30 fps). */
+    internal const val maxObservations: Int = 48
+
+    /** Drops observations outside the window. */
+    fun prune(history: MutableList<Observation>, now: Double) {
+        history.removeAll { now - it.time > window || it.time > now + 1e-6 }
+        while (history.size > maxObservations) history.removeAt(0)
+    }
+
+    /**
+     * Stable colour for the observations inside the window, or null (not enough readable evidence).
+     * [previous] is the colour reported so far (hysteresis).
+     */
+    fun decide(history: List<Observation>, now: Double, previous: TrafficLightColor?): TrafficLightColor? {
+        val known = ArrayList<TrafficLightColor>()
+        for (o in history) if (now - o.time <= window && o.color != TrafficLightColor.UNKNOWN) known.add(o.color)
+        if (known.size < minVotes) return null
+        val counts = HashMap<TrafficLightColor, Int>()
+        for (c in known) counts[c] = (counts[c] ?: 0) + 1
+        // Most votes; ties → the colour seen most recently.
+        var winner = known[known.size - 1]
+        var winnerCount = counts[winner] ?: 0
+        for (color in listOf(TrafficLightColor.RED, TrafficLightColor.YELLOW, TrafficLightColor.GREEN)) {
+            val count = counts[color] ?: 0
+            if (count > winnerCount) {
+                winner = color
+                winnerCount = count
+            }
         }
+        if (!(winnerCount >= minVotes && winnerCount.toDouble() / known.size.toDouble() >= minShare)) return null
+        if (previous != null && previous != TrafficLightColor.UNKNOWN && winner != previous) {
+            // Hysteresis: the newest known observations must already show the new colour.
+            val newest = known.takeLast(switchAgreement)
+            if (newest.size < switchAgreement || newest.any { it != winner }) {
+                return if ((counts[previous] ?: 0) > 0) previous else null
+            }
+        }
+        return winner
     }
 }

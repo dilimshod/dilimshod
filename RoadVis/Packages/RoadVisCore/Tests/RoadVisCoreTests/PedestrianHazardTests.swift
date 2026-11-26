@@ -61,7 +61,13 @@ final class PedestrianHazardTests: XCTestCase {
         let d = PedestrianHazardDetector()
         var p = person(1, x: 0.5, bottom: 0.7, t: 0)
         p.confidence = 0.45
+        p.peakConfidence = 0.45
         XCTAssertTrue(d.update(tracks: [p], ownSpeedKmh: 40, geometry: g, timestamp: 0).isEmpty)
+        // A one-frame dip of a track that was solid before does not silence the warning.
+        var dip = person(3, x: 0.5, bottom: 0.7, t: 0)
+        dip.confidence = 0.45
+        XCTAssertEqual(dip.peakConfidence, 0.8)
+        XCTAssertEqual(d.update(tracks: [dip], ownSpeedKmh: 40, geometry: g, timestamp: 0).first?.level, .danger)
         var q = person(2, x: 0.5, bottom: 0.7, t: 0)
         q.hits = 2
         XCTAssertTrue(d.update(tracks: [q], ownSpeedKmh: 40, geometry: g, timestamp: 0).isEmpty)

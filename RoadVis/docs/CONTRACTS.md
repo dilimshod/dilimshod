@@ -40,10 +40,11 @@ public struct TrackedObject: Identifiable, Hashable, Sendable {
     public var isConfirmed: Bool             // hits >= minHits
     public var make: String?                 // majority vote of make observations
     public var makeConfidence: Double?       // mean confidence of the winning make
-    public var lightColor: TrafficLightColor?   // majority of recent colour observations
+    public var lightColor: TrafficLightColor?   // TrafficLightColorVote: 0.8 s window, ≥ 3 known votes, ≥ 60 %; nil when unreadable
     public var distanceMeters: Double?       // set by MonocularSpeedEstimator
     public var relativeSpeedKmh: Double?     // + = moving away from camera
     public var estimatedSpeedKmh: Double?    // own speed + relative speed (only when plausible)
+    public var peakConfidence: Double        // best detector score so far (light indicator / pedestrian gates use it)
 }
 public final class ObjectTracker {
     public struct Config: Sendable {
@@ -54,9 +55,17 @@ public final class ObjectTracker {
         public init(iouThreshold: Double = 0.3, maxMissed: Int = 8, minHits: Int = 3, boxSmoothing: Double = 0.6)
     }
     public init(config: Config = Config())
-    /// Returns currently visible tracks (missed == 0), confirmed or not. Unique counting uses confirmed tracks only.
+    /// Returns the tracks matched on this frame (missed == 0, confirmed or not) PLUS confirmed tracks coasted for at
+    /// most Config.coastFrames (3) frames: missed ≥ 1, box predicted by the constant-velocity model. Consumers that
+    /// must not act on a predicted box filter on missed == 0 (pedestrian hazards, lights, stop signs, speed samples,
+    /// research log); LeadVehicleTracker accepts missed ≤ coastMissed and then repeats its last smoothed distance.
+    /// Two association stages: full-score detections first (IoU / centre gate), then low-score detections
+    /// (class threshold × continuationFactor … threshold) continue still-unmatched CONFIRMED tracks by IoU ≥
+    /// Config.secondIoU; such a match adds no hit and no class vote. Unique counting uses confirmed tracks only.
     public func update(detections: [Detection], timestamp: TimeInterval) -> [TrackedObject]
     public func addMakeObservation(trackID: Int, make: String, confidence: Double)
+    public var minConfidence: [VehicleKind: Double]            // per-class score to open a track (slider table)
+    public func dropTracks()                                   // forget live tracks, keep counters and IDs (pause)
     public private(set) var uniqueCounts: [VehicleKind: Int]   // confirmed unique objects since reset
     public var totalUniqueVehicles: Int { get }                // sum over kinds where isVehicle
     public private(set) var frameDetectionCount: Int           // total per-frame detections fed (not unique)
@@ -102,11 +111,30 @@ public enum COCOLabels { public static let names: [String] }   // 80 COCO class 
 // TrafficLightColorClassifier.swift
 public struct RGBPixel: Hashable, Sendable { public var r: UInt8; public var g: UInt8; public var b: UInt8; public init(r:g:b:) }
 public enum TrafficLightColorClassifier {
-    public static func classify(pixels: [RGBPixel]) -> TrafficLightColor
-    /// Samples a BGRA (kCVPixelFormatType_32BGRA) buffer inside the pixel rect (x, y, width, height) with a stride.
+    // v2 (port of the evaluated prototype tl/code/v5.py): relative brightness, red halo, position prior for vertical
+    // housings, green border-ring guard, lamp-vs-housing contrast. See the file header for the measurements.
+    public static func classify(pixels: [RGBPixel]) -> TrafficLightColor                       // flat list, no geometry
+    public static func classify(pixels: [RGBPixel], width: Int, height: Int, vertical: Bool? = nil) -> TrafficLightColor
+    /// Samples a BGRA (kCVPixelFormatType_32BGRA) buffer inside the pixel rect; step nil = ≈ 24 samples along the short side.
     public static func classifyBGRA(base: UnsafeRawPointer, width: Int, height: Int, bytesPerRow: Int,
-                                    rectX: Int, rectY: Int, rectWidth: Int, rectHeight: Int, step: Int = 2) -> TrafficLightColor
+                                    rectX: Int, rectY: Int, rectWidth: Int, rectHeight: Int, step: Int? = nil) -> TrafficLightColor
 }
+// Tracking.swift: TrafficLightColorVote (Observation, window 0.8 s, minVotes 3, minShare 0.6, switchAgreement 2,
+//   prune(_:now:), decide(_:now:previous:)). `.unknown` / nil observations are recorded and age the colour out.
+// CoachRules.swift: ObservedTrafficLight.largest(in:aheadX:) (ahead filter first), TrafficLightSelection
+//   (ownLane(in:corridorCenterX:horizonY:minHits:) — the light for the own lane, known colour only, red wins close
+//   calls; isDisplayable(_:classThreshold:) — low-score lights without a colour are not drawn). TrafficLightCoach binds
+//   "green, go" to the track that was red.
+// Aspect awareness (frames are upright: portrait or landscape): EgoCorridor.forFrame(centerX:horizonY:imageWidth:imageHeight:)
+//   and EgoCorridor.aspectScale; LaneDetector.aspectScale(width:height:) scales defaultLaneWidth (0.9), the 2.2 lane-width
+//   limit, the bottom-jump threshold and the Hough intercept range (all tuned for 16:9 landscape, × (H/W)/(9/16));
+//   RoadwayZone.fromLanes(..., aspectScale:) / RoadwayZoneEstimator.Config.aspectScale;
+//   PedestrianHazardDetector.isPlausible(_:geometry:) compares the box aspect in PIXELS.
+// PedestrianHazard.swift: a person in the own lane (or on the roadway moving toward it) is a .danger hazard whatever
+//   `personRole` says (staff additionally keep their RoadStaffSighting); "approaching" is the least-squares slope of the
+//   road-relative position (offset ÷ perspective zone half width), reach = slope × timeToEdgeSeconds.
+// PersonRoleClassifier.swift: wider hi-vis gates, PersonRoleSample.lowerDarkShare (officer = lime + dark/navy lower body,
+//   no orange), vote window 15 with 60 % enter / 30 % keep.
 
 // ExperimentLog.swift — research export (per-frame detections vs unique tracked vehicles)
 public struct ExperimentRecord: Codable, Hashable, Sendable {
@@ -468,7 +496,7 @@ enum ModelStatus: Equatable, Sendable {                // Detection/VehicleDetec
     private(set) var inferenceMs: Double
     private(set) var detectorStatus: ModelStatus
     private(set) var makeClassifierStatus: ModelStatus
-    private(set) var currentLightColor: TrafficLightColor?   // largest confirmed traffic light (.unknown = colour not determined); nil = none
+    private(set) var currentLightColor: TrafficLightColor?   // own-lane light with a stable known colour (TrafficLightSelection.ownLane); nil = none
     private(set) var isRunning: Bool                    // capture session running
     private(set) var cameraPermissionDenied: Bool
     private(set) var frameSize: CGSize                  // added: upright buffer size in pixels (for aspect-fill box mapping)
@@ -523,8 +551,19 @@ struct TrafficLightIndicatorView: View { init(color: TrafficLightColor, lampSize
     static func estimateAccessibilityLabel(for:) -> String }          // "Светофор: ≈ Красный (оценка камеры)"
 struct TrafficLightDotView: View { init(color: TrafficLightColor, size: CGFloat = 14) }   // added
 ```
-The detector model is looked up in the bundle by name, first found wins: `RoadVisDetector`, `yolo26n`, `yolo11n`,
-`yolov8n` (`.mlmodelc`). The make classifier: `VehicleMakeClassifier.mlmodelc`. Missing model → `.missing`, the UI shows
+The detector model is picked per frame by `VehicleDetector.candidateModelNames(landscape:level:)`, first one that is
+in the bundle and loads wins: landscape frames `RoadVisDetector` (YOLO11s 960×544) / `RoadVisDetectorLite` (YOLO11n),
+portrait frames `RoadVisDetectorPortrait` (544×960) / `RoadVisDetectorLitePortrait`; then the other tier, the other
+orientation, and the legacy single models `yolo26n`, `yolo11n`, `yolov8n` (`.mlmodelc`). The tier (`.full` / `.lite`)
+comes from the worker's `DetectorQualityGovernor` (mean inference > 55 ms or thermal state ≥ serious → lite).
+Pipeline (NMS) models always run with `.scaleFill`, so their boxes are frame-normalised without relying on Vision
+undoing a letterbox; raw models use `.scaleFill` when the aspect ratios match (`DetectorInputGeometry.fit`), else
+`.scaleFit` + `YOLODecoder` un-letterboxing. Confidence: the settings slider is the car/truck/bus threshold, the other
+classes follow with fixed offsets (`DetectionThresholds.perClass(global:)`); the detector runs at
+`DetectionThresholds.detectorFloor`, `ObjectTracker.minConfidence` (set per frame) opens tracks at the class threshold
+and lets a confirmed track continue down to threshold × 0.7; `CrossClassDuplicates.suppress` removes car+truck /
+car+bus / motorcycle+bicycle boxes on one object (IoU ≥ 0.7). `RecognitionWorker.setActive(false)` calls
+`ObjectTracker.dropTracks()` (live tracks forgotten, unique counters and IDs kept). The make classifier: `VehicleMakeClassifier.mlmodelc`. Missing model → `.missing`, the UI shows
 an explanatory banner, the app keeps working (speed, navigator).
 Frames are rotated upright by the capture connection (`AVCaptureDevice.RotationCoordinator`; while a preview layer is
 attached, the coordinator's *preview* angle is used for the frames too), so Vision always runs with orientation `.up` and
@@ -709,6 +748,12 @@ Settings: `followingDistanceEnabled`, `followingTimeGapDry` (wet ×2, snow ×3, 
 
 Pipeline (Detection/). `RecognitionWorker` runs `LeadVehicleTracker` on its queue after tracking + `MonocularSpeedEstimator` every
 processed frame (corridor horizon = `settings.corridorHorizon` clamped 0.1…0.8, `CameraGeometry` from the camera FOV + buffer size),
+Horizon: `Output.horizonY` is the row actually used. With `settings.autoHorizonEnabled` (default on) it is measured by
+`LaneHorizonEstimator` from `LaneDetector.lastVanishingPoint` (fed only at ≥ 30 km/h; ≥ 12 samples, interquartile range ≤ 0.04;
+applied when it differs by > 0.015); `settings.corridorHorizon` is then the start value / fallback and
+`settings.autoHorizonPortrait/Landscape` keep the last measurement per orientation. Synthetic-image evidence only.
+`LaneDetector`: per-frame adaptive candidate thresholds (`adaptiveThresholds`), pixel-wise maximum of the last
+`Config.accumulateFrames` (3) lane frames, crossing check at the middle ROI row, `setHorizon(_:)` to move the horizon.
 `Inputs.followingDistanceEnabled/corridorHorizon`, `Output.leadVehicle`. The main actor computes the assessment (frames ≤ 15 Hz;
 GPS updates refresh it only when no frame arrived for 0.5 s):
 ```swift
@@ -800,7 +845,8 @@ Honesty: distances "≈ … (оценка)", detector scores "увереннос
 - Core ML model classes are NOT generated (`COREML_CODEGEN_LANGUAGE = None`): load models by bundle resource name
   (`Bundle.main.url(forResource: "RoadVisDetector", withExtension: "mlmodelc")`). Still avoid naming Swift types
   `RoadVisDetector*` / `VehicleMakeClassifier*` so the project keeps working if someone re-enables generation.
-- `RoadVis/Models/RoadVisDetector.mlpackage` (present): YOLO11n COCO-80, 640×640 RGB image input named `image`,
-  pipeline mlProgram(FP16) → NonMaximumSuppression; optional Double inputs `iouThreshold` (default 0.45) and
+- `RoadVis/Models/RoadVisDetector.mlpackage` + `RoadVisDetectorPortrait` (YOLO11s) and `RoadVisDetectorLite` +
+  `RoadVisDetectorLitePortrait` (YOLO11n), all present: COCO-80, RGB image input named `image`, 960×544 (landscape) or
+  544×960 (portrait), pipeline mlProgram(FP16) → NonMaximumSuppression; optional Double inputs `iouThreshold` (default 0.45) and
   `confidenceThreshold` (default 0.25); outputs `confidence` [N×80] and `coordinates` [N×4] (normalized x,y,w,h) →
   Vision returns `VNRecognizedObjectObservation` with COCO labels ("car", "traffic light", …).
