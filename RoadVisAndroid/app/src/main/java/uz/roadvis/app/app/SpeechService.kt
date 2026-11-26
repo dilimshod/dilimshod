@@ -118,7 +118,7 @@ class SpeechService(context: Context, private val settings: AppSettings) {
 
     /** Speaks a composed phrase: natural clips in the app language when installed, else TTS of its text. */
     fun speak(phrase: VoicePhrase, priority: SpeechPriority = SpeechPriority.NORMAL) {
-        val lang = RVLang.fromRaw(language.raw)
+        val lang = RVLang.fromRaw(language.raw) ?: RVLang.UZ
         speak(VoiceComposer.text(phrase, lang), priority, VoiceComposer.resourceNames(phrase, lang))
     }
 
