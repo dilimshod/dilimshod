@@ -99,9 +99,12 @@ final class RecognitionPipeline {
     /// Per-frame cues for `DriverCoach` (called on the main actor after every processed frame).
     @ObservationIgnored var onAssistFrame: ((DriverAssistFrame) -> Void)?
 
+    /// Centre X of the own-lane corridor the worker picked the lead from (follows a confident lane estimate).
+    private(set) var corridorCenterX = 0.5
+
     /// Own-lane corridor used to pick the lead vehicle (for drawing).
     var egoCorridor: EgoCorridor {
-        EgoCorridor(horizonY: min(0.8, max(0.1, settings.corridorHorizon)))
+        EgoCorridor(centerX: corridorCenterX, horizonY: min(0.8, max(0.1, settings.corridorHorizon)))
     }
 
     /// The following-distance policy currently in effect (from the settings).
@@ -380,6 +383,7 @@ final class RecognitionPipeline {
         if abs(fps - output.fps) >= 0.5 { fps = output.fps }
         if abs(inferenceMs - output.inferenceMs) >= 1 { inferenceMs = output.inferenceMs }
         if frameSize != output.frameSize { frameSize = output.frameSize }
+        if abs(corridorCenterX - output.corridor.centerX) >= 0.003 { corridorCenterX = output.corridor.centerX }
         if currentLightColor != output.lightColor {
             currentLightColor = output.lightColor
             signals.cameraLightColor = output.lightColor
@@ -499,6 +503,7 @@ final class RecognitionPipeline {
             signals.cameraLightColor = nil
         }
         if leadVehicle != nil { leadVehicle = nil }
+        if corridorCenterX != 0.5 { corridorCenterX = 0.5 }
         if laneEstimate != nil { laneEstimate = nil }
         if laneDepartureSide != nil { laneDepartureSide = nil }
         if !pedestrianHazards.isEmpty { pedestrianHazards = [] }

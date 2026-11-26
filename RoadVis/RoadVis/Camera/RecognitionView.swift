@@ -200,12 +200,13 @@ private struct LiveDetectionLayer: View {
                 LaneOverlay(estimate: lane, imageSize: pipeline.frameSize, departureSide: pipeline.laneDepartureSide)
             }
             DetectionOverlayView(tracks: pipeline.tracks, imageSize: pipeline.frameSize,
-                                 showDistance: settings.showDistanceEstimates, showSpeed: settings.showSpeedEstimates,
                                  lead: lead, leadStatus: status, selectedTrackID: selectedTrackID,
                                  pedestrianHazards: DetectionOverlayView.hazardLevels(pipeline.pedestrianHazards))
             if let lead {
                 LeadDistanceOverlay(lead: lead, assessment: assessment, imageSize: pipeline.frameSize,
-                                    labelInsets: labelInsets)
+                                    labelInsets: labelInsets, showDistance: settings.showDistanceEstimates,
+                                    showSpeed: settings.showSpeedEstimates,
+                                    leadSpeedKmh: pipeline.tracks.first { $0.id == lead.trackID }?.estimatedSpeedKmh)
                     .transition(.opacity)
             }
             TrackHitLayer(tracks: pipeline.tracks, imageSize: pipeline.frameSize, selectedTrackID: $selectedTrackID)

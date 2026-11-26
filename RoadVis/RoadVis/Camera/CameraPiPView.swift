@@ -128,7 +128,7 @@ private struct PiPDetectionLayer: View {
     var body: some View {
         let lead = pipeline.leadVehicle
         DetectionOverlayView(tracks: pipeline.tracks, imageSize: pipeline.frameSize,
-                             showDistance: false, showSpeed: false, showLabels: false,
+                             showLabels: false,
                              lead: lead,
                              leadStatus: lead == nil ? .unknown : (pipeline.followingAssessment?.status ?? .unknown),
                              pedestrianHazards: DetectionOverlayView.hazardLevels(pipeline.pedestrianHazards))

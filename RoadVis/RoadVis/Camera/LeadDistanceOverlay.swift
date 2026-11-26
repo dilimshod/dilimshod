@@ -4,7 +4,9 @@ import SwiftUI
 /// its box): flowing dashes and chevrons that move toward the lead (faster while the gap closes), a gradient in the
 /// status colour, a ground marker with a "sonar" ring under the lead car, and a small single-line label placed BESIDE
 /// the line below the car ("≈ 18 м · 1,4 с"; standing: "≈ 1,6 м"), so the car itself stays visible.
-/// Pulses when the gap is dangerous. Thin strokes: the camera picture stays readable.
+/// Pulses when the gap is dangerous. Thin strokes: the camera picture stays readable. This is the ONLY place a distance
+/// is drawn on the camera picture; the label follows the settings "≈ distance" / "≈ speed" (estimates of the lead):
+/// distance off → no gap text, speed on → the lead's ≈ speed on a second small line; both off → no label.
 ///
 /// Uses the same aspect-fill mapping as `DetectionOverlayView`; put it in the same full-screen layer
 /// (`.ignoresSafeArea()`). The endpoints are eased between processed frames (≤ 15 Hz) so the line glides.
@@ -14,6 +16,12 @@ struct LeadDistanceOverlay: View {
     let imageSize: CGSize
     /// Keeps the floating label clear of the HUD (full-screen coordinates).
     var labelInsets = EdgeInsets(top: 120, leading: 16, bottom: 260, trailing: 16)
+    /// Show the ≈ gap (and headway) in the label (`AppSettings.showDistanceEstimates`).
+    var showDistance = true
+    /// Show the lead's ≈ speed in the label (`AppSettings.showSpeedEstimates`).
+    var showSpeed = false
+    /// ≈ speed of the lead track (monocular estimate), km/h.
+    var leadSpeedKmh: Double?
 
     @State private var smoother = LeadLineSmoother()
 
@@ -47,10 +55,13 @@ struct LeadDistanceOverlay: View {
                                               flowSpeed: speed, time: time)
                     }
                 }
-                LeadDistanceLabel(lead: lead, assessment: assessment)
-                    .fixedSize()
-                    .position(labelPosition)
-                    .animation(.smooth(duration: 0.22), value: labelPosition)
+                if showDistance || (showSpeed && leadSpeedKmh != nil) {
+                    LeadDistanceLabel(lead: lead, assessment: assessment, showDistance: showDistance,
+                                      speedKmh: showSpeed ? leadSpeedKmh : nil)
+                        .fixedSize()
+                        .position(labelPosition)
+                        .animation(.smooth(duration: 0.22), value: labelPosition)
+                }
             }
             .frame(width: size.width, height: size.height, alignment: .topLeading)
         }
@@ -217,6 +228,9 @@ enum LeadLineRenderer {
 private struct LeadDistanceLabel: View {
     let lead: LeadVehicle
     let assessment: FollowingDistanceAssessment?
+    var showDistance = true
+    /// ≈ speed of the lead to show on a second line (nil = hidden).
+    var speedKmh: Double?
 
     var body: some View {
         let status = assessment?.status ?? .unknown
@@ -227,9 +241,18 @@ private struct LeadDistanceLabel: View {
                 .font(.system(size: 10, weight: .bold))
                 .foregroundStyle(color)
                 .symbolEffect(.pulse, options: .repeating, isActive: status == .danger)
-            Text(Self.text(gap: gap, assessment: assessment))
-                .rvNumeric(13, weight: .bold)
-                .contentTransition(.numericText())
+            VStack(alignment: .leading, spacing: 0) {
+                if showDistance {
+                    Text(Self.text(gap: gap, assessment: assessment))
+                        .rvNumeric(13, weight: .bold)
+                        .contentTransition(.numericText())
+                }
+                if let speedKmh, speedKmh.isFinite, speedKmh >= 0 {
+                    Text(verbatim: "≈ \(Int(speedKmh.rounded())) \(RVFormat.appKmh)")
+                        .rvNumeric(showDistance ? 10 : 13, weight: .semibold)
+                        .opacity(showDistance ? 0.8 : 1)
+                }
+            }
         }
         .lineLimit(1)
         .foregroundStyle(.white)

@@ -81,4 +81,87 @@ final class FollowingDistanceTests: XCTestCase {
                                                    relativeSpeedKmh: r.relativeSpeedKmh, policy: policy, condition: .dry)
         XCTAssertNotNil(a.timeToCollisionSeconds)
     }
+
+    // MARK: Lead selection: the car directly ahead, not the one on the side
+
+    private func car(_ id: Int, _ box: BBox, t: Double = 0) -> TrackedObject {
+        TrackedObject(id: id, kind: .car, label: "car", box: box, confidence: 0.9, hits: 5,
+                      firstSeen: 0, lastSeen: t, isConfirmed: true)
+    }
+
+    func testCarAheadWinsOverCloserAdjacentLaneCar() {
+        let g = CameraGeometry(horizontalFOVDegrees: 65, imageWidth: 1080, imageHeight: 1920)
+        let tracker = LeadVehicleTracker()
+        // Car ahead: centred, farther (bottom at 0.66). Adjacent-lane car: closer (bottom 0.78), centre at x 0.68 —
+        // overlapping the loose corridor but not strictly ahead.
+        let ahead = car(1, BBox(x: 0.44, y: 0.58, width: 0.12, height: 0.08))
+        let side = car(2, BBox(x: 0.55, y: 0.62, width: 0.26, height: 0.16))
+        XCTAssertTrue(EgoCorridor.default.contains(side.box))
+        XCTAssertFalse(EgoCorridor.default.isStrictlyAhead(side.box))
+        var result: LeadVehicle?
+        for i in 0..<5 {
+            result = tracker.update(tracks: [side, ahead], geometry: g, timestamp: Double(i) * 0.1)
+        }
+        XCTAssertEqual(result?.trackID, 1)
+    }
+
+    func testCentredCarPreferredOverSlightlyCloserOffCentreCar() {
+        let g = CameraGeometry(horizontalFOVDegrees: 65, imageWidth: 1080, imageHeight: 1920)
+        let tracker = LeadVehicleTracker()
+        let centred = car(1, BBox(x: 0.45, y: 0.6, width: 0.1, height: 0.07))
+        // Strictly-ahead zone, but well off-centre and only a little closer.
+        let offCentre = car(2, BBox(x: 0.53, y: 0.64, width: 0.1, height: 0.07))
+        let result = tracker.update(tracks: [offCentre, centred], geometry: g, timestamp: 0)
+        XCTAssertEqual(result?.trackID, 1)
+    }
+
+    func testSideCarTouchingFrameEdgeNeverSelected() {
+        let g = CameraGeometry(horizontalFOVDegrees: 65, imageWidth: 1080, imageHeight: 1920)
+        let tracker = LeadVehicleTracker()
+        // Passing car cut by the right frame edge, its box even reaching the corridor centre.
+        let passing = car(3, BBox(x: 0.5, y: 0.55, width: 0.5, height: 0.4))
+        for i in 0..<5 {
+            XCTAssertNil(tracker.update(tracks: [passing], geometry: g, timestamp: Double(i) * 0.1))
+        }
+        // With a car ahead, the car ahead is the lead.
+        let ahead = car(4, BBox(x: 0.45, y: 0.55, width: 0.1, height: 0.07))
+        XCTAssertEqual(tracker.update(tracks: [passing, ahead], geometry: g, timestamp: 0.6)?.trackID, 4)
+    }
+
+    func testLeadSwitchesWhenItDriftsOutOfStrictZone() {
+        let g = CameraGeometry(horizontalFOVDegrees: 65, imageWidth: 1080, imageHeight: 1920)
+        let tracker = LeadVehicleTracker()
+        let far = car(1, BBox(x: 0.45, y: 0.5, width: 0.1, height: 0.06))
+        var near = car(2, BBox(x: 0.44, y: 0.6, width: 0.12, height: 0.1))
+        XCTAssertEqual(tracker.update(tracks: [far, near], geometry: g, timestamp: 0)?.trackID, 2)
+        // The near car changes lanes to the right: its centre leaves the strict zone → switch at once.
+        near.box = BBox(x: 0.6, y: 0.6, width: 0.12, height: 0.1)
+        XCTAssertEqual(tracker.update(tracks: [far, near], geometry: g, timestamp: 0.1)?.trackID, 1)
+    }
+
+    func testLaneCentreShiftMovesCorridor() {
+        let box = BBox(x: 0.6, y: 0.62, width: 0.12, height: 0.12)   // centre x 0.66, bottom 0.74
+        XCTAssertFalse(EgoCorridor(centerX: 0.5).isStrictlyAhead(box))
+        XCTAssertTrue(EgoCorridor(centerX: 0.62).isStrictlyAhead(box))
+        let g = CameraGeometry(horizontalFOVDegrees: 65, imageWidth: 1080, imageHeight: 1920)
+        let tracker = LeadVehicleTracker()
+        XCTAssertNil(tracker.update(tracks: [car(5, box)], geometry: g, timestamp: 0))
+        tracker.corridor = EgoCorridor(centerX: 0.62)
+        XCTAssertEqual(tracker.update(tracks: [car(5, box)], geometry: g, timestamp: 0.1)?.trackID, 5)
+
+        // Smoothed corridor centre from the lane estimate: follows a confident estimate (clamped), ignores a weak one.
+        let lane = LaneEstimate(left: nil, right: nil, leftConfidence: 0.8, rightConfidence: 0.8, laneCenterX: 0.62,
+                                egoOffset: -0.3, confidence: 0.8, referenceY: 0.96, timestamp: 0)
+        var center = 0.5
+        for _ in 0..<40 { center = EgoCorridor.smoothedCenterX(previous: center, lane: lane) }
+        XCTAssertEqual(center, 0.62, accuracy: 0.01)
+        var far = lane
+        far.laneCenterX = 0.9
+        for _ in 0..<40 { center = EgoCorridor.smoothedCenterX(previous: center, lane: far) }
+        XCTAssertEqual(center, 0.65, accuracy: 0.001)
+        var weak = lane
+        weak.confidence = 0.3
+        for _ in 0..<60 { center = EgoCorridor.smoothedCenterX(previous: center, lane: weak) }
+        XCTAssertEqual(center, 0.5, accuracy: 0.01)
+    }
 }

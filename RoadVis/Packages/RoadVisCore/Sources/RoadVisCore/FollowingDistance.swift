@@ -232,6 +232,30 @@ public struct EgoCorridor: Hashable, Codable, Sendable {
         return (box.midX >= left && box.midX <= right) || overlap >= 0.4 * box.width
     }
 
+    /// Normalized lateral offset of the box centre from the corridor centre at the box's bottom row
+    /// (0 = centred, 1 = on the corridor edge); nil above the horizon.
+    public func lateralOffset(_ box: BBox) -> Double? {
+        let hw = halfWidth(atY: min(1, box.maxY))
+        guard hw > 0 else { return nil }
+        return abs(box.midX - centerX) / hw
+    }
+
+    /// Fraction of the box width that overlaps the corridor at the box's bottom row (0…1).
+    public func overlapFraction(_ box: BBox) -> Double {
+        let hw = halfWidth(atY: min(1, box.maxY))
+        guard hw > 0, box.width > 0 else { return 0 }
+        let overlap = min(centerX + hw, box.maxX) - max(centerX - hw, box.minX)
+        return max(0, min(1, overlap / box.width))
+    }
+
+    /// Strictly ahead: the box centre lies within `centerFraction` × the corridor half-width at the box's bottom row,
+    /// or at least `minOverlap` of the box width overlaps the corridor. Stricter than `contains(_:)` (used for the
+    /// lead vehicle so a car in the adjacent lane is not picked).
+    public func isStrictlyAhead(_ box: BBox, centerFraction: Double = 0.6, minOverlap: Double = 0.6) -> Bool {
+        guard let offset = lateralOffset(box) else { return false }
+        return offset <= centerFraction || overlapFraction(box) >= minOverlap
+    }
+
     /// Corridor polygon (bottom-left, top-left, top-right, bottom-right) for drawing.
     public var polygon: [(x: Double, y: Double)] {
         [(centerX - bottomHalfWidth, 1), (centerX - horizonHalfWidth, horizonY),
@@ -252,17 +276,43 @@ public struct LeadVehicle: Hashable, Sendable {
     public var method: String
 }
 
-/// Selects the lead vehicle (closest confirmed vehicle inside the ego corridor, with hysteresis) and estimates
+/// Selects the lead vehicle — the vehicle directly AHEAD in the own lane, not one in the adjacent lane — and estimates
 /// its distance by fusing the apparent width and height of its box with typical vehicle dimensions.
+///
+/// Selection: only confirmed vehicles seen on this frame that are strictly ahead (`EgoCorridor.isStrictlyAhead`) and
+/// whose box does not touch the left / right frame edge (a car passing in the adjacent lane) are candidates. Among them
+/// the lowest score wins: closeness rank (boxes whose bottom edges are within `rankTolerance` share a rank) plus
+/// `lateralPenalty` × the normalized lateral offset, so a centred car beats a slightly closer off-centre one. The
+/// current lead is kept (hysteresis) unless another candidate scores better by `switchMargin`; it is dropped at once
+/// when it leaves the strict zone.
 public final class LeadVehicleTracker {
+    public struct SelectionConfig: Hashable, Sendable {
+        /// Box centre within this fraction of the corridor half-width at its bottom row counts as "ahead".
+        public var centerFraction: Double = 0.6
+        /// …or at least this fraction of the box width overlapping the corridor.
+        public var minOverlap: Double = 0.6
+        /// Boxes touching the left / right frame edge (within this margin) are never selected.
+        public var edgeMargin: Double = 0.01
+        /// Score weight of the normalized lateral offset (0 = centred, 1 = corridor edge); one closeness rank = 1.
+        public var lateralPenalty: Double = 2
+        /// Bottom edges closer than this (fraction of the height) share a closeness rank.
+        public var rankTolerance: Double = 0.03
+        /// Another candidate must score better by this to replace the current lead.
+        public var switchMargin: Double = 0.5
+
+        public init() {}
+    }
+
     public var corridor: EgoCorridor
+    public var selection: SelectionConfig
     private var currentID: Int?
     private var smoothed: Double?
     private var samples: [(t: TimeInterval, d: Double)] = []
     private var lostSince: TimeInterval?
 
-    public init(corridor: EgoCorridor = .default) {
+    public init(corridor: EgoCorridor = .default, selection: SelectionConfig = SelectionConfig()) {
         self.corridor = corridor
+        self.selection = selection
     }
 
     public func reset() {
@@ -299,19 +349,7 @@ public final class LeadVehicleTracker {
     }
 
     public func update(tracks: [TrackedObject], geometry: CameraGeometry, timestamp: TimeInterval) -> LeadVehicle? {
-        let candidates = tracks.filter {
-            $0.isConfirmed && $0.missed == 0 && $0.kind.isVehicle && $0.kind != .bicycle && corridor.contains($0.box)
-        }
-        // Keep the previous lead while it stays in the corridor unless another vehicle is clearly closer.
-        let closest = candidates.max { $0.box.maxY < $1.box.maxY }
-        var chosen = closest
-        if let id = currentID, let previous = candidates.first(where: { $0.id == id }) {
-            if let c = closest, c.id != id, c.box.maxY > previous.box.maxY + 0.05 {
-                chosen = c
-            } else {
-                chosen = previous
-            }
-        }
+        let chosen = selectLead(from: tracks)
         guard let lead = chosen, let (raw, method) = Self.rawDistance(for: lead.kind, box: lead.box, geometry: geometry),
               raw.isFinite, raw > 0.3, raw < 150 else {
             if lostSince == nil { lostSince = timestamp }
@@ -347,6 +385,56 @@ public final class LeadVehicleTracker {
         }
         return LeadVehicle(trackID: lead.id, kind: lead.kind, box: lead.box, distanceMeters: value,
                            relativeSpeedKmh: rel, method: method)
+    }
+}
+
+extension EgoCorridor {
+    /// Next smoothed corridor centre X: moves toward `LaneEstimate.laneCenterX` (clamped to `range`) when the lane
+    /// estimate is confident (≥ `minConfidence`), otherwise back toward the frame centre 0.5. `alpha` is the EMA weight
+    /// per call.
+    public static func smoothedCenterX(previous: Double, lane: LaneEstimate?, minConfidence: Double = 0.5,
+                                       range: ClosedRange<Double> = 0.35...0.65, alpha: Double = 0.15) -> Double {
+        var target = 0.5
+        if let lane, lane.confidence >= minConfidence, let center = lane.laneCenterX, center.isFinite {
+            target = min(range.upperBound, max(range.lowerBound, center))
+        }
+        let next = previous + max(0, min(1, alpha)) * (target - previous)
+        return min(range.upperBound, max(range.lowerBound, next))
+    }
+}
+
+extension LeadVehicleTracker {
+    /// True when the box touches exactly one of the left / right frame edges (a vehicle passing in the adjacent lane;
+    /// a box spanning the whole width is a vehicle right in front).
+    func touchesSideEdge(_ box: BBox) -> Bool {
+        let left = box.minX <= selection.edgeMargin, right = box.maxX >= 1 - selection.edgeMargin
+        return left != right
+    }
+
+    /// Lead candidates (strictly ahead, not at a side edge) with their selection score (lower is better).
+    func scoredCandidates(_ tracks: [TrackedObject]) -> [(track: TrackedObject, score: Double)] {
+        let candidates = tracks.filter {
+            $0.isConfirmed && $0.missed == 0 && $0.kind.isVehicle && $0.kind != .bicycle
+                && !touchesSideEdge($0.box)
+                && corridor.isStrictlyAhead($0.box, centerFraction: selection.centerFraction,
+                                            minOverlap: selection.minOverlap)
+        }
+        return candidates.map { track in
+            let closer = candidates.filter { $0.box.maxY > track.box.maxY + selection.rankTolerance }.count
+            let lateral = min(2, corridor.lateralOffset(track.box) ?? 2)
+            return (track, Double(closer) + selection.lateralPenalty * lateral)
+        }
+    }
+
+    /// The lead for this frame (with hysteresis on the current lead), or nil.
+    func selectLead(from tracks: [TrackedObject]) -> TrackedObject? {
+        let scored = scoredCandidates(tracks)
+        guard let best = scored.min(by: { $0.score < $1.score }) else { return nil }
+        if let id = currentID, let current = scored.first(where: { $0.track.id == id }),
+           best.track.id != id, best.score > current.score - selection.switchMargin {
+            return current.track
+        }
+        return best.track
     }
 }
 

@@ -59,6 +59,8 @@ final class RecognitionWorker: @unchecked Sendable {
         var laneEstimate: LaneEstimate?
         /// Pedestrians on / about to enter the roadway, most urgent first (empty when the feature is off).
         var pedestrianHazards: [PedestrianHazard]
+        /// Own-lane corridor the lead was picked from (centre follows a confident lane estimate).
+        var corridor: EgoCorridor
     }
 
     /// Load results of the two models.
@@ -102,6 +104,8 @@ final class RecognitionWorker: @unchecked Sendable {
     private let pedestrianDetector = PedestrianHazardDetector()
     private var lastLaneUptime: TimeInterval = -.infinity
     private var laneEstimate: LaneEstimate?
+    /// Smoothed corridor centre X (follows `LaneEstimate.laneCenterX` when the lane estimate is confident).
+    private var corridorCenterX = 0.5
     private var generation = 0
     private var lastFrameTimestamp: TimeInterval?
     private var fpsEstimate: Double = 0
@@ -178,6 +182,7 @@ final class RecognitionWorker: @unchecked Sendable {
                 laneDetector.reset()
                 pedestrianDetector.reset()
                 laneEstimate = nil
+                corridorCenterX = 0.5
             }
         }
     }
@@ -204,6 +209,7 @@ final class RecognitionWorker: @unchecked Sendable {
             laneDetector.reset()
             pedestrianDetector.reset()
             laneEstimate = nil
+            corridorCenterX = 0.5
             makeClassifier.reset()
             generation = newGeneration
             lastFrameTimestamp = nil
@@ -240,8 +246,10 @@ final class RecognitionWorker: @unchecked Sendable {
         let now = ProcessInfo.processInfo.systemUptime
         let minInterval = 1 / Self.maxFramesPerSecond
         lock.lock()
-        // Drop the frame while the previous one is still processed or when it comes too early.
-        guard isActive, detectorReady, !isBusy, now - lastAcceptedUptime >= minInterval * 0.9 else {
+        // Drop the frame while the previous one is still processed or when it comes too early. Without a detector
+        // (model missing / failed) frames still run the lane detector when it is enabled.
+        guard isActive, detectorReady || inputs.laneDetectionEnabled, !isBusy,
+              now - lastAcceptedUptime >= minInterval * 0.9 else {
             lock.unlock()
             return
         }
@@ -266,10 +274,24 @@ final class RecognitionWorker: @unchecked Sendable {
         guard width > 0, height > 0 else { return }
         let timestamp = time.isValid && time.seconds.isFinite ? time.seconds : ProcessInfo.processInfo.systemUptime
 
+        // Lanes first: independent of the detector, and the lead corridor below follows the fresh lane estimate.
+        updateLanes(in: pixelBuffer, width: width, height: height, inputs: frameInputs)
+
         // Frames are rotated upright by the capture connection, so Vision always uses `.up`.
         let handler = VNImageRequestHandler(cvPixelBuffer: pixelBuffer, orientation: .up, options: [:])
         guard let result = detector.detect(handler: handler, imageWidth: width, imageHeight: height,
-                                           options: frameInputs.detection) else { return }
+                                           options: frameInputs.detection) else {
+            // No detector: still publish the lane estimate so the lane overlay / departure warning work.
+            if frameInputs.laneDetectionEnabled, !locked({ detectorReady }) {
+                outputHandler?(Output(generation: generation, tracks: [], visibleCounts: [:],
+                                      uniqueCounts: tracker.uniqueCounts, fps: fpsEstimate, inferenceMs: 0,
+                                      lightColor: nil, frameSize: CGSize(width: width, height: height),
+                                      processedFrames: processedFrames, leadVehicle: nil,
+                                      laneEstimate: laneEstimate, pedestrianHazards: [],
+                                      corridor: leadTracker.corridor))
+            }
+            return
+        }
         var detections = result.detections
         classifyTrafficLights(&detections, in: pixelBuffer, width: width, height: height)
 
@@ -283,7 +305,6 @@ final class RecognitionWorker: @unchecked Sendable {
                                             timestamp: timestamp)
         let pedestrianHazards = updatePedestrians(tracks: tracks, inputs: frameInputs, geometry: geometry,
                                                   timestamp: timestamp)
-        updateLanes(in: pixelBuffer, width: width, height: height, inputs: frameInputs)
 
         if frameInputs.makeRecognitionEnabled, makeClassifier.status.isReady {
             // Votes become visible in the tracks of the next frame.
@@ -312,12 +333,14 @@ final class RecognitionWorker: @unchecked Sendable {
                             uniqueCounts: uniqueCounts, fps: fpsEstimate, inferenceMs: inferenceEstimate,
                             lightColor: lightColor, frameSize: CGSize(width: width, height: height),
                             processedFrames: processedFrames, leadVehicle: leadVehicle, laneEstimate: laneEstimate,
-                            pedestrianHazards: pedestrianHazards)
+                            pedestrianHazards: pedestrianHazards, corridor: leadTracker.corridor)
         outputHandler?(output)
     }
 
-    /// Picks the lead vehicle (closest confirmed vehicle inside the own-lane corridor) and fuses its distance from the
-    /// apparent box width and height. Resets the tracker while the feature is off so it restarts cleanly.
+    /// Picks the lead vehicle (the vehicle strictly ahead in the own-lane corridor, see `LeadVehicleTracker`) and fuses
+    /// its distance from the apparent box width and height. The corridor centre follows the lane centre
+    /// (`LaneEstimate.laneCenterX`, smoothed, clamped 0.35–0.65) while the lane estimate is confident (≥ 0.5), else
+    /// it returns to the frame centre. Resets the tracker while the feature is off so it restarts cleanly.
     private func updateLeadVehicle(tracks: [TrackedObject], inputs: Inputs, geometry: CameraGeometry,
                                    timestamp: TimeInterval) -> LeadVehicle? {
         guard inputs.followingDistanceEnabled else {
@@ -325,8 +348,11 @@ final class RecognitionWorker: @unchecked Sendable {
             return nil
         }
         let horizon = min(0.8, max(0.1, inputs.corridorHorizon))
-        if leadTracker.corridor.horizonY != horizon {
-            leadTracker.corridor = EgoCorridor(horizonY: horizon)
+        corridorCenterX = EgoCorridor.smoothedCenterX(previous: corridorCenterX,
+                                                      lane: inputs.laneDetectionEnabled ? laneEstimate : nil)
+        let centerX = (corridorCenterX * 1000).rounded() / 1000
+        if leadTracker.corridor.horizonY != horizon || leadTracker.corridor.centerX != centerX {
+            leadTracker.corridor = EgoCorridor(centerX: centerX, horizonY: horizon)
         }
         return leadTracker.update(tracks: tracks, geometry: geometry, timestamp: timestamp)
     }

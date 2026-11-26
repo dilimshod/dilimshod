@@ -12,7 +12,9 @@ final class AppSettings {
     /// IoU threshold for non-maximum suppression (used only when the model has no built-in NMS).
     var nmsIoUThreshold: Double { didSet { defaults.set(nmsIoUThreshold, forKey: Keys.nmsIoUThreshold) } }
     var makeRecognitionEnabled: Bool { didSet { defaults.set(makeRecognitionEnabled, forKey: Keys.makeRecognitionEnabled) } }
+    /// Show the ≈ distance (gap · headway) of the LEAD vehicle on its distance line (non-lead boxes never show one).
     var showDistanceEstimates: Bool { didSet { defaults.set(showDistanceEstimates, forKey: Keys.showDistanceEstimates) } }
+    /// Show the ≈ speed of the LEAD vehicle in its distance label.
     var showSpeedEstimates: Bool { didSet { defaults.set(showSpeedEstimates, forKey: Keys.showSpeedEstimates) } }
     var trackPedestrians: Bool { didSet { defaults.set(trackPedestrians, forKey: Keys.trackPedestrians) } }
     var detectTrafficLights: Bool { didSet { defaults.set(detectTrafficLights, forKey: Keys.detectTrafficLights) } }

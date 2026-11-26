@@ -10,8 +10,9 @@ import SwiftUI
 /// (class symbol + class, make only when the classifier is confident). The lead vehicle (own lane, following distance)
 /// gets a slightly thicker softly glowing bracket in the status colour that pulses gently when the gap is short — its
 /// distance is shown by `LeadDistanceOverlay`, not here. Tentative tracks are faint dashed brackets without a label.
-/// Estimates ("≈ 23 м · ≈ 54 км/ч", when enabled) are added to the same line only on large (near) boxes, so far-away
-/// traffic stays uncluttered; the tap-to-open detail card always has them. Percentages are detector *confidence*.
+/// No distance / speed estimates are drawn on non-lead boxes (they confused which car the distance belongs to): the
+/// distance appears only on the lead (`LeadDistanceOverlay` label, governed by the "show estimates" settings); the
+/// tap-to-open detail card still has the estimates of any track. Percentages are detector *confidence*.
 ///
 /// A pedestrian on / about to enter the roadway (`pedestrianHazards`) gets a thicker glowing bracket in red (danger)
 /// or orange (caution) that pulses gently.
@@ -20,8 +21,6 @@ import SwiftUI
 struct DetectionOverlayView: View {
     let tracks: [TrackedObject]
     let imageSize: CGSize
-    let showDistance: Bool
-    let showSpeed: Bool
     /// False for compact places (picture-in-picture): thin brackets only.
     let showLabels: Bool
     /// Lead vehicle to highlight (nil = none / following distance off).
@@ -33,13 +32,11 @@ struct DetectionOverlayView: View {
     /// Pedestrian hazard level per track ID (pedestrians on / about to enter the roadway).
     let pedestrianHazards: [Int: PedestrianHazardLevel]
 
-    init(tracks: [TrackedObject], imageSize: CGSize, showDistance: Bool, showSpeed: Bool, showLabels: Bool = true,
+    init(tracks: [TrackedObject], imageSize: CGSize, showLabels: Bool = true,
          lead: LeadVehicle? = nil, leadStatus: DistanceStatus = .unknown, selectedTrackID: Int? = nil,
          pedestrianHazards: [Int: PedestrianHazardLevel] = [:]) {
         self.tracks = tracks
         self.imageSize = imageSize
-        self.showDistance = showDistance
-        self.showSpeed = showSpeed
         self.showLabels = showLabels
         self.lead = lead
         self.leadStatus = leadStatus
@@ -70,10 +67,7 @@ struct DetectionOverlayView: View {
                                  leadStatus: leadStatus,
                                  hazard: pedestrianHazards[track.id],
                                  isSelected: selectedTrackID == track.id,
-                                 showLabel: showLabels && track.isConfirmed,
-                                 secondaryText: showLabels && !isLead && Self.showsInlineEstimate(for: mapping.rect(for: track.box))
-                                    ? Self.estimateText(for: track, showDistance: showDistance, showSpeed: showSpeed)
-                                    : nil)
+                                 showLabel: showLabels && track.isConfirmed)
                 }
             }
             .frame(width: proxy.size.width, height: proxy.size.height, alignment: .topLeading)
@@ -83,13 +77,6 @@ struct DetectionOverlayView: View {
     }
 
     // MARK: - Styling and text (also used by other camera views)
-
-    /// Boxes at least this wide (points) — i.e. near vehicles — get their enabled estimates on the label line.
-    static let inlineEstimateMinWidth: CGFloat = 120
-
-    static func showsInlineEstimate(for rect: CGRect) -> Bool {
-        rect.width >= inlineEstimateMinWidth
-    }
 
     /// Make shown on the compact box label: only when the classifier is confident (≥ 0.6).
     static func confidentMakeText(for track: TrackedObject) -> String? {
@@ -208,14 +195,12 @@ private struct TrackBoxView: View {
     let hazard: PedestrianHazardLevel?
     let isSelected: Bool
     let showLabel: Bool
-    let secondaryText: String?
 
     /// False until the spring-in has run. Tracks that come back after a short gap (hits > 3) skip the spring-in.
     @State private var appeared: Bool
 
     init(track: TrackedObject, rect: CGRect, containerSize: CGSize, thin: Bool, isLead: Bool,
-         leadStatus: DistanceStatus, hazard: PedestrianHazardLevel?, isSelected: Bool, showLabel: Bool,
-         secondaryText: String?) {
+         leadStatus: DistanceStatus, hazard: PedestrianHazardLevel?, isSelected: Bool, showLabel: Bool) {
         self.track = track
         self.rect = rect
         self.containerSize = containerSize
@@ -225,7 +210,6 @@ private struct TrackBoxView: View {
         self.hazard = hazard
         self.isSelected = isSelected
         self.showLabel = showLabel
-        self.secondaryText = secondaryText
         _appeared = State(initialValue: track.hits > 3)
     }
 
@@ -283,8 +267,7 @@ private struct TrackBoxView: View {
         .overlay(alignment: alignTrailing ? .topTrailing : .topLeading) {
             if showLabel {
                 // Fixed-width slot: the chip hugs its text and truncates beyond the maximum width.
-                TrackLabelChip(track: track, color: color, isLead: isLead, isEmphasized: isEmphasized,
-                               secondaryText: secondaryText)
+                TrackLabelChip(track: track, color: color, isLead: isLead, isEmphasized: isEmphasized)
                     .frame(width: RVTheme.HUD.maxLabelWidth, alignment: alignTrailing ? .trailing : .leading)
                     .fixedSize(horizontal: false, vertical: true)
                     .alignmentGuide(.top) { dimensions in
@@ -305,15 +288,14 @@ private struct TrackBoxView: View {
     }
 }
 
-/// Tiny single-line frosted capsule above a box: class symbol, class (+ confident make), lead marker and — on near
-/// boxes only — the enabled estimates. Truncates instead of growing.
+/// Tiny single-line frosted capsule above a box: class symbol, class (+ confident make) and lead marker (no estimates —
+/// the lead's distance is on its distance line). Truncates instead of growing.
 private struct TrackLabelChip: View {
     let track: TrackedObject
     let color: Color
     let isLead: Bool
     /// Lead vehicle or pedestrian hazard: stronger outline.
     let isEmphasized: Bool
-    let secondaryText: String?
 
     var body: some View {
         HStack(spacing: 4) {
@@ -326,10 +308,6 @@ private struct TrackLabelChip: View {
             }
             Text(DetectionOverlayView.compactTitleText(for: track))
                 .layoutPriority(1)
-            if let secondaryText {
-                Text(secondaryText)
-                    .foregroundStyle(.white.opacity(0.75))
-            }
         }
         .font(RVTheme.font(11, weight: .semibold))
         .monospacedDigit()
@@ -420,7 +398,7 @@ struct TrackHitLayer: View {
     return ZStack {
         Color(white: 0.2).ignoresSafeArea()
         DetectionOverlayView(tracks: tracks, imageSize: CGSize(width: 1080, height: 1920),
-                             showDistance: true, showSpeed: true, lead: lead, leadStatus: .caution)
+                             lead: lead, leadStatus: .caution)
             .ignoresSafeArea()
     }
     .preferredColorScheme(.dark)

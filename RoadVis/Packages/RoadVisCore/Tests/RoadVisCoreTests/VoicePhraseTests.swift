@@ -207,3 +207,31 @@ final class VoicePhraseTests: XCTestCase {
         XCTAssertEqual(decodedDisk, decodedCatalog, "tools/voice_phrases.json is out of date")
     }
 }
+
+final class AudioSilenceTrimmerTests: XCTestCase {
+    func testTrimsLeadingAndTrailingSilenceWithPadding() {
+        let rate = 24_000.0
+        // 0.4 s near-silence (−60 dBFS noise), 0.5 s tone, 0.6 s silence.
+        var samples = [Float](repeating: 0.0008, count: 9_600)
+        samples += (0..<12_000).map { Float(0.3 * sin(Double($0) * 0.1)) + 0.02 }
+        samples += [Float](repeating: -0.0005, count: 14_400)
+        let range = AudioSilenceTrimmer.audibleRange(samples, sampleRate: rate)
+        XCTAssertEqual(range.lowerBound, 9_600 - 720)          // 30 ms padding
+        XCTAssertEqual(range.upperBound, 9_600 + 12_000 + 720)
+    }
+
+    func testSilentClipKeepsShortPieceAndBoundsAreClamped() {
+        let silent = [Float](repeating: 0, count: 5_000)
+        XCTAssertEqual(AudioSilenceTrimmer.audibleRange(silent, sampleRate: 24_000), 0..<720)
+        let loud = [Float](repeating: 0.5, count: 100)
+        XCTAssertEqual(AudioSilenceTrimmer.audibleRange(loud, sampleRate: 24_000), 0..<100)
+        XCTAssertEqual(AudioSilenceTrimmer.amplitude(decibels: -40), 0.01, accuracy: 1e-6)
+    }
+
+    func testVoiceRateClamp() {
+        XCTAssertEqual(AudioSilenceTrimmer.clampedVoiceRate(nil), 1.1)
+        XCTAssertEqual(AudioSilenceTrimmer.clampedVoiceRate(2), 1.4)
+        XCTAssertEqual(AudioSilenceTrimmer.clampedVoiceRate(0.5), 0.9)
+        XCTAssertEqual(AudioSilenceTrimmer.clampedVoiceRate(1.2), 1.2)
+    }
+}

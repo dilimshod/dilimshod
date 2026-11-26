@@ -168,6 +168,54 @@ final class LaneDetectorTests: XCTestCase {
     }
 }
 
+extension LaneDetectorTests {
+    /// Portrait BGRA road frame (asphalt with noise, bright sky) with two solid white lines converging at the horizon,
+    /// through the same path as the app (`fromBGRA` with the horizon ROI → `LaneDetector.process` at ≈ 5 Hz).
+    func testSyntheticRoadWithTwoWhiteLinesYieldsConfidentLines() {
+        let w = 720, h = 1280, bpr = w * 4
+        var buffer = [UInt8](repeating: 255, count: bpr * h)
+        var rng: UInt64 = 7
+        let hy = Double(h) * 0.42
+        for y in 0..<h {
+            for x in 0..<w {
+                rng = rng &* 6364136223846793005 &+ 1442695040888963407
+                let noise = Int((rng >> 33) % 17) - 8
+                let base = Double(y) < hy ? 185 : 92
+                let v = UInt8(clamping: base + noise)
+                let i = y * bpr + x * 4
+                buffer[i] = v; buffer[i + 1] = v; buffer[i + 2] = v
+            }
+            guard Double(y) > hy else { continue }
+            let t = (Double(y) - hy) / (Double(h - 1) - hy)
+            for bottom in [0.1 * Double(w), 0.9 * Double(w)] {
+                let x = 0.5 * Double(w) + (bottom - 0.5 * Double(w)) * t
+                let half = max(1.5, 10 * t)
+                for xx in Int(x - half)...Int(x + half) where xx >= 0 && xx < w {
+                    let i = y * bpr + xx * 4
+                    buffer[i] = 232; buffer[i + 1] = 232; buffer[i + 2] = 232
+                }
+            }
+        }
+        let detector = LaneDetector()
+        var estimate = LaneEstimate.empty()
+        for frame in 0..<8 {
+            let image = buffer.withUnsafeBytes { raw in
+                LaneImage.fromBGRA(base: raw.baseAddress!, width: w, height: h, bytesPerRow: bpr,
+                                   targetWidth: 160, roiTop: 0.40)
+            }
+            estimate = detector.process(image, timestamp: Double(frame) * 0.2)
+        }
+        let left = try! XCTUnwrap(estimate.left)
+        let right = try! XCTUnwrap(estimate.right)
+        XCTAssertGreaterThanOrEqual(estimate.leftConfidence, 0.5)
+        XCTAssertGreaterThanOrEqual(estimate.rightConfidence, 0.5)
+        XCTAssertGreaterThanOrEqual(estimate.confidence, 0.5)
+        XCTAssertLessThan(left.x(atY: 0.96), 0.3)
+        XCTAssertGreaterThan(right.x(atY: 0.96), 0.7)
+        XCTAssertEqual(estimate.laneCenterX ?? 0, 0.5, accuracy: 0.04)
+    }
+}
+
 final class LaneDepartureTests: XCTestCase {
     private func estimate(offset: Double, t: TimeInterval, confidence: Double = 0.8) -> LaneEstimate {
         let line = LaneLine(bottomX: 0.1, bottomY: 0.96, topX: 0.45, topY: 0.44)
