@@ -43,18 +43,18 @@ final class AppState {
     /// 1 Hz check that starts / stops the background trip recording (`autoTripTick`).
     @ObservationIgnored private var autoTripTask: Task<Void, Never>?
     @ObservationIgnored private var movingSince: Date?
-    @ObservationIgnored private var stationarySince: Date?
+    /// Standing-still / GPS-outage timers of the automatic trip stop (thresholds: `TripStandstillTimer` defaults —
+    /// ≤ 3 km/h for 180 s, or 900 s without any valid GPS speed).
+    @ObservationIgnored private var standstill = TripStandstillTimer()
     /// True when the current trip recording was started by the driving detector (not «Поехали» / Settings).
     @ObservationIgnored private var autoStartedTrip = false
 
     /// How long the capture session stays warm (running, no inference) in the navigator without the camera window.
     static let cameraStandbyTimeout: Duration = .seconds(60)
     /// Background trip recording: own speed ≥ `autoTripStartSpeedKmh` for `autoTripStartSeconds` on the camera
-    /// screen starts a trip; ≤ `autoTripStationarySpeedKmh` for `autoTripStopSeconds` ends it.
+    /// screen starts a trip; standing still ends it (`TripStandstillTimer`).
     static let autoTripStartSpeedKmh: Double = 10
     static let autoTripStartSeconds: TimeInterval = 10
-    static let autoTripStationarySpeedKmh: Double = 3
-    static let autoTripStopSeconds: TimeInterval = 180
     /// Last app-wide lifecycle state handled by `handleScenePhase` (dedupes per-scene / repeated notifications).
     @ObservationIgnored private var handledPhase: ScenePhase?
 
@@ -168,10 +168,13 @@ final class AppState {
             recognition.stop()
             signals.persistNow()
             movingSince = nil
-            stationarySince = nil
+            standstill.reset()
             // A trip the driving detector started ends when the app leaves the screen (unless guidance runs).
             if tripRecorder.isRecording, autoStartedTrip, navigation.state != .navigating {
                 stopTripRecording(presentReport: false)
+            } else {
+                // A recording that goes on in the background must have background GPS (no-op when not recording).
+                tripRecorder.keepBackgroundUpdatesIfNeeded()
             }
             // Keep GPS only while actively navigating or recording a trip (background location mode).
             if navigation.state != .navigating && !tripRecorder.isRecording {
@@ -191,7 +194,14 @@ final class AppState {
     func startDrive() {
         navigation.startNavigation()
         guard navigation.state == .navigating else { return }
-        if settings.tripAutoRecord, !tripRecorder.isRecording {
+        if tripRecorder.isRecording {
+            // A trip the driving detector started becomes the trip of this navigation (arrival ends it and opens
+            // the report); a manual recording from Settings stays independent.
+            if autoStartedTrip {
+                tripRecorder.adoptNavigation()
+                autoStartedTrip = false
+            }
+        } else if settings.tripAutoRecord {
             tripRecorder.start(withNavigation: true)
             autoStartedTrip = false
         }
@@ -208,9 +218,16 @@ final class AppState {
     /// arrival or an explicit stop in Settings — automatic stops are silent; nothing is shown without a track).
     func stopTripRecording(arrived: Bool = false, presentReport: Bool = true) {
         autoStartedTrip = false
-        stationarySince = nil
+        standstill.reset()
+        guard tripRecorder.isRecording else { return }
+        // Finalisation is asynchronous (CSV files, geocoding, file write) and often starts when the app goes to the
+        // background: a UIKit background task keeps the process alive until the trip file is on disk.
+        let background = BackgroundTaskHolder(name: "trip.finish")
         Task {
-            guard let trip = await tripRecorder.stop(arrived: arrived), presentReport else { return }
+            let finished: Trip? = await tripRecorder.stop(arrived: arrived)
+            await trips.flush()
+            background.end()
+            guard let trip = finished, presentReport else { return }
             showSettings = false
             showTripHistory = false
             presentedTrip = trip
@@ -244,26 +261,27 @@ final class AppState {
         }
     }
 
-    /// Own GPS speed, km/h (0 without a fix from the last 10 s).
-    private var currentSpeedKmh: Double {
-        guard let fix = location.location, Date().timeIntervalSince(fix.timestamp) < 10, fix.speed >= 0 else { return 0 }
+    /// Own GPS speed, km/h; nil without a fix from the last 10 s or without a valid speed (GPS outage).
+    private var currentSpeedKmh: Double? {
+        guard let fix = location.location, Date().timeIntervalSince(fix.timestamp) < 10, fix.speed >= 0 else { return nil }
         return fix.speed * 3.6
     }
 
     /// Silent background recording (setting «Фоновая запись поездок», `tripAutoRecord`): driving with the camera screen
     /// open (≥ 10 km/h for 10 s, no trip running) starts a trip; a trip started this way or by «Поехали» ends after
-    /// 3 min standing still (not during guidance — arrival ends those). Trips started in Settings stop only there.
+    /// 3 min standing still (not during guidance — arrival ends those). A GPS outage is not "standing": without a
+    /// valid speed the trip ends only after 15 min. Trips started in Settings stop only there.
     private func autoTripTick() {
         let now = Date()
         guard settings.tripAutoRecord, handledPhase == .active else {
             movingSince = nil
-            stationarySince = nil
+            standstill.reset()
             return
         }
-        let speed = currentSpeedKmh
+        let speed: Double? = currentSpeedKmh
         if !tripRecorder.isRecording {
-            stationarySince = nil
-            guard !tripRecorder.isFinishing, mode == .camera, speed >= Self.autoTripStartSpeedKmh else {
+            standstill.reset()
+            guard !tripRecorder.isFinishing, mode == .camera, let speed, speed >= Self.autoTripStartSpeedKmh else {
                 movingSince = nil
                 return
             }
@@ -277,15 +295,40 @@ final class AppState {
             return
         }
         movingSince = nil
-        guard autoStartedTrip || tripRecorder.startedWithNavigation, navigation.state != .navigating,
-              speed <= Self.autoTripStationarySpeedKmh else {
-            stationarySince = nil
+        guard autoStartedTrip || tripRecorder.startedWithNavigation, navigation.state != .navigating else {
+            standstill.reset()
             return
         }
-        let since = stationarySince ?? now
-        stationarySince = since
-        if now.timeIntervalSince(since) >= Self.autoTripStopSeconds {
+        if standstill.update(now: now, speedKmh: speed) {
             stopTripRecording(presentReport: false)
         }
+    }
+
+    /// The app is about to be terminated (force-quit while not suspended): the running trip is written at once.
+    func handleWillTerminate() {
+        tripRecorder.flushOnTerminate()
+    }
+}
+
+/// One UIKit background task (`beginBackgroundTask`): keeps the app running for a short piece of work after it went
+/// to the background. `end()` is idempotent; the system's expiration handler ends it too.
+@MainActor
+final class BackgroundTaskHolder {
+    private var identifier: UIBackgroundTaskIdentifier = .invalid
+
+    init(name: String) {
+        identifier = UIApplication.shared.beginBackgroundTask(withName: name) { [weak self] in
+            // UIKit calls the expiration handler on the main thread.
+            MainActor.assumeIsolated {
+                self?.end()
+            }
+        }
+    }
+
+    func end() {
+        guard identifier != .invalid else { return }
+        let finished: UIBackgroundTaskIdentifier = identifier
+        identifier = .invalid
+        UIApplication.shared.endBackgroundTask(finished)
     }
 }

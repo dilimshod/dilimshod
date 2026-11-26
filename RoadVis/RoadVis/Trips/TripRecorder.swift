@@ -106,12 +106,9 @@ final class TripRecorder {
         }
         startMotion()
 
-        startedCameraCSV = false
         // The research CSV («Журнал для исследования» / «CSV камеры во время поездки») follows the trip recording.
-        if settings.tripRecordCameraCSV || settings.recordExperimentLog, !recognition.isRecording {
-            recognition.startRecording()
-            startedCameraCSV = true
-        }
+        startedCameraCSV = false
+        syncCameraCSV()
         if let fix = location.location, Date().timeIntervalSince(fix.timestamp) < 5 {
             handleFix(fix)
         }
@@ -151,21 +148,33 @@ final class TripRecorder {
         if finished.origin.coordinate == nil {
             finished.origin.coordinate = finished.points.first?.coordinate
         }
-        // B gets an address only when it has no name (manual trips); the geocoder is given ≤ 4 s.
-        if finished.destination?.name == nil, let coordinate = finished.destination?.coordinate {
-            finished.destination?.name = await TripRecorder.placeName(for: coordinate.clLocation, timeout: 4)
-        }
-        if finished.origin.name == nil, let coordinate = finished.origin.coordinate {
-            finished.origin.name = await TripRecorder.placeName(for: coordinate.clLocation, timeout: 4)
-        }
+        // The finished state goes to disk before anything is awaited: stopping usually happens when the app goes to
+        // the background, and it may be suspended / killed during the slow steps below.
+        trip = finished
+        let hasTrack = finished.points.count >= 2
+        if hasTrack { store.persist(finished) }
+        // The research log lives in memory until it is finished, so it comes before the (up to 8 s) geocoding.
         if startedCameraCSV {
             startedCameraCSV = false
             let urls = await recognition.finishRecording()
             finished.cameraCSVFiles = urls.map(\.lastPathComponent)
+            trip = finished
+            if hasTrack { store.persist(finished) }
+        }
+        if hasTrack {
+            // The address of A may have arrived meanwhile (geocoding task of `start`).
+            if finished.origin.name == nil { finished.origin.name = trip?.origin.name }
+            // B gets an address only when it has no name (manual trips); the geocoder is given ≤ 4 s.
+            if finished.destination?.name == nil, let coordinate = finished.destination?.coordinate {
+                finished.destination?.name = await TripRecorder.placeName(for: coordinate.clLocation, timeout: 4)
+            }
+            if finished.origin.name == nil, let coordinate = finished.origin.coordinate {
+                finished.origin.name = await TripRecorder.placeName(for: coordinate.clLocation, timeout: 4)
+            }
         }
         trip = nil
         startedAt = nil
-        guard finished.points.count >= 2 else {
+        guard hasTrack else {
             store.delete(finished.id)
             return nil
         }
@@ -185,6 +194,45 @@ final class TripRecorder {
     /// Re-asserts background location while recording (navigation turns it off on arrival / stop).
     func keepBackgroundUpdatesIfNeeded() {
         if isRecording { location.setBackgroundUpdates(true) }
+    }
+
+    /// «Поехали» pressed while an automatically started recording is running: the trip becomes a navigation trip
+    /// (arrival / cancelled guidance end it) and takes the route and destination of the navigator.
+    func adoptNavigation() {
+        guard isRecording, trip != nil else { return }
+        startedWithNavigation = true
+        trip?.startedWithNavigation = true
+        if let destination = navigation.destination {
+            trip?.destination = TripEndpoint(name: navigation.destinationName,
+                                             coordinate: GeoPoint(destination.placemark.coordinate))
+        }
+        captureRoute()
+    }
+
+    /// Applies «Журнал для исследования» / «CSV камеры во время поездки» to a trip that is already being recorded.
+    /// Only starts the log: a running one goes on to the end of the trip, so the trip's file list stays complete.
+    func syncCameraCSV() {
+        guard isRecording, !isFinishing, !startedCameraCSV, !recognition.isRecording,
+              settings.tripRecordCameraCSV || settings.recordExperimentLog else { return }
+        recognition.startRecording()
+        startedCameraCSV = true
+    }
+
+    /// The app is being terminated: writes the trip synchronously on the calling thread (a `Task` would never run —
+    /// the process exits when the notification handler returns). The camera research log cannot be saved here.
+    func flushOnTerminate() {
+        guard var current = trip, current.points.count >= 2 else { return }
+        if isRecording {
+            current.events = debouncer.events
+        }
+        if current.endedAt == nil { current.endedAt = Date() }
+        if current.destination == nil, let last = current.points.last {
+            current.destination = TripEndpoint(coordinate: last.coordinate)
+        }
+        guard let data = try? JSONEncoder().encode(current), let url = try? TripStore.fileURL(for: current.id) else {
+            return
+        }
+        try? data.write(to: url, options: .atomic)
     }
 
     // MARK: - Samples

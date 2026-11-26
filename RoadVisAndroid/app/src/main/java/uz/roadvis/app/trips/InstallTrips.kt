@@ -1,5 +1,6 @@
 package uz.roadvis.app.trips
 
+import uz.roadvis.core.TripStandstillTimer
 import android.app.ActivityManager
 import kotlinx.coroutines.MainScope
 import kotlinx.coroutines.delay
@@ -34,7 +35,8 @@ class TripsController(val app: AppState) {
     private var installed = false
 
     private var movingSince: Long? = null
-    private var stationarySince: Long? = null
+    /** Standing-still / GPS-outage timers of the automatic stop (≤ 3 km/h for 3 min, or 15 min without GPS speed). */
+    private val standstill = TripStandstillTimer()
     /** True when the current recording was started by the driving detector (not «Поехали» / Settings). */
     private var autoStartedTrip = false
     private var wasForeground = true
@@ -42,8 +44,6 @@ class TripsController(val app: AppState) {
     companion object {
         const val AUTO_START_SPEED_KMH = 10.0
         const val AUTO_START_MS = 10_000L
-        const val AUTO_STATIONARY_SPEED_KMH = 3.0
-        const val AUTO_STOP_MS = 180_000L
     }
 
     fun install() {
@@ -64,7 +64,14 @@ class TripsController(val app: AppState) {
     // Drive & trips
 
     private fun onDriveStarted() {
-        if (app.settings.tripAutoRecord && !recorder.isRecording) {
+        if (recorder.isRecording) {
+            // A trip the driving detector started becomes the trip of this navigation (arrival ends it and opens the
+            // report); a manual recording from Settings stays independent.
+            if (autoStartedTrip) {
+                recorder.adoptNavigation()
+                autoStartedTrip = false
+            }
+        } else if (app.settings.tripAutoRecord) {
             startRecording(withNavigation = true)
             autoStartedTrip = false
         }
@@ -93,7 +100,7 @@ class TripsController(val app: AppState) {
      */
     fun stopTripRecording(arrived: Boolean = false, presentReport: Boolean = true) {
         autoStartedTrip = false
-        stationarySince = null
+        standstill.reset()
         scope.launch {
             val trip = recorder.stop(arrived)
             TripRecordingService.stop(app.context)
@@ -113,11 +120,11 @@ class TripsController(val app: AppState) {
         return info.importance <= ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND
     }
 
-    /** Own GPS speed, km/h (0 without a fix from the last 10 s). */
-    private val currentSpeedKmh: Double
+    /** Own GPS speed, km/h; null without a fix from the last 10 s or without a valid speed (GPS outage). */
+    private val currentSpeedKmh: Double?
         get() {
-            val fix = app.location.location ?: return 0.0
-            if (System.currentTimeMillis() - fix.time >= 10_000 || !fix.hasSpeed() || fix.speed < 0) return 0.0
+            val fix = app.location.location ?: return null
+            if (System.currentTimeMillis() - fix.time >= 10_000 || !fix.hasSpeed() || fix.speed < 0) return null
             return fix.speed * 3.6
         }
 
@@ -130,13 +137,13 @@ class TripsController(val app: AppState) {
         }
         if (!app.settings.tripAutoRecord || !foreground) {
             movingSince = null
-            stationarySince = null
+            standstill.reset()
             return
         }
         val speed = currentSpeedKmh
         if (!recorder.isRecording) {
-            stationarySince = null
-            if (recorder.isFinishing || app.mode != AppMode.CAMERA || speed < AUTO_START_SPEED_KMH) {
+            standstill.reset()
+            if (recorder.isFinishing || app.mode != AppMode.CAMERA || speed == null || speed < AUTO_START_SPEED_KMH) {
                 movingSince = null
                 return
             }
@@ -150,19 +157,18 @@ class TripsController(val app: AppState) {
             return
         }
         movingSince = null
-        if (!(autoStartedTrip || recorder.startedWithNavigation) || app.bus.isNavigating || speed > AUTO_STATIONARY_SPEED_KMH) {
-            stationarySince = null
+        if (!(autoStartedTrip || recorder.startedWithNavigation) || app.bus.isNavigating) {
+            standstill.reset()
             return
         }
-        val since = stationarySince ?: now
-        stationarySince = since
-        if (now - since >= AUTO_STOP_MS) stopTripRecording(presentReport = false)
+        // A GPS outage (tunnel) is not "standing": without a valid speed the trip ends only after 15 min.
+        if (standstill.update(now, speed)) stopTripRecording(presentReport = false)
     }
 
     /** A trip the driving detector started ends when the app leaves the screen (unless guidance runs). */
     private fun onBackground() {
         movingSince = null
-        stationarySince = null
+        standstill.reset()
         if (recorder.isRecording && autoStartedTrip && !app.bus.isNavigating) stopTripRecording(presentReport = false)
     }
 }

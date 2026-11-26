@@ -170,6 +170,8 @@ class TripRecorder(private val app: AppState, private val store: TripStore) : Se
             finished.arrived = arrived
             if (finished.destination == null) finished.points.lastOrNull()?.let { finished.destination = TripEndpoint(coordinate = it.coordinate) }
             if (finished.origin.coordinate == null) finished.origin = finished.origin.copy(coordinate = finished.points.firstOrNull()?.coordinate)
+            // The finished state goes to disk before the (up to 8 s) geocoding: the process may be killed meanwhile.
+            if (finished.points.size >= 2) store.persist(finished.copy())
             // B gets an address only when it has no name (manual trips); the geocoder is given ≤ 4 s.
             val dest = finished.destination
             if (dest != null && dest.name == null) dest.coordinate?.let { c ->
@@ -190,6 +192,19 @@ class TripRecorder(private val app: AppState, private val store: TripStore) : Se
         } finally {
             isFinishing = false
         }
+    }
+
+    /**
+     * «Поехали» pressed while an automatically started recording is running: the trip becomes a navigation trip
+     * (arrival / cancelled guidance end it) and takes the route and destination of the navigator.
+     */
+    fun adoptNavigation() {
+        val current = trip
+        if (!isRecording || current == null) return
+        startedWithNavigation = true
+        current.startedWithNavigation = true
+        app.bus.activeRoute?.let { current.destination = TripEndpoint(it.destinationName, it.destination) }
+        captureRoute()
     }
 
     /** Adds an event from another source (camera). Missing position / speed are filled from GPS. */

@@ -9,6 +9,8 @@ import androidx.compose.runtime.setValue
 import org.json.JSONObject
 import uz.roadvis.app.l10n.L
 import uz.roadvis.core.Trip
+import uz.roadvis.core.isEmptyPlaceholder
+import uz.roadvis.core.isStalePlaceholder
 import java.io.File
 import java.util.UUID
 import java.util.concurrent.Executors
@@ -40,9 +42,18 @@ class TripStore(context: Context) {
         io.execute {
             val loaded = mutableListOf<Trip>()
             var errors = 0
+            val now = System.currentTimeMillis()
             directory.listFiles { f -> f.isFile && f.name.endsWith(".json", ignoreCase = true) }?.forEach { f ->
                 try {
-                    loaded += Trip.fromJson(JSONObject(f.readText()))
+                    val trip = Trip.fromJson(JSONObject(f.readText()))
+                    // Placeholder written at the start of a recording that never reached an autosave / stop (the app
+                    // was killed early): not a trip. Its file is removed once it cannot belong to a recording that
+                    // has just started in this launch.
+                    if (trip.isEmptyPlaceholder) {
+                        if (trip.isStalePlaceholder(now)) f.delete()
+                    } else {
+                        loaded += trip
+                    }
                 } catch (_: Exception) {
                     errors++
                 }

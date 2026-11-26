@@ -13,6 +13,9 @@ final class TripStore {
 
     @ObservationIgnored private let writer = TripFileWriter()
     @ObservationIgnored private var loadTask: Task<Void, Never>?
+    /// Tail of the chain of file operations: each write / delete runs after the previous one, so they reach the
+    /// disk in call order and `flush()` can wait for all of them.
+    @ObservationIgnored private var lastWrite: Task<Void, Never>?
 
     init() {}
 
@@ -65,7 +68,9 @@ final class TripStore {
 
     /// Writes the file only (in-progress autosave; the list is not touched).
     func persist(_ trip: Trip) {
-        Task { [writer, weak self] in
+        let previous: Task<Void, Never>? = lastWrite
+        lastWrite = Task { [writer, weak self] in
+            await previous?.value
             do {
                 try await writer.write(trip)
             } catch {
@@ -76,9 +81,16 @@ final class TripStore {
 
     func delete(_ id: UUID) {
         trips.removeAll { $0.id == id }
-        Task { [writer] in
+        let previous: Task<Void, Never>? = lastWrite
+        lastWrite = Task { [writer] in
+            await previous?.value
             await writer.delete(id)
         }
+    }
+
+    /// Returns when every write / delete requested so far has reached the disk.
+    func flush() async {
+        await lastWrite?.value
     }
 
     func delete(at offsets: IndexSet) {
@@ -93,11 +105,22 @@ final class TripStore {
             return ([], 0)
         }
         let decoder = JSONDecoder()
+        let now = Date()
         var trips: [Trip] = []
         var errors = 0
         for url in urls where url.pathExtension.lowercased() == "json" {
             do {
-                trips.append(try decoder.decode(Trip.self, from: Data(contentsOf: url)))
+                let trip: Trip = try decoder.decode(Trip.self, from: Data(contentsOf: url))
+                // Placeholder written at the start of a recording that never reached an autosave / stop (the app was
+                // killed early): not a trip. Its file is removed once it cannot belong to a recording that has just
+                // started in this launch.
+                if trip.isEmptyPlaceholder {
+                    if trip.isStalePlaceholder(now: now) {
+                        try? FileManager.default.removeItem(at: url)
+                    }
+                    continue
+                }
+                trips.append(trip)
             } catch {
                 errors += 1
             }

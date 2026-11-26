@@ -48,6 +48,9 @@ struct TripSettingsSection: View {
                 .disabled(recorder.isFinishing)
             }
             Toggle(L("tripset.cameraCSV"), isOn: $settings.tripRecordCameraCSV)
+                .onChange(of: settings.tripRecordCameraCSV) { _, _ in
+                    recorder.syncCameraCSV()
+                }
             Stepper(value: $settings.tripSpeedToleranceKmh, in: 0...20, step: 1) {
                 valueRow(L("tripset.tolerance"), "+\(Int(settings.tripSpeedToleranceKmh)) \(RVFormat.appKmh)")
             }

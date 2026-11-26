@@ -531,7 +531,7 @@ internal object EnStrings {
         m["settings.fd.title"] = "Distance"
         m["settings.fd.footer"] = "Safe gap: wet ×2, snow ×3, ice ×5 of the dry one. The distance to the vehicle ahead is a ≈ single-camera estimate and does not replace the driver’s attention. Adjust the horizon line to your phone mount: your lane corridor converges on it."
         m["settings.exp.recording"] = "Log recording in progress — files appear after stopping"
-        m["settings.exp.empty"] = "No files yet. Turn on “Research log” and start recording on the camera screen."
+        m["settings.exp.empty"] = "No files yet. Turn on “Research log”: the CSV is recorded together with a trip (Settings → Trips) and appears here when the trip ends."
         m["settings.exp.title"] = "Experiments"
         m["settings.exp.footer"] = "CSV: per-frame detections and the “detections in frames ↔ unique vehicles” summary. Tap to send; swipe left to delete."
         m["settings.nav.voice"] = "Voice guidance"

@@ -82,6 +82,9 @@ private struct SettingsRecognitionSection: View {
             Toggle(L("settings.rec.pedestrians"), isOn: $settings.trackPedestrians)
             Toggle(L("settings.rec.lights"), isOn: $settings.detectTrafficLights)
             Toggle(L("settings.rec.log"), isOn: $settings.recordExperimentLog)
+                .onChange(of: settings.recordExperimentLog) { _, _ in
+                    app.tripRecorder.syncCameraCSV()
+                }
             LabeledContent(L("settings.rec.unique"), value: "\(app.recognition.totalUniqueVehicles)")
             Button(L("counters.reset"), role: .destructive) {
                 confirmReset = true
@@ -607,6 +610,8 @@ private struct HoodCalibrationRow: View {
             } label: {
                 Label(L("settings.fd.calib.button"), systemImage: "ruler")
             }
+            // Not the default style: in a Form row that would make the whole row (labels, hint) trigger calibration.
+            .buttonStyle(.borderless)
             .disabled(cameraDistance == nil)
             Text(resultText ?? (cameraDistance == nil ? L("settings.fd.calib.noLead") : L("settings.fd.calib.hint")))
                 .font(.footnote)

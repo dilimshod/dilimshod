@@ -58,6 +58,9 @@ struct RootView: View {
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.didEnterBackgroundNotification)) { _ in
             app.handleScenePhase(.background)
         }
+        .onReceive(NotificationCenter.default.publisher(for: UIApplication.willTerminateNotification)) { _ in
+            app.handleWillTerminate()
+        }
         .onChange(of: app.settings.showCameraPiP) { _, _ in
             app.updateCameraForMode()
         }

@@ -989,9 +989,11 @@ final class NavigationService {
     }
 
     private func arrive() {
-        state = .arrived
         detachLocationListener()
         location.setBackgroundUpdates(false)
+        // Only after the navigator released background GPS: `onStateChange` lets a still-running manual trip
+        // re-assert it (the stop / cancel paths use the same order).
+        state = .arrived
         rerouteTask?.cancel()
         rerouteTask = nil
         rerouteGeneration &+= 1

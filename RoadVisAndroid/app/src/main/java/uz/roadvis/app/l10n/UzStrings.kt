@@ -531,7 +531,7 @@ internal object UzStrings {
         m["settings.fd.title"] = "Masofa"
         m["settings.fd.footer"] = "Xavfsiz oraliq: ho‘l ×2, qor ×3, muzlama ×5 quruqqa nisbatan. Oldingi mashinagacha masofa — bitta kamera bo‘yicha ≈ taxmin va haydovchi diqqatini almashtirmaydi. Ufq chizig‘ini telefon ushlagichiga moslang: bo‘lagingiz koridori unda tutashadi."
         m["settings.exp.recording"] = "Jurnal yozilmoqda — fayllar to‘xtatilgandan keyin paydo bo‘ladi"
-        m["settings.exp.empty"] = "Hozircha fayllar yo‘q. «Tadqiqot jurnali»ni yoqing va kamera ekranida yozuvni boshlang."
+        m["settings.exp.empty"] = "Hozircha fayllar yo‘q. «Tadqiqot jurnali»ni yoqing: CSV safar bilan birga yoziladi (Sozlamalar → Safarlar) va safar tugagach shu yerda paydo bo‘ladi."
         m["settings.exp.title"] = "Tajribalar"
         m["settings.exp.footer"] = "CSV: kadrlardagi aniqlashlar va «kadrlardagi aniqlashlar ↔ noyob transport» xulosasi. Yuborish uchun bosing; o‘chirish uchun chapga suring."
         m["settings.nav.voice"] = "Ovozli ko‘rsatmalar"
