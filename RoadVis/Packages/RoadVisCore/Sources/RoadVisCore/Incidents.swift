@@ -1,8 +1,13 @@
 import Foundation
 
 /// Kind of a user-reported road event (stored locally on the phone; there is no shared incident feed).
+///
+/// New cases are only ever appended, so files written by older versions (which contain a subset of the raw values)
+/// keep decoding.
 public enum RoadIncidentKind: String, Codable, Hashable, Sendable, CaseIterable {
     case accident, roadWork, jam, police, pothole, hazard, closure
+    /// The user's own mark of a (speed) camera. Cameras are fixed, so the mark does not expire.
+    case speedCamera
 
     /// Russian display name.
     public var displayName: String {
@@ -14,6 +19,7 @@ public enum RoadIncidentKind: String, Codable, Hashable, Sendable, CaseIterable 
         case .pothole: return "Яма"
         case .hazard: return "Опасность"
         case .closure: return "Перекрытие"
+        case .speedCamera: return "Камера"
         }
     }
 
@@ -27,7 +33,19 @@ public enum RoadIncidentKind: String, Codable, Hashable, Sendable, CaseIterable 
         case .pothole: return "exclamationmark.circle.fill"
         case .hazard: return "exclamationmark.triangle.fill"
         case .closure: return "nosign"
+        case .speedCamera: return "camera.fill"
         }
+    }
+
+    /// True for marks of fixed objects (cameras) that are kept until the user deletes them; other reports expire after
+    /// the incident lifetime set in Settings.
+    public var isPermanent: Bool {
+        self == .speedCamera
+    }
+
+    /// Distance ahead on the route at which the navigator announces the mark, metres (cameras like OSM cameras).
+    public var alertDistance: Double {
+        self == .speedCamera ? RouteFeatureKind.speedCamera.alertDistance : 700
     }
 }
 
@@ -66,12 +84,13 @@ public struct IncidentOnRoute: Identifiable, Hashable, Sendable {
 }
 
 public enum IncidentFilter {
-    /// Incidents younger than `lifetime` seconds at `now`, newest first. Incidents dated slightly in the
-    /// future (clock changes) are kept; `lifetime <= 0` yields an empty list.
+    /// Incidents younger than `lifetime` seconds at `now`, plus permanent marks (cameras, `RoadIncidentKind.isPermanent`)
+    /// of any age, newest first. Incidents dated slightly in the future (clock changes) are kept; `lifetime <= 0` (or
+    /// not finite) expires every non-permanent incident.
     public static func active(_ incidents: [RoadIncident], now: Date, lifetime: TimeInterval) -> [RoadIncident] {
-        guard lifetime > 0, lifetime.isFinite else { return [] }
+        let validLifetime = lifetime > 0 && lifetime.isFinite
         return incidents
-            .filter { now.timeIntervalSince($0.date) < lifetime }
+            .filter { $0.kind.isPermanent || (validLifetime && now.timeIntervalSince($0.date) < lifetime) }
             .sorted { $0.date > $1.date }
     }
 

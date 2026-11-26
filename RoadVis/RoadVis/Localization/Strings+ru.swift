@@ -6,6 +6,10 @@ enum RuStrings {
         // MARK: Splash
         "splash.tagline": "Помощник начинающего водителя",
 
+        // MARK: Voice mute
+        "voice.mute": "Выключить голосовые подсказки",
+        "voice.unmute": "Включить голосовые подсказки",
+
         // MARK: Common
         "common.done": "Готово",
         "common.cancel": "Отмена",

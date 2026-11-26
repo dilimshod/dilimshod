@@ -18,6 +18,9 @@ final class IncidentTests: XCTestCase {
         XCTAssertEqual(RoadIncidentKind.pothole.displayName, "Яма")
         XCTAssertEqual(RoadIncidentKind.hazard.displayName, "Опасность")
         XCTAssertEqual(RoadIncidentKind.closure.displayName, "Перекрытие")
+        XCTAssertEqual(RoadIncidentKind.speedCamera.displayName, "Камера")
+        XCTAssertEqual(RoadIncidentKind.speedCamera.symbolName, "camera.fill")
+        XCTAssertEqual(RoadIncidentKind.speedCamera.rawValue, "speedCamera")
         let symbols = RoadIncidentKind.allCases.map(\.symbolName)
         XCTAssertEqual(Set(symbols).count, symbols.count, "each kind has its own symbol")
         XCTAssertFalse(symbols.contains(""))
@@ -43,6 +46,48 @@ final class IncidentTests: XCTestCase {
         XCTAssertEqual(active.map(\.id), [future.id, fresh.id], "newest first; exactly lifetime old = expired")
         XCTAssertEqual(IncidentFilter.active([fresh], now: now, lifetime: 0), [])
         XCTAssertEqual(IncidentFilter.active([], now: now, lifetime: 3600), [])
+    }
+
+    func testCameraMarksArePermanent() {
+        XCTAssertEqual(RoadIncidentKind.allCases.filter(\.isPermanent), [.speedCamera])
+        XCTAssertEqual(RoadIncidentKind.speedCamera.alertDistance, 500)
+        XCTAssertEqual(RoadIncidentKind.speedCamera.alertDistance, RouteFeatureKind.speedCamera.alertDistance)
+        XCTAssertEqual(RoadIncidentKind.jam.alertDistance, 700)
+
+        let oldCamera = RoadIncident(kind: .speedCamera, coordinate: GeoPoint(41.31, 69.28), date: now.addingTimeInterval(-90 * 86_400))
+        let freshCamera = RoadIncident(kind: .speedCamera, coordinate: GeoPoint(41.32, 69.28), date: now.addingTimeInterval(-60))
+        let oldJam = RoadIncident(kind: .jam, coordinate: GeoPoint(41.31, 69.28), date: now.addingTimeInterval(-3 * 3600))
+        let freshJam = RoadIncident(kind: .jam, coordinate: GeoPoint(41.31, 69.29), date: now.addingTimeInterval(-600))
+        let all = [oldCamera, oldJam, freshJam, freshCamera]
+        XCTAssertEqual(IncidentFilter.active(all, now: now, lifetime: 2 * 3600).map(\.id),
+                       [freshCamera.id, freshJam.id, oldCamera.id], "cameras never expire, other kinds keep the lifetime")
+        XCTAssertEqual(IncidentFilter.active(all, now: now, lifetime: 0).map(\.id), [freshCamera.id, oldCamera.id])
+        XCTAssertEqual(IncidentFilter.active(all, now: now, lifetime: .nan).map(\.id), [freshCamera.id, oldCamera.id])
+    }
+
+    func testDecodesFilesOfOlderVersions() throws {
+        // incidents.json as written before the camera kind existed.
+        let json = """
+        [{"id":"6F9619FF-8B86-D011-B42D-00C04FC964FF","kind":"police","coordinate":{"latitude":41.31,"longitude":69.28},        "date":800000000,"note":"Пост"},        {"id":"7F9619FF-8B86-D011-B42D-00C04FC964FF","kind":"roadWork","coordinate":{"latitude":41.3,"longitude":69.2},        "date":800000100}]
+        """
+        let decoded = try JSONDecoder().decode([RoadIncident].self, from: Data(json.utf8))
+        XCTAssertEqual(decoded.map(\.kind), [.police, .roadWork])
+        XCTAssertEqual(decoded[0].note, "Пост")
+        XCTAssertNil(decoded[1].note)
+
+        let camera = RoadIncident(kind: .speedCamera, coordinate: GeoPoint(41.31, 69.28), date: now)
+        let data = try JSONEncoder().encode([camera])
+        XCTAssertTrue(String(decoding: data, as: UTF8.self).contains("\"speedCamera\""))
+        XCTAssertEqual(try JSONDecoder().decode([RoadIncident].self, from: data), [camera])
+    }
+
+    func testWazeLink() {
+        XCTAssertEqual(ExternalNavigation.wazeURL(destination: GeoPoint(41.311081, 69.240562))?.absoluteString,
+                       "https://waze.com/ul?ll=41.311081,69.240562&navigate=yes")
+        XCTAssertEqual(ExternalNavigation.wazeURL(destination: GeoPoint(-33.8688, -151.2093))?.absoluteString,
+                       "https://waze.com/ul?ll=-33.868800,-151.209300&navigate=yes")
+        XCTAssertNil(ExternalNavigation.wazeURL(destination: GeoPoint(.nan, 69)))
+        XCTAssertNil(ExternalNavigation.wazeURL(destination: GeoPoint(95, 69)))
     }
 
     func testAlongRoute() {

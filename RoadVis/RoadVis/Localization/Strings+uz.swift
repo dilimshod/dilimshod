@@ -7,6 +7,10 @@ enum UzStrings {
         // MARK: Splash
         "splash.tagline": "Yangi haydovchilar uchun yo‘l yordamchisi",
 
+        // MARK: Voice mute
+        "voice.mute": "Ovozli yordamchini o‘chirish",
+        "voice.unmute": "Ovozli yordamchini yoqish",
+
         // MARK: Common
         "common.done": "Tayyor",
         "common.cancel": "Bekor qilish",

@@ -51,6 +51,12 @@ final class AppSettings {
     var speedWarningTolerance: Double { didSet { defaults.set(speedWarningTolerance, forKey: Keys.speedWarningTolerance) } }
     /// Lifetime of user-reported incidents, minutes.
     var incidentLifetimeMinutes: Double { didSet { defaults.set(incidentLifetimeMinutes, forKey: Keys.incidentLifetimeMinutes) } }
+    /// «Open route in Waze» button in the route options and the trip panel.
+    var showWazeButton: Bool { didSet { defaults.set(showWazeButton, forKey: Keys.showWazeButton) } }
+    /// Speed cameras from OpenStreetMap on the map, in the timeline and in voice alerts.
+    var osmCamerasEnabled: Bool { didSet { defaults.set(osmCamerasEnabled, forKey: Keys.osmCamerasEnabled) } }
+    /// The user's own marks of cameras and events on the map, in the timeline and in voice alerts.
+    var ownMarksEnabled: Bool { didSet { defaults.set(ownMarksEnabled, forKey: Keys.ownMarksEnabled) } }
     /// Routing engine: "auto" (Apple Maps, falls back to Valhalla/OSM on error), "apple" or "valhalla".
     var routingEngine: String { didSet { defaults.set(routingEngine, forKey: Keys.routingEngine) } }
     /// Valhalla server base URL (public FOSSGIS instance by default — light use only).
@@ -117,6 +123,9 @@ final class AppSettings {
         speedWarningEnabled = bool(Keys.speedWarningEnabled, true)
         speedWarningTolerance = double(Keys.speedWarningTolerance, 5)
         incidentLifetimeMinutes = double(Keys.incidentLifetimeMinutes, 120)
+        showWazeButton = bool(Keys.showWazeButton, true)
+        osmCamerasEnabled = bool(Keys.osmCamerasEnabled, true)
+        ownMarksEnabled = bool(Keys.ownMarksEnabled, true)
         routingEngine = string(Keys.routingEngine, "auto")
         valhallaEndpoint = string(Keys.valhallaEndpoint, Valhalla.defaultEndpoint)
         routeAttributesEnabled = bool(Keys.routeAttributesEnabled, true)
@@ -187,6 +196,9 @@ final class AppSettings {
         static let speedWarningEnabled = "rv.speedWarningEnabled"
         static let speedWarningTolerance = "rv.speedWarningTolerance"
         static let incidentLifetimeMinutes = "rv.incidentLifetimeMinutes"
+        static let showWazeButton = "rv.showWazeButton"
+        static let osmCamerasEnabled = "rv.osmCamerasEnabled"
+        static let ownMarksEnabled = "rv.ownMarksEnabled"
         static let routingEngine = "rv.routingEngine"
         static let valhallaEndpoint = "rv.valhallaEndpoint"
         static let routeAttributesEnabled = "rv.routeAttributesEnabled"

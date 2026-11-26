@@ -310,8 +310,10 @@ extension VoicePhrase {
     }
 
     /// "Oldinda tirbandlik, 600 metrdan keyin".
+    /// The user's own camera mark reuses the OSM camera clip ("Speed camera ahead").
     public static func incident(_ kind: RoadIncidentKind, distance: Double?, text: String? = nil) -> VoicePhrase {
-        var elements: [Element] = [.clip("incident_" + VoiceClipCatalog.snakeCase(kind.rawValue))]
+        let clip = kind == .speedCamera ? "speed_camera_ahead" : "incident_" + VoiceClipCatalog.snakeCase(kind.rawValue)
+        var elements: [Element] = [.clip(clip)]
         if let distance { elements += [.pause, .distance(distance)] }
         return VoicePhrase(elements, text: text)
     }

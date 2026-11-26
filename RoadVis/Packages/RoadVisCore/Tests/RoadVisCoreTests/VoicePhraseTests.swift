@@ -112,6 +112,8 @@ final class VoicePhraseTests: XCTestCase {
     func testIncidentAndSample() {
         XCTAssertEqual(VoiceComposer.clipIDs(for: .incident(.jam, distance: 580), language: .ru),
                        ["incident_jam", "through", "n_600", "meters"])
+        XCTAssertEqual(VoiceComposer.clipIDs(for: .incident(.speedCamera, distance: nil), language: .uz),
+                       ["speed_camera_ahead"], "own camera marks sound like OSM cameras")
         XCTAssertEqual(VoiceComposer.composedText(for: .incident(.jam, distance: 580), language: .uz),
                        "Oldinda tirbandlik, olti yuz metrdan keyin")
         XCTAssertEqual(VoiceComposer.composedText(for: .sample(), language: .en),

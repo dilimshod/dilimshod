@@ -7,6 +7,10 @@ enum EnStrings {
         // MARK: Splash
         "splash.tagline": "Road assistant for new drivers",
 
+        // MARK: Voice mute
+        "voice.mute": "Mute voice prompts",
+        "voice.unmute": "Unmute voice prompts",
+
         // MARK: Common
         "common.done": "Done",
         "common.cancel": "Cancel",

@@ -179,7 +179,8 @@ final class NavigationService {
 
     static let minimumRerouteInterval: TimeInterval = 15
     static let incidentRefreshInterval: TimeInterval = 30
-    static let incidentAlertDistance: Double = 700
+    /// An own camera mark this close (along the route) to an OSM camera is the same camera: announced once.
+    static let cameraMergeDistance: Double = 100
     static let featureLookahead: Double = 2_000
     static let speedAveragingWindow: TimeInterval = 20
     /// Minimum time span of speed samples before the average is used, seconds.
@@ -662,7 +663,7 @@ final class NavigationService {
             if !speedLimitSegments.isEmpty { speedLimitSegments = [] }
             return
         }
-        let events = RouteTimeline.build(route: option.route, edges: routeEdges, features: roadInfo.routeFeatures,
+        let events = RouteTimeline.build(route: option.route, edges: routeEdges, features: visibleRouteFeatures,
                                          incidents: incidentsOnRoute, text: .app)
         if events != timeline { timeline = events }
         let segments = RouteTimeline.speedLimitSegments(edges: routeEdges, totalDistance: contextCumulative.last)
@@ -691,10 +692,30 @@ final class NavigationService {
         signals.setRouteSignals(features)
     }
 
+    /// OSM route features the user wants to see: speed cameras are dropped when «Cameras from OpenStreetMap» is off.
+    /// Everything shown or announced from OSM features (timeline, map markers, `upcomingFeatures` → voice alerts and
+    /// the driver coach) goes through this list; traffic signals still use the full `roadInfo.routeFeatures`.
+    private var visibleRouteFeatures: [RouteFeature] {
+        let features = roadInfo.routeFeatures
+        return settings.osmCamerasEnabled ? features : features.filter { $0.kind != .speedCamera }
+    }
+
+    /// Re-applies the camera / event source settings (OSM cameras, own marks) to the timeline, upcoming features and
+    /// incidents on the route. Call after one of these toggles changed.
+    func applyDataSourceSettings() {
+        refreshIncidents()
+        refreshUpcomingFeatures(distanceAlong: distanceAlong)
+        rebuildTimeline()
+    }
+
     /// Recomputes `incidentsOnRoute` for the selected / active route (also call after reporting an incident).
+    /// Empty when the user turned off «My marks of cameras and events».
     func refreshIncidents() {
-        guard state != .idle, let option = selectedRouteOption else {
-            incidentsOnRoute = []
+        guard state != .idle, settings.ownMarksEnabled, let option = selectedRouteOption else {
+            if !incidentsOnRoute.isEmpty {
+                incidentsOnRoute = []
+                rebuildTimeline()
+            }
             return
         }
         let polyline = option.route.polyline
@@ -970,7 +991,7 @@ final class NavigationService {
     }
 
     private func refreshUpcomingFeatures(distanceAlong along: Double) {
-        let ahead = roadInfo.routeFeatures.filter {
+        let ahead = visibleRouteFeatures.filter {
             let distance = $0.distanceAlongRoute - along
             return distance >= -5 && distance <= Self.featureLookahead
         }
@@ -1024,15 +1045,25 @@ final class NavigationService {
         }
     }
 
-    /// One-time voice alert for a user-reported incident within 700 m ahead.
+    /// One-time voice alert for a user-reported incident ahead (700 m; own camera marks 500 m, announced like OSM
+    /// cameras — and skipped when a visible OSM camera is within `cameraMergeDistance` of the mark).
     private func announceIncident(_ current: RouteProgress) {
         guard settings.voiceGuidanceEnabled else { return }
         for item in incidentsOnRoute where !announcedIncidentIDs.contains(item.id) {
+            let kind = item.incident.kind
             let ahead = item.distanceAlongRoute - current.distanceAlong
-            guard ahead >= 0, ahead <= Self.incidentAlertDistance else { continue }
+            guard ahead >= 0, ahead <= kind.alertDistance else { continue }
             announcedIncidentIDs.insert(item.id)
-            let text = L("voice.incidentAhead", Self.spokenName(item.incident.kind), Self.spokenDistance(ahead))
-            speech.speak(VoicePhrase.incident(item.incident.kind, distance: ahead, text: text), priority: .normal)
+            if kind == .speedCamera {
+                let duplicatesOSMCamera = upcomingFeatures.contains {
+                    $0.kind == .speedCamera && abs($0.distanceAlongRoute - item.distanceAlongRoute) <= Self.cameraMergeDistance
+                }
+                if duplicatesOSMCamera { continue }
+                speech.speak(VoicePhrase.hazard(.speedCamera, text: L("voice.hazard.speedCamera")), priority: .normal)
+                break
+            }
+            let text = L("voice.incidentAhead", Self.spokenName(kind), Self.spokenDistance(ahead))
+            speech.speak(VoicePhrase.incident(kind, distance: ahead, text: text), priority: .normal)
             break
         }
     }

@@ -25,6 +25,11 @@ public enum RouteTimelineKind: Hashable, Sendable {
         }
     }
 
+    /// A speed camera: from OpenStreetMap or the user's own camera mark.
+    public var isSpeedCamera: Bool {
+        self == .feature(.speedCamera) || self == .incident(.speedCamera)
+    }
+
     /// Short machine-friendly name ("maneuver", "speedLimit" …) used for filtering and stable ids.
     public var category: String {
         switch self {
