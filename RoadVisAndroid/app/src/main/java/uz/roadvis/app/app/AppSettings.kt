@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.SharedPreferences
 import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.mutableStateOf
+import uz.roadvis.core.SoundMode
 import kotlin.properties.ReadWriteProperty
 import kotlin.reflect.KProperty
 
@@ -65,8 +66,28 @@ class AppSettings(context: Context) {
     var corridorHorizon by Pref("rv.corridorHorizon", 0.42)
 
     // Driver assist sounds
-    var alertSoundsEnabled by Pref("rv.alertSounds", true)
-    var voiceMuted by Pref("rv.voiceMuted", false)
+    private fun legacyBool(key: String): Boolean? = if (prefs.contains(key)) prefs.getBoolean(key, false) else null
+    private var soundModeRaw by Pref(SoundMode.STORAGE_KEY, SoundMode.resolve(null,
+        legacyBool(SoundMode.LEGACY_VOICE_MUTED_KEY), legacyBool(SoundMode.LEGACY_ALERT_SOUNDS_KEY)).raw)
+    /**
+     * The one persisted sound mode ("rv.soundMode": all / sounds only / voice only / silent), migrated from the
+     * older "rv.voiceMuted" + "rv.alertSounds" flags on first read (both are still written on every change).
+     */
+    var soundMode: SoundMode
+        get() = SoundMode.resolve(soundModeRaw, null, null)
+        set(value) {
+            soundModeRaw = value.raw
+            prefs.edit().putBoolean(SoundMode.LEGACY_VOICE_MUTED_KEY, !value.voiceEnabled)
+                .putBoolean(SoundMode.LEGACY_ALERT_SOUNDS_KEY, value.tonesEnabled).apply()
+        }
+    /** Alert tones: derived from [soundMode] (the Settings toggle keeps the voice half of the mode). */
+    var alertSoundsEnabled: Boolean
+        get() = soundMode.tonesEnabled
+        set(value) { soundMode = soundMode.withTones(value) }
+    /** Voice prompts off: derived from [soundMode] (the Settings toggle keeps the tone half of the mode). */
+    var voiceMuted: Boolean
+        get() = !soundMode.voiceEnabled
+        set(value) { soundMode = soundMode.withVoice(!value) }
 
     // Navigation
     var voiceGuidanceEnabled by Pref("rv.voiceGuidanceEnabled", true)

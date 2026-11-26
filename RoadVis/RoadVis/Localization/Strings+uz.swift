@@ -12,6 +12,11 @@ enum UzStrings {
         "assist.alertSounds": "Ovozli signallar (ogohlantiruvchi tovush)",
         "voice.mute": "Ovozli yordamchini o‘chirish",
         "voice.unmute": "Ovozli yordamchini yoqish",
+        "sound.mode": "Ovoz rejimi",
+        "sound.mode.all": "Barcha tovushlar va ovoz",
+        "sound.mode.soundsOnly": "Faqat tovushlar",
+        "sound.mode.voiceOnly": "Faqat ovoz",
+        "sound.mode.silent": "Ovozsiz",
 
         // MARK: Bonnet calibration
         "settings.fd.hood": "Kamera — old bamper masofasi (kapot)",

@@ -12,6 +12,11 @@ enum EnStrings {
         "assist.alertSounds": "Alert sounds (warning tone)",
         "voice.mute": "Mute voice prompts",
         "voice.unmute": "Unmute voice prompts",
+        "sound.mode": "Sound mode",
+        "sound.mode.all": "All sounds and voice",
+        "sound.mode.soundsOnly": "Sounds only",
+        "sound.mode.voiceOnly": "Voice only",
+        "sound.mode.silent": "Silent",
 
         // MARK: Bonnet calibration
         "settings.fd.hood": "Camera to front bumper (bonnet)",

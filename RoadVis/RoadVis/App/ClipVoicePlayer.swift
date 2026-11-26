@@ -129,15 +129,18 @@ final class ClipVoicePlayer {
 
     /// Plays `urls` back to back without gaps. `interrupt` stops whatever is playing first; otherwise the clips are
     /// appended to the current queue (after a short phrase gap). A clip that cannot be decoded drops the whole phrase.
-    func play(_ urls: [URL], interrupt: Bool) {
-        guard !urls.isEmpty else { return }
+    /// Returns false when nothing was scheduled (no clips, undecodable clip, engine start failed) so the caller can
+    /// fall back to the system voice; `onFinish` is not called for a phrase that never started.
+    @discardableResult
+    func play(_ urls: [URL], interrupt: Bool) -> Bool {
+        guard !urls.isEmpty else { return false }
         if interrupt { stop() }
         var buffers: [AVAudioPCMBuffer] = []
         buffers.reserveCapacity(urls.count + 1)
         for url in urls {
             guard let buffer = buffer(for: url) else {
                 if !isPlaying { finishNow() }
-                return
+                return false
             }
             buffers.append(buffer)
         }
@@ -146,7 +149,7 @@ final class ClipVoicePlayer {
                 try engine.start()
             } catch {
                 if !isPlaying { finishNow() }
-                return
+                return false
             }
         }
         if pendingBuffers > 0, let gap = Self.silence(seconds: Self.phraseGap) {
@@ -160,6 +163,7 @@ final class ClipVoicePlayer {
         }
         isPlaying = true
         if !playerNode.isPlaying { playerNode.play() }
+        return true
     }
 
     /// Stops immediately and drops the queue.

@@ -9,10 +9,11 @@ import AudioToolbox
 ///
 /// Rules
 /// - Moving + `.danger` with a time to collision below `policy.collisionWarningSeconds` (held ≥ 0.2 s) →
-///   forward-collision warning: error haptic, short system alert tone, voice "Внимание! Опасное сближение"
-///   (high priority, at most every 5 s).
+///   forward-collision warning: error haptic, collision alert tone, voice "Внимание! Опасное сближение"
+///   (critical priority — interrupts everything, at most every 5 s).
 /// - Moving + `.danger` without such a TTC (simply too close, held ≥ 1 s) → light haptic and voice
-///   "Держите дистанцию" (normal priority, at most every 12 s).
+///   "Держите дистанцию" (normal priority, at most every 12 s); in the "sounds only" mode a short tone instead.
+/// Tones follow the sound mode (`AlertToneKind.shouldPlay(in:)`); haptics are independent of it.
 /// - Standing: never a sound or voice — only one soft haptic when the gap drops below the stopped gap
 ///   (re-armed after the gap opens again or another vehicle becomes the lead).
 ///
@@ -21,6 +22,9 @@ import AudioToolbox
 final class DistanceWarningController {
     /// Voice output (set by the pipeline from `AppState`); nil → haptics and tone only.
     weak var speech: SpeechService?
+    /// Plays the alert tones through the app's playback session (set by the pipeline; stays set when `DriverCoach`
+    /// takes over the voice and `speech` is nil). nil → system-sound fallback for the collision tone.
+    weak var tones: SpeechService?
 
     static var collisionPhrase: VoicePhrase { .fixed("collision_alert", text: L("voice.collision")) }
     static var keepDistancePhrase: VoicePhrase { .fixed("keep_distance", text: L("voice.keepDistance")) }
@@ -32,7 +36,7 @@ final class DistanceWarningController {
     static let collisionPersistence: TimeInterval = 0.2
     /// How long "too close" must hold before reminding, seconds.
     static let tooClosePersistence: TimeInterval = 1.0
-    /// Standard short system alert tone.
+    /// Standard short system alert tone — fallback only, when the synthesized tone cannot be played.
     static let alertSoundID: UInt32 = 1005
 
     private var lastCollisionAlert: Date?
@@ -48,6 +52,7 @@ final class DistanceWarningController {
 
     init(speech: SpeechService? = nil) {
         self.speech = speech
+        self.tones = speech
     }
 
     /// Moving, dangerously close and closing faster than the collision-warning threshold.
@@ -104,7 +109,7 @@ final class DistanceWarningController {
             lastKeepDistanceAlert = now   // no "keep distance" right after the collision warning
             notificationFeedback.notificationOccurred(.error)
             playAlertTone()
-            speech?.speak(Self.collisionPhrase, priority: .high)
+            speech?.speak(Self.collisionPhrase, priority: .critical)
         } else if Self.isTooClose(assessment, policy: policy) {
             collisionSince = nil
             let since = tooCloseSince ?? now
@@ -113,7 +118,8 @@ final class DistanceWarningController {
             if let last = lastKeepDistanceAlert, now.timeIntervalSince(last) < Self.keepDistanceRepeatInterval { return }
             lastKeepDistanceAlert = now
             lightImpact.impactOccurred()
-            speech?.speak(Self.keepDistancePhrase, priority: .normal)
+            tones?.playAlertTone(.attention)
+            speech?.speak(Self.keepDistancePhrase, priority: .normal, maxAge: 3)
         } else {
             collisionSince = nil
             tooCloseSince = nil
@@ -129,8 +135,11 @@ final class DistanceWarningController {
         stoppedEpisodeLeadID = nil
     }
 
+    /// Collision tone through the app's playback session (`SpeechService.playAlertTone`: audible with the silent
+    /// switch on, ducks music like the voice); the system sound is only the fallback.
     private func playAlertTone() {
-        guard DriverAssistSettings.shared.alertSoundsEnabled else { return }
+        guard AlertToneKind.collision.shouldPlay(in: SoundModeStore.shared.mode) else { return }
+        if tones?.playAlertTone(.collision) == true { return }
         #if canImport(AudioToolbox)
         AudioServicesPlaySystemSound(SystemSoundID(Self.alertSoundID))
         #endif

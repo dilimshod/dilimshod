@@ -23,7 +23,19 @@ import androidx.compose.material.icons.filled.DirectionsWalk
 import androidx.compose.material.icons.filled.Map
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Notifications
+import androidx.compose.material.icons.filled.RecordVoiceOver
+import androidx.compose.material.icons.automirrored.filled.VolumeOff
+import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.VolumeOff
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.graphics.vector.ImageVector
+import uz.roadvis.core.SoundMode
 import androidx.compose.material.icons.filled.VolumeUp
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material.icons.filled.PauseCircle
@@ -204,13 +216,49 @@ fun StatusDotButton(c: RecognitionController, onClick: () -> Unit) {
     }
 }
 
-/** Mute / unmute all voice prompts (navigation and coach) — same state as Settings → voice prompts. */
+/** Icon of a sound mode (speaker-button and its menu). */
+fun soundModeIcon(mode: SoundMode): ImageVector = when (mode) {
+    SoundMode.ALL -> Icons.AutoMirrored.Filled.VolumeUp
+    SoundMode.SOUNDS_ONLY -> Icons.Filled.Notifications
+    SoundMode.VOICE_ONLY -> Icons.Filled.RecordVoiceOver
+    SoundMode.SILENT -> Icons.AutoMirrored.Filled.VolumeOff
+}
+
+/** Menu with the four sound modes (title, icon per mode, check mark on the current one). */
+@Composable
+fun SoundModeMenu(app: AppState, expanded: Boolean, onDismiss: () -> Unit) {
+    val current = app.settings.soundMode
+    DropdownMenu(expanded = expanded, onDismissRequest = onDismiss) {
+        Text(L("sound.mode"), fontSize = 12.sp, fontWeight = FontWeight.SemiBold,
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp).alpha(0.7f))
+        for (mode in SoundMode.entries) {
+            DropdownMenuItem(
+                text = { Text(L(mode.titleKey)) },
+                leadingIcon = { Icon(soundModeIcon(mode), contentDescription = null) },
+                trailingIcon = { if (mode == current) Icon(Icons.Filled.Check, contentDescription = null) },
+                onClick = {
+                    app.speech.soundMode = mode
+                    onDismiss()
+                },
+            )
+        }
+    }
+}
+
+/**
+ * Speaker button: opens the sound-mode menu (all / sounds only / voice only / silent) — same state as
+ * Settings → voice prompts + alert sounds.
+ */
 @Composable
 fun VoiceMuteButton(app: AppState) {
-    val muted = app.settings.voiceMuted
-    GlassIconButton(if (muted) Icons.Filled.VolumeOff else Icons.Filled.VolumeUp, if (muted) L("voice.unmute") else L("voice.mute"),
-        tint = if (muted) Color(0xFFFF9500) else Color.White) {
-        app.speech.isMuted = !muted
+    val mode = app.settings.soundMode
+    var expanded by remember { mutableStateOf(false) }
+    Box {
+        GlassIconButton(soundModeIcon(mode), L("sound.mode") + ": " + L(mode.titleKey),
+            tint = if (mode == SoundMode.ALL) Color.White else Color(0xFFFF9500)) {
+            expanded = true
+        }
+        SoundModeMenu(app, expanded) { expanded = false }
     }
 }
 

@@ -2,11 +2,8 @@ import AVFoundation
 import Foundation
 import Observation
 
-enum SpeechPriority: Int, Comparable {
-    case low = 0, normal, high
-
-    static func < (lhs: SpeechPriority, rhs: SpeechPriority) -> Bool { lhs.rawValue < rhs.rawValue }
-}
+// `SpeechPriority` (low / normal / high / critical), `SpeechAdmission` and `PendingSpeechQueue` live in the core
+// (SoundMode.swift) together with `SoundMode` and `AlertToneKind`.
 
 /// How the current language is voiced (shown in Settings → Language).
 enum SpeechVoiceKind: Equatable {
@@ -40,17 +37,29 @@ enum SpeechVoiceKind: Equatable {
 /// `tools/generate_voice_clips.py`), `speak(_ phrase: VoicePhrase, …)` plays the phrase from clips; phrases that need
 /// a missing clip (or street names) are spoken by the system voice as before.
 ///
-/// The audio session ducks other audio only while speaking and is deactivated after the last utterance / clip.
+/// The audio session ducks other audio only while speaking and is deactivated after the last utterance / clip / tone.
+///
+/// Sound mode: `SoundModeStore.shared.mode` ("rv.soundMode": all / sounds only / voice only / silent) is the one
+/// source of truth. `isMuted` is derived from it (voice off), alert tones (`playAlertTone`) follow its tone flag.
+///
+/// Queueing: `.critical` (safety) interrupts everything, `.high` (navigation) interrupts everything except a
+/// `.critical` utterance, `.normal` waits in a small expiring queue (`maxAge`), `.low` is dropped while speaking.
 @Observable
 @MainActor
 final class SpeechService: NSObject {
     private(set) var isSpeaking = false
-    /// Global mute for all speech output (voice prompts and the driver coach). Persisted; toggled by the 🔊 button.
-    var isMuted = UserDefaults.standard.bool(forKey: "rv.voiceMuted") {
-        didSet {
-            UserDefaults.standard.set(isMuted, forKey: "rv.voiceMuted")
-            if isMuted { stop() }
-        }
+    /// Sound mode chosen with the 🔊 button menu (persisted by `SoundModeStore`, key "rv.soundMode"). Switching to a
+    /// mode without voice stops the current speech; a mode without tones stops the current tone (see `soundModeChanged`).
+    var soundMode: SoundMode {
+        get { SoundModeStore.shared.mode }
+        set { SoundModeStore.shared.mode = newValue }
+    }
+
+    /// Global mute for all speech output (voice prompts and the driver coach): true in the "sounds only" and "silent"
+    /// modes. Derived from `soundMode`; setting it keeps the tone half of the mode (Settings → voice prompts toggle).
+    var isMuted: Bool {
+        get { !SoundModeStore.shared.mode.voiceEnabled }
+        set { SoundModeStore.shared.mode = SoundModeStore.shared.mode.withVoice(!newValue) }
     }
 
     /// Language of the spoken prompts. Mirrors the app language: reading it returns
@@ -65,10 +74,28 @@ final class SpeechService: NSObject {
     @ObservationIgnored private var voiceCache: [AppLanguage: VoiceChoice] = [:]
     @ObservationIgnored private var cachedRussianVoice: AVSpeechSynthesisVoice?
     @ObservationIgnored private let clips = ClipVoicePlayer()
-    /// Clip phrases waiting for the system voice to finish (normal priority).
-    @ObservationIgnored private var deferredClips: [[URL]] = []
-    /// System-voice texts waiting for the clip queue to finish (normal priority).
-    @ObservationIgnored private var deferredTexts: [String] = []
+    /// Utterances waiting for the current one (bounded, each with a deadline; see `PendingSpeechQueue`).
+    @ObservationIgnored private var pending = PendingSpeechQueue<PendingUtterance>(capacity: 3)
+    /// True while `interruptAll()` stops the engines: the session is kept active for the utterance that follows.
+    @ObservationIgnored private var isInterrupting = false
+    /// Synthesized alert tones (created on first use) and the one that is playing.
+    @ObservationIgnored private var tonePlayers: [AlertToneKind: AVAudioPlayer] = [:]
+    @ObservationIgnored private var activeTone: AVAudioPlayer?
+
+    /// Default time an utterance may wait before it is no longer worth saying, seconds (the `maxAge` default of
+    /// both `speak` overloads; at most 3 utterances wait, the oldest is dropped).
+    nonisolated static let defaultMaxAge: TimeInterval = 8
+
+    private enum PendingContent {
+        /// Natural-voice clips, with the phrase text for the system voice when a clip cannot be played.
+        case clips(urls: [URL], fallbackText: String)
+        case text(String)
+    }
+
+    private struct PendingUtterance {
+        let content: PendingContent
+        let priority: SpeechPriority
+    }
 
     /// Use the bundled natural-voice clips when they cover a phrase (Settings → Language; default on).
     var useNaturalVoice: Bool = ClipVoicePlayer.isEnabled {
@@ -106,32 +133,28 @@ final class SpeechService: NSObject {
                                                object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.clearVoiceCache() }
         }
+        NotificationCenter.default.addObserver(forName: SoundModeStore.didChange, object: nil,
+                                               queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.soundModeChanged() }
+        }
     }
 
     /// Speaks a structured phrase in the current `language`: from the bundled natural-voice clips when all of them
     /// exist, otherwise its localized text (`phrase.text` or the text composed from the clip texts) with the system
-    /// voice. Same priorities as `speak(_ text:)`: `.high` interrupts, `.low` is dropped while something is speaking,
-    /// `.normal` waits for the current utterance.
-    func speak(_ phrase: VoicePhrase, priority: SpeechPriority = .normal) {
+    /// voice. A phrase whose clips cannot be decoded / played falls back to the system voice too.
+    /// Priorities as in `speak(_ text:)`.
+    func speak(_ phrase: VoicePhrase, priority: SpeechPriority = .normal,
+               maxAge: TimeInterval = 8) {
         guard !isMuted else { return }
-        let lang = language
+        let lang: AppLanguage = language
+        let text: String = VoiceComposer.text(for: phrase, language: lang.core)
         guard useNaturalVoice, let urls = clips.urls(for: phrase, language: lang) else {
-            speak(VoiceComposer.text(for: phrase, language: lang.core), priority: priority)
+            speak(text, priority: priority, maxAge: maxAge)
             return
         }
-        if isBusy {
-            if priority == .low { return }
-            if priority == .high { interruptAll() }
-        }
-        currentPriority = priority
-        if synthesizer.isSpeaking {
-            // Normal priority while the system voice talks: play right after it.
-            deferredClips.append(urls)
-            return
-        }
-        activatePlaybackSession()
-        clips.play(urls, interrupt: false)
-        isSpeaking = true
+        let utterance = PendingUtterance(content: .clips(urls: urls, fallbackText: text), priority: priority)
+        guard admit(utterance, maxAge: maxAge) else { return }
+        start(utterance)
     }
 
     /// Number of bundled natural-voice clips for `language` and the number the catalog defines.
@@ -139,38 +162,59 @@ final class SpeechService: NSObject {
         ClipVoicePlayer.installedCount(for: language ?? self.language)
     }
 
-    private var isBusy: Bool { synthesizer.isSpeaking || clips.isPlaying }
+    /// The system voice or the clips are speaking (alert tones do not count: speech never waits for a tone).
+    private var isVoiceBusy: Bool { synthesizer.isSpeaking || clips.isPlaying }
+    /// Anything is using the playback session (speech or an alert tone).
+    private var isBusy: Bool { isVoiceBusy || (activeTone?.isPlaying ?? false) }
 
-    /// Stops the system voice and the clips and forgets everything waiting (a `.high` utterance follows).
+    /// Stops the system voice and the clips and forgets everything waiting (an urgent utterance follows). The audio
+    /// session stays active meanwhile: no un-duck / re-duck of other apps' audio and no blocking session round trip
+    /// right before the warning.
     private func interruptAll() {
-        deferredClips.removeAll()
-        deferredTexts.removeAll()
+        pending.removeAll()
+        isInterrupting = true
+        defer { isInterrupting = false }
         if synthesizer.isSpeaking { synthesizer.stopSpeaking(at: .immediate) }
         clips.stop()
     }
 
-    /// Speaks already-localized `text` in the current `language`. A `.high` priority utterance interrupts whatever
-    /// is being spoken; `.low` utterances are dropped while something else is speaking.
-    func speak(_ text: String, priority: SpeechPriority = .normal) {
-        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !isMuted, !trimmed.isEmpty else { return }
-        if clips.isPlaying {
-            if priority == .low { return }
-            if priority == .high {
-                interruptAll()
+    /// Decides what happens to a new utterance (`SpeechAdmission`): true = the caller starts it now.
+    private func admit(_ utterance: PendingUtterance, maxAge: TimeInterval) -> Bool {
+        switch SpeechAdmission.decide(priority: utterance.priority, current: currentPriority, isBusy: isVoiceBusy) {
+        case .start:
+            currentPriority = utterance.priority
+            return true
+        case .interrupt:
+            interruptAll()
+            currentPriority = utterance.priority
+            return true
+        case .enqueue:
+            pending.enqueue(utterance, deadline: ProcessInfo.processInfo.systemUptime + max(0, maxAge))
+            return false
+        case .drop:
+            return false
+        }
+    }
+
+    private func start(_ utterance: PendingUtterance) {
+        switch utterance.content {
+        case .clips(let urls, let fallbackText):
+            activatePlaybackSession()
+            if clips.play(urls, interrupt: false) {
+                isSpeaking = true
+            } else if !fallbackText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                // Clip undecodable / audio engine failed: say the phrase with the system voice instead.
+                startText(fallbackText)
             } else {
-                // Normal priority while clips play: speak right after them.
-                deferredTexts.append(trimmed)
-                return
+                finishIfIdle()
             }
+        case .text(let text):
+            startText(text)
         }
-        if synthesizer.isSpeaking {
-            if priority == .low { return }
-            if priority >= currentPriority && priority == .high {
-                synthesizer.stopSpeaking(at: .word)
-            }
-        }
-        let (spokenText, voice) = prepared(trimmed)
+    }
+
+    private func startText(_ text: String) {
+        let (spokenText, voice) = prepared(text)
         activatePlaybackSession()
         let utterance = AVSpeechUtterance(string: spokenText)
         utterance.voice = voice
@@ -178,17 +222,88 @@ final class SpeechService: NSObject {
         utterance.pitchMultiplier = 1.0
         utterance.preUtteranceDelay = 0
         utterance.postUtteranceDelay = 0
-        currentPriority = priority
         synthesizer.speak(utterance)
     }
 
+    /// Starts the oldest waiting utterance that has not expired (nothing may be speaking).
+    private func drainPending() {
+        guard !isInterrupting, !isVoiceBusy else { return }
+        guard !isMuted else {
+            pending.removeAll()
+            return
+        }
+        guard let next = pending.next(now: ProcessInfo.processInfo.systemUptime) else { return }
+        currentPriority = next.priority
+        start(next)
+    }
+
+    /// Speaks already-localized `text` in the current `language`.
+    /// - `.critical` (safety warning) interrupts whatever is being spoken and drops everything waiting;
+    /// - `.high` does the same unless a `.critical` utterance is being spoken — then it waits for it;
+    /// - `.normal` waits for the current utterance, at most `maxAge` seconds (then it is dropped as stale);
+    /// - `.low` is dropped while something else is speaking.
+    func speak(_ text: String, priority: SpeechPriority = .normal, maxAge: TimeInterval = 8) {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !isMuted, !trimmed.isEmpty else { return }
+        let utterance = PendingUtterance(content: .text(trimmed), priority: priority)
+        guard admit(utterance, maxAge: maxAge) else { return }
+        start(utterance)
+    }
+
     func stop() {
-        deferredClips.removeAll()
-        deferredTexts.removeAll()
+        pending.removeAll()
         if synthesizer.isSpeaking {
             synthesizer.stopSpeaking(at: .immediate)
         }
         clips.stop()
+    }
+
+    // MARK: Alert tones
+
+    /// Plays the short alert tone of `kind` through the playback session (audible with the ring / silent switch on
+    /// silent, ducks music like the voice) when the sound mode allows it (`AlertToneKind.shouldPlay(in:)`).
+    /// Independent of `isMuted`. Returns false when the tone was not started.
+    @discardableResult
+    func playAlertTone(_ kind: AlertToneKind) -> Bool {
+        guard kind.shouldPlay(in: soundMode), let player = tonePlayer(for: kind) else { return false }
+        if let current = activeTone, current !== player, current.isPlaying { current.stop() }
+        activatePlaybackSession()
+        player.currentTime = 0
+        guard player.play() else {
+            finishIfIdle()
+            return false
+        }
+        activeTone = player
+        return true
+    }
+
+    private func tonePlayer(for kind: AlertToneKind) -> AVAudioPlayer? {
+        if let cached = tonePlayers[kind] { return cached }
+        guard let player = try? AVAudioPlayer(data: kind.wavData()) else { return nil }
+        player.delegate = self
+        player.prepareToPlay()
+        tonePlayers[kind] = player
+        return player
+    }
+
+    private func stopTone() {
+        if let tone = activeTone, tone.isPlaying { tone.stop() }
+        activeTone = nil
+    }
+
+    fileprivate func toneFinished() {
+        if let tone = activeTone, !tone.isPlaying { activeTone = nil }
+        finishIfIdle()
+    }
+
+    /// The sound mode changed (button menu or a Settings toggle): silence what the new mode no longer allows.
+    private func soundModeChanged() {
+        let mode: SoundMode = soundMode
+        if !mode.voiceEnabled { stop() }
+        if !mode.tonesEnabled, activeTone != nil {
+            stopTone()
+            finishIfIdle()
+        }
     }
 
     // MARK: Voice selection
@@ -332,32 +447,23 @@ final class SpeechService: NSObject {
 
     private func didFinishUtterance() {
         guard !synthesizer.isSpeaking else { return }
-        if !clips.isPlaying, !deferredClips.isEmpty {
-            let urls = deferredClips.removeFirst()
-            activatePlaybackSession()
-            clips.play(urls, interrupt: false)
-            for more in deferredClips { clips.play(more, interrupt: false) }
-            deferredClips.removeAll()
-        }
+        drainPending()
         finishIfIdle()
     }
 
-    /// The clip queue finished: speak texts that waited for it, or release the audio session.
+    /// The clip queue finished: start what waited for it, or release the audio session.
     private func didFinishClips() {
-        if !synthesizer.isSpeaking, !deferredTexts.isEmpty {
-            let texts = deferredTexts
-            deferredTexts.removeAll()
-            for text in texts { speak(text, priority: .normal) }
-            return
-        }
+        drainPending()
         finishIfIdle()
     }
 
     private func finishIfIdle() {
-        isSpeaking = isBusy
-        if !isSpeaking {
-            currentPriority = .low
-            // Last utterance done: release the session so other apps' audio is un-ducked.
+        // An urgent utterance follows immediately: keep the session (and `isSpeaking`) as they are.
+        guard !isInterrupting else { return }
+        isSpeaking = isVoiceBusy
+        if !isSpeaking { currentPriority = .low }
+        if !isBusy {
+            // Last utterance / tone done: release the session so other apps' audio is un-ducked.
             try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
         }
     }
@@ -374,5 +480,11 @@ extension SpeechService: AVSpeechSynthesizerDelegate {
 
     nonisolated func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didCancel utterance: AVSpeechUtterance) {
         Task { @MainActor in self.didFinishUtterance() }
+    }
+}
+
+extension SpeechService: AVAudioPlayerDelegate {
+    nonisolated func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
+        Task { @MainActor in self.toneFinished() }
     }
 }

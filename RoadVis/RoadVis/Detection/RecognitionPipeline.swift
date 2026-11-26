@@ -74,7 +74,10 @@ final class RecognitionPipeline {
     @ObservationIgnored var weatherProvider: (@MainActor () -> WeatherSnapshot?)?
     /// Voice output for distance warnings (set by `AppState`; nil → haptics and tone only).
     @ObservationIgnored var speech: SpeechService? {
-        didSet { warnings.speech = voiceWarningsHandledByCoach ? nil : speech }
+        didSet {
+            warnings.speech = voiceWarningsHandledByCoach ? nil : speech
+            warnings.tones = speech   // tones stay with the controller even when the coach speaks
+        }
     }
     /// Set by `DriverCoach`: the coach speaks the distance warnings (no duplicate speech); the warning controller then
     /// only gives haptics and the alert tone.

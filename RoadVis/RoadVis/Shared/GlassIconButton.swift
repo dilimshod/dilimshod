@@ -24,19 +24,31 @@ struct GlassIconButton: View {
 
     var body: some View {
         Button(action: action) {
-            Image(systemName: systemName)
-                .font(.system(size: size * 0.42, weight: .semibold, design: .rounded))
-                .symbolRenderingMode(.hierarchical)
-                .foregroundStyle(tint)
-                .frame(width: size, height: size)
-                .background(.ultraThinMaterial, in: Circle())
-                .overlay(Circle().strokeBorder(Color.white.opacity(0.22), lineWidth: 1))
-                .shadow(color: .black.opacity(0.35), radius: 6, x: 0, y: 2)
-                .frame(width: max(size, Self.minimumHitSize), height: max(size, Self.minimumHitSize))
-                .contentShape(Rectangle())
+            GlassIconLabel(systemName: systemName, size: size, tint: tint)
         }
         .buttonStyle(RVPressableButtonStyle())
         .accessibilityLabel(label)
+    }
+}
+
+/// The visuals of `GlassIconButton` (frosted circle with an SF Symbol and the minimum hit area) without the
+/// button — also the label of a `Menu` (e.g. the sound-mode menu of `VoiceMuteButton`).
+struct GlassIconLabel: View {
+    let systemName: String
+    var size: CGFloat = 52
+    var tint: Color = .white
+
+    var body: some View {
+        Image(systemName: systemName)
+            .font(.system(size: size * 0.42, weight: .semibold, design: .rounded))
+            .symbolRenderingMode(.hierarchical)
+            .foregroundStyle(tint)
+            .frame(width: size, height: size)
+            .background(.ultraThinMaterial, in: Circle())
+            .overlay(Circle().strokeBorder(Color.white.opacity(0.22), lineWidth: 1))
+            .shadow(color: .black.opacity(0.35), radius: 6, x: 0, y: 2)
+            .frame(width: max(size, GlassIconButton.minimumHitSize), height: max(size, GlassIconButton.minimumHitSize))
+            .contentShape(Rectangle())
     }
 }
 

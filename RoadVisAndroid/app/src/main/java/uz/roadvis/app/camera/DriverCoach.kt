@@ -2,6 +2,9 @@ package uz.roadvis.app.camera
 
 import uz.roadvis.app.app.AppState
 import uz.roadvis.app.app.SpeechPriority
+import uz.roadvis.app.app.SpeechService
+import uz.roadvis.core.AlertToneKind
+import uz.roadvis.core.CoachCategory
 import uz.roadvis.core.CoachFrameInput
 import uz.roadvis.core.CoachMessage
 import uz.roadvis.core.CoachToggles
@@ -104,7 +107,15 @@ class DriverCoach(private val app: AppState, private val assist: AssistSettings)
 
     private fun speakNext(now: Double) {
         val message = engine.next(now) ?: return
-        app.speech.speak(VoicePhrase.coach(message, CoachPhrases.phrase(message)), priority(message.urgency))
+        // Tone first (it is the whole warning in the "sounds only" mode; `playAlertTone` checks the mode). The distance
+        // tones (collision, keep distance) belong to `DistanceWarningController`, which runs on the same frames —
+        // a second tone here would double up.
+        val distanceOwned = message.category == CoachCategory.COLLISION || message.category == CoachCategory.TAILGATING
+        if (!distanceOwned) AlertToneKind.kindFor(message)?.let { app.speech.playAlertTone(it) }
+        val priority = priority(message.urgency)
+        // Advice about the current moment (lane, distance) is stale after a few seconds of waiting.
+        app.speech.speak(VoicePhrase.coach(message, CoachPhrases.phrase(message)), priority,
+            maxAge = if (priority >= SpeechPriority.HIGH) SpeechService.DEFAULT_MAX_AGE else 3.0)
     }
 
     companion object {
@@ -113,7 +124,7 @@ class DriverCoach(private val app: AppState, private val assist: AssistSettings)
         fun priority(u: CoachUrgency): SpeechPriority = when (u) {
             CoachUrgency.LOW -> SpeechPriority.LOW
             CoachUrgency.NORMAL -> SpeechPriority.NORMAL
-            CoachUrgency.HIGH -> SpeechPriority.HIGH
+            CoachUrgency.HIGH -> SpeechPriority.CRITICAL   // collision / pedestrian / red light: never cut off by navigation prompts
         }
     }
 }
