@@ -7,9 +7,6 @@ on:
       - ".github/workflows/roadvis-android.yml"
   workflow_dispatch:
 
-permissions:
-  contents: write   # publish the APK to the public "android-latest" pre-release (direct download link)
-
 concurrency:
   group: roadvis-android-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
@@ -38,17 +35,3 @@ jobs:
           name: RoadVis-android-apk
           path: RoadVisAndroid/app/build/outputs/apk/release/*.apk
           if-no-files-found: error
-      - name: Rename APK
-        run: cp app/build/outputs/apk/release/app-release.apk app/build/outputs/apk/release/RoadVis.apk
-      - name: Publish to the android-latest pre-release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: android-latest
-          name: RoadVis Android (latest build)
-          prerelease: true
-          make_latest: false
-          target_commitish: ${{ github.event.pull_request.head.sha || github.sha }}
-          body: |
-            Latest Android build of RoadVis (commit ${{ github.event.pull_request.head.sha || github.sha }}).
-            Download RoadVis.apk below, open it on an Android phone and allow "Install unknown apps".
-          files: RoadVisAndroid/app/build/outputs/apk/release/RoadVis.apk
