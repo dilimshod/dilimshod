@@ -230,6 +230,11 @@ struct DataSourcesView: View {
             Section {
                 row("sources.maps.title", "sources.maps.detail")
                 VStack(alignment: .leading, spacing: 6) {
+                    row("sources.basemap.title", "sources.basemap.detail")
+                    Link("openfreemap.org", destination: MapLibreBaseMap.openFreeMapURL)
+                        .font(.footnote)
+                }
+                VStack(alignment: .leading, spacing: 6) {
                     row("sources.osm.title", "sources.osm.detail")
                     if let copyright = URL(string: "https://www.openstreetmap.org/copyright") {
                         Link(L("sources.osm.copyright"), destination: copyright)

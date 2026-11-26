@@ -27,21 +27,21 @@ extension AppSettings {
     }
 }
 
-/// Map layer of the navigator: free OpenStreetMap raster tiles (default) or Apple imagery.
+/// Map layer of the navigator: free OpenFreeMap vector tiles drawn by MapLibre (default) or Apple imagery.
 ///
-/// OSM-based layers replace the Apple base map with an `OSMTileOverlay` (`canReplaceMapContent`); the satellite /
-/// hybrid layers use Apple's `MKImageryMapConfiguration` / `MKHybridMapConfiguration`. Unknown stored values (e.g.
-/// the former Apple "standard" scheme) fall back to `.default` (OpenStreetMap).
+/// `.openFreeMap` is rendered by `MapLibreNavigationMapView` (OpenFreeMap "dark" vector style, CARTO "Dark Matter"
+/// raster fallback when the style cannot be loaded); the satellite / hybrid layers stay on MapKit
+/// (`AppleNavigationMapView`, `MKImageryMapConfiguration` / `MKHybridMapConfiguration`). Unknown stored values (the
+/// former "cartoDark" raster layer, the Apple "standard" scheme) fall back to `.default`.
 enum NavigatorMapStyle: String, CaseIterable, Identifiable {
-    /// CARTO "Dark Matter" raster tiles (OpenStreetMap data). The standard OSM and CARTO Voyager layers were
-    /// removed after on-device testing (tiles did not load reliably).
-    case cartoDark
+    /// OpenFreeMap dark vector map (OpenStreetMap data), MapLibre Native.
+    case openFreeMap
     /// Apple satellite imagery.
     case satellite
     /// Apple satellite imagery with Apple roads and labels.
     case hybrid
 
-    static let `default`: NavigatorMapStyle = .cartoDark
+    static let `default`: NavigatorMapStyle = .openFreeMap
 
     var id: String { rawValue }
 
@@ -52,7 +52,7 @@ enum NavigatorMapStyle: String, CaseIterable, Identifiable {
 
     var displayName: String {
         switch self {
-        case .cartoDark: return "OpenStreetMap (CARTO Dark)"
+        case .openFreeMap: return L("mapStyle.openFreeMap")
         case .satellite: return L("mapStyle.satellite")
         case .hybrid: return L("mapStyle.hybrid")
         }
@@ -60,22 +60,19 @@ enum NavigatorMapStyle: String, CaseIterable, Identifiable {
 
     var symbolName: String {
         switch self {
-        case .cartoDark: return "map.fill"
+        case .openFreeMap: return "map.fill"
         case .satellite: return "globe.asia.australia"
         case .hybrid: return "square.2.layers.3d"
         }
     }
 
-    /// Raster tile source when the layer is drawn from OpenStreetMap-based tiles; nil for the Apple imagery layers.
-    var tileSource: OSMTileSource? {
+    /// True for the Apple imagery layers (drawn by MapKit); false for the MapLibre / OpenFreeMap map.
+    var usesAppleImagery: Bool {
         switch self {
-        case .cartoDark: return .cartoDark
-        case .satellite, .hybrid: return nil
+        case .openFreeMap: return false
+        case .satellite, .hybrid: return true
         }
     }
-
-    /// True when the layer is drawn from OSM raster tiles (Apple base map, POIs and traffic are not shown).
-    var usesOSMTiles: Bool { tileSource != nil }
 }
 
 /// Values of `AppSettings.routingEngine`.

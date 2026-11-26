@@ -2,12 +2,14 @@ import CoreLocation
 import MapKit
 import SwiftUI
 
-/// Full-screen navigator: `MKMapView` map below everything; on top the guidance banner (with lanes and "затем"),
-/// the collapsible current-road card and a hazard chip; the live camera window (or a camera button) in the top-left
-/// corner; map buttons on the right (layers: OpenStreetMap / CARTO Dark / Voyager / Спутник / Гибрид, 3D, Apple
-/// traffic for Гибрид; recentre; report; settings); and a state-dependent bottom panel (search → planning → route
-/// options → trip info → arrival). Panels stay at the edges so the map centre (the car) is never covered. The map
-/// attribution («© участники OpenStreetMap», «© CARTO») is always visible at the bottom right while OSM tiles are shown.
+/// Full-screen navigator: the map below everything (MapLibre + OpenFreeMap vector tiles, or MapKit for the Apple
+/// imagery layers — see `NavigationMapView`); on top the guidance banner (with lanes and "затем"), the collapsible
+/// current-road card and a hazard chip; the live camera window (or a camera button) in the top-left corner; map
+/// buttons on the right (layers: dark OpenFreeMap map / Спутник / Гибрид, 3D, Apple traffic for Гибрид; recentre;
+/// report; settings); and a state-dependent bottom panel (search → planning → route options → trip info → arrival).
+/// Panels stay at the edges so the map centre (the car) is never covered. The base-map attribution («© OpenFreeMap
+/// © OpenMapTiles © участники OpenStreetMap», or «© участники OpenStreetMap © CARTO» for the raster fallback) is
+/// always visible at the bottom right while the MapLibre map is shown.
 ///
 /// `RootView` keeps this view mounted behind the camera screen; `isActive` is false while it is hidden, so the map
 /// skips camera animations and the camera window disconnects its preview layer.
@@ -23,6 +25,8 @@ struct NavigatorView: View {
     @State private var showLongPressDialog = false
     @State private var topInset: CGFloat = 0
     @State private var bottomInset: CGFloat = 0
+    /// Base map currently drawn by the MapLibre layer (switches to the CARTO fallback if OpenFreeMap fails).
+    @State private var baseMap: BaseMapSource = .openFreeMap
     @AppStorage(NavigatorSettingsKeys.mapStyle) private var mapStyleRaw = NavigatorMapStyle.default.rawValue
     @AppStorage(NavigatorSettingsKeys.map3D) private var is3D = true
 
@@ -118,6 +122,9 @@ struct NavigatorView: View {
             onLongPress: { coordinate in
                 longPressCoordinate = coordinate
                 showLongPressDialog = true
+            },
+            onBaseMapChange: { source in
+                baseMap = source
             }
         )
     }
@@ -225,8 +232,8 @@ struct NavigatorView: View {
         }
     }
 
-    /// Map layer switcher: OSM tile layers / Спутник / Гибрид, 3D, Apple traffic layer (Гибрид only — Apple traffic
-    /// is not drawn over OSM tiles or plain imagery).
+    /// Map layer switcher: dark OpenFreeMap map (MapLibre) / Спутник / Гибрид, 3D, Apple traffic layer (Гибрид only — Apple
+    /// traffic is not drawn over the MapLibre map or plain imagery).
     private var layersMenu: some View {
         @Bindable var settings = app.settings
         let style = mapStyle
@@ -454,34 +461,30 @@ struct NavigatorView: View {
 
     @ViewBuilder
     private func attributionFooter(_ nav: NavigationService) -> some View {
-        let tiles = mapStyle.tileSource
+        let showsBaseMapCredit = !mapStyle.usesAppleImagery
         let showsOSM = nav.routeOptions.contains { $0.sources.contains(where: \.usesOpenStreetMap) }
             || !nav.routeEdges.isEmpty || app.roadInfo.currentRoad != nil || !app.roadInfo.routeFeatures.isEmpty
         let showsWeather = (nav.state == .navigating && app.weather.current != nil) || !nav.routeWeather.points.isEmpty
-        if tiles != nil || showsOSM || showsWeather {
-            HStack(spacing: 12) {
+        if showsBaseMapCredit || showsOSM || showsWeather {
+            HStack(spacing: 8) {
                 if showsOSM {
-                    // With OSM tiles the copyright credit sits on the right; this link reports map errors.
-                    Link(tiles == nil ? L("nav.osmCredit") : L("nav.fixTheMap"), destination: Self.fixTheMapURL)
+                    // With the OSM-based base map the copyright credit sits on the right; this link reports map errors.
+                    Link(showsBaseMapCredit ? L("nav.fixTheMap") : L("nav.osmCredit"), destination: Self.fixTheMapURL)
                 }
                 if showsWeather {
                     Text(l: "nav.weatherCredit")
                 }
                 Spacer(minLength: 0)
-                if let tiles {
-                    // Required by the OSM tile usage policy / CARTO terms: always visible while the tiles are shown.
-                    Link(L("nav.osmCredit"), destination: OSMTileSource.osmCopyrightURL)
-                    if tiles.isCARTO {
-                        Link(destination: OSMTileSource.cartoAttributionsURL) {
-                            Text(verbatim: "© CARTO")
-                        }
-                    }
+                if showsBaseMapCredit {
+                    // Required by the OpenFreeMap / OpenMapTiles / OSM (or CARTO) terms: always visible with the map.
+                    BaseMapAttributionLinks(source: baseMap)
                 }
             }
             .font(.system(size: 10, weight: .medium))
             .foregroundStyle(.white.opacity(0.9))
             .tint(Color.white)
             .lineLimit(1)
+            .minimumScaleFactor(0.75)
             .padding(.horizontal, 8)
             .padding(.vertical, 2)
             .background(Color.black.opacity(0.45), in: Capsule())
