@@ -25,7 +25,8 @@ enum SpeechVoiceKind: Equatable {
 /// Text-to-speech for navigation prompts and driving warnings.
 ///
 /// The speaking language follows the app language (`LocalizationManager.shared.language`, Settings → Language);
-/// callers pass text that is already localized. Russian and English use a regular ru-RU / en-US Apple voice.
+/// callers pass text that is already localized. Russian and English use a regular ru-RU / en-US Apple voice, the
+/// best installed quality first (Premium > Enhanced > default; see `voice(for:)`).
 ///
 /// Uzbek: iOS 17–26 do not include an Uzbek system voice (Uzbek is not in Apple's VoiceOver / Spoken Content
 /// language list). Voice choice for `.uz`, in order:
@@ -111,6 +112,11 @@ final class SpeechService: NSObject {
         return (voice.name, voice.language)
     }
 
+    /// Quality of the voice used for `language` (`.default` = compact voice; nil when iOS picks).
+    func voiceQuality(for language: AppLanguage? = nil) -> AVSpeechSynthesisVoiceQuality? {
+        choice(for: language ?? self.language).voice?.quality
+    }
+
     /// The voice for the current language (cached).
     func currentVoice() -> AVSpeechSynthesisVoice? {
         choice(for: language).voice
@@ -191,21 +197,22 @@ final class SpeechService: NSObject {
         code.replacingOccurrences(of: "_", with: "-").split(separator: "-").first.map { $0.lowercased() } ?? ""
     }
 
-    /// Picks a natural voice for `language`: the system default voice for the language first, then an
-    /// enhanced/premium Apple voice, never a novelty or Eloquence voice.
+    /// Picks the most natural voice for `language`: Premium > Enhanced > default quality (only regular Apple voices,
+    /// never a novelty or Eloquence voice). Among voices of the same quality the system default voice for the
+    /// language wins. Premium / Enhanced voices are downloaded by the user in iPhone Settings → Accessibility →
+    /// Spoken Content → Voices; without them the compact default voice is used.
     static func voice(for language: String) -> AVSpeechSynthesisVoice? {
         let normalized = language.replacingOccurrences(of: "_", with: "-")
-        if let systemDefault = AVSpeechSynthesisVoice(language: normalized), isAcceptable(systemDefault),
-           systemDefault.language.caseInsensitiveCompare(normalized) == .orderedSame {
-            return systemDefault
-        }
+        let systemDefault = AVSpeechSynthesisVoice(language: normalized)
         let candidates = AVSpeechSynthesisVoice.speechVoices().filter {
             $0.language.caseInsensitiveCompare(normalized) == .orderedSame && isAcceptable($0)
         }
-        let preferred = candidates.filter { $0.quality == .premium || $0.quality == .enhanced }
-        return preferred.max { $0.quality.rawValue < $1.quality.rawValue }
-            ?? candidates.first
-            ?? AVSpeechSynthesisVoice(language: normalized)
+        let best = candidates.max { lhs, rhs in
+            if lhs.quality.rawValue != rhs.quality.rawValue { return lhs.quality.rawValue < rhs.quality.rawValue }
+            // Same quality: the system default voice ranks higher.
+            return lhs.identifier != systemDefault?.identifier && rhs.identifier == systemDefault?.identifier
+        }
+        return best ?? systemDefault
     }
 
     /// A regular Apple voice (com.apple.voice.* / com.apple.ttsbundle.*) that is not a novelty or Eloquence voice.

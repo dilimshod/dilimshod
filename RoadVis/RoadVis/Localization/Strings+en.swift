@@ -47,6 +47,11 @@ enum EnStrings {
         "language.voice.approxBadge": "approximate voice",
         "language.voice.uzNote": "iOS has no built-in Uzbek voice. RoadVis reads Uzbek prompts with a Turkish voice after adapting the spelling (o‘→o, sh→ş, x→h, q→k…). It is understandable but not a native Uzbek voice. For better quality download an Enhanced Turkish voice: Settings → Accessibility → Spoken Content → Voices → Turkish. If an Uzbek voice is installed on the iPhone (e.g. by a third-party voice app), RoadVis uses it automatically.",
         "language.voice.test": "Test voice",
+        "language.voice.quality": "Voice quality: %@",
+        "language.voice.quality.premium": "Premium (best)",
+        "language.voice.quality.enhanced": "Enhanced",
+        "language.voice.quality.default": "standard (compact voice)",
+        "language.voice.downloadHint": "For a more natural voice: on your iPhone open Settings → Accessibility → Spoken Content → Voices → %@ and download an \"Enhanced\" or \"Premium\" voice. RoadVis picks it automatically.",
         "language.voice.sample": "In 300 metres, turn right. Traffic light ahead.",
 
         // MARK: About hub

@@ -47,6 +47,11 @@ enum UzStrings {
         "language.voice.approxBadge": "taxminiy ovoz",
         "language.voice.uzNote": "iOS’da o‘rnatilgan o‘zbekcha ovoz yo‘q. RoadVis o‘zbekcha ko‘rsatmalarni yozuvini moslab (o‘→o, sh→ş, x→h, q→k…) turkcha ovozda o‘qiydi. Nutq tushunarli, lekin bu haqiqiy o‘zbekcha ovoz emas. Sifatni oshirish uchun yaxshilangan (Enhanced) turkcha ovozni yuklab oling: Settings → Accessibility → Spoken Content → Voices → Turkish. Agar iPhone’da o‘zbekcha ovoz o‘rnatilgan bo‘lsa (masalan, boshqa ilova orqali), RoadVis uni avtomatik tanlaydi.",
         "language.voice.test": "Ovozni tekshirish",
+        "language.voice.quality": "Ovoz sifati: %@",
+        "language.voice.quality.premium": "Premium (eng yaxshi)",
+        "language.voice.quality.enhanced": "Enhanced (yaxshilangan)",
+        "language.voice.quality.default": "standart (ixcham ovoz)",
+        "language.voice.downloadHint": "Tabiiyroq ovoz uchun: iPhone’da Settings (Sozlamalar) → Accessibility → Spoken Content → Voices → %@ bo‘limini oching va «Yaxshilangan» (Enhanced) yoki «Premium» ovozni yuklab oling. RoadVis uni avtomatik tanlaydi.",
         "language.voice.sample": "300 metrdan keyin o‘ngga buriling. Oldinda svetofor.",
 
         // MARK: About hub

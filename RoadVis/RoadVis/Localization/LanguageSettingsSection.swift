@@ -1,3 +1,4 @@
+import AVFoundation
 import SwiftUI
 
 /// Settings section: app language (uz / ru / en) + which voice speaks it. Embed in a `Form`
@@ -40,12 +41,37 @@ struct LanguageSettingsSection: View {
                 if localization.language == .uz, voiceKind != .native {
                     Text(l: "language.voice.uzNote")
                 }
+                if let hint = downloadHint {
+                    Text(verbatim: hint)
+                }
             }
         }
     }
 
     private var voiceKind: SpeechVoiceKind {
         app.speech.voiceKind(for: localization.language)
+    }
+
+    /// Localized quality of the voice in use ("Premium" / "Enhanced" / "Standard"); nil when iOS picks the voice.
+    private var qualityText: String? {
+        guard let quality = app.speech.voiceQuality(for: localization.language) else { return nil }
+        switch quality {
+        case .premium: return L("language.voice.quality.premium")
+        case .enhanced: return L("language.voice.quality.enhanced")
+        default: return L("language.voice.quality.default")
+        }
+    }
+
+    /// How to download a natural-sounding voice, shown unless a Premium voice is already used. Names the language
+    /// of the voice actually speaking (e.g. Turkish for the approximate Uzbek voice).
+    private var downloadHint: String? {
+        let quality = app.speech.voiceQuality(for: localization.language)
+        if quality == .premium { return nil }
+        let code = app.speech.voiceDescription(for: localization.language)?.language
+            ?? localization.language.voiceLanguageCode
+        let base = code.replacingOccurrences(of: "_", with: "-").split(separator: "-").first.map(String.init) ?? code
+        let name = Locale(identifier: localization.language.rawValue).localizedString(forLanguageCode: base) ?? code
+        return L("language.voice.downloadHint", name)
     }
 
     @ViewBuilder
@@ -80,6 +106,11 @@ struct LanguageSettingsSection: View {
             .font(.footnote)
             .foregroundStyle(voiceKind.isApproximate ? Color.orange : Color.secondary)
             .fixedSize(horizontal: false, vertical: true)
+            if let qualityText {
+                Text(l: "language.voice.quality", qualityText)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
         }
         .accessibilityElement(children: .combine)
     }
