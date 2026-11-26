@@ -174,7 +174,9 @@ fun NavigatorScreen(app: AppState, isActive: Boolean) {
                 NavigationController.State.ARRIVED -> ArrivedPanel(nav)
             }
             Attribution(showWeather = nav.weather.current != null || nav.routeWeather.points.isNotEmpty()) {
-                context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://www.openstreetmap.org/copyright")).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                try {
+                    context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://www.openstreetmap.org/copyright")).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                } catch (_: Exception) {}
             }
         }
     }

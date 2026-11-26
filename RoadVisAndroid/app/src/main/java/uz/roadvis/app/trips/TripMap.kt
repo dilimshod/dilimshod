@@ -11,7 +11,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.viewinterop.AndroidView
-import org.osmdroid.config.Configuration
 import org.osmdroid.tileprovider.tilesource.XYTileSource
 import org.osmdroid.util.BoundingBox
 import org.osmdroid.views.CustomZoomButtonsController
@@ -80,10 +79,9 @@ fun TripMap(trip: Trip, highlightedEventId: UUID?, modifier: Modifier = Modifier
 
 @SuppressLint("ClickableViewAccessibility")
 private fun createMap(ctx: Context, trip: Trip): MapView {
-    Configuration.getInstance().apply {
-        load(ctx, ctx.getSharedPreferences("osmdroid", Context.MODE_PRIVATE))
-        userAgentValue = "RoadVis-Android/1.0"
-    }
+    // Same osmdroid configuration as the navigator (app cache dir, identifying user agent). Configuration.load()
+    // here would reset the tile cache to osmdroid's default storage path, which may be unwritable.
+    uz.roadvis.app.navigation.MapSetup.configure(ctx)
     val map = MapView(ctx)
     map.setTileSource(cartoDark)
     map.setTilesScaledToDpi(true)

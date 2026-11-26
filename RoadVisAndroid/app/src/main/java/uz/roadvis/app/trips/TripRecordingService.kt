@@ -1,11 +1,13 @@
 package uz.roadvis.app.trips
 
+import android.Manifest
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
@@ -39,6 +41,12 @@ class TripRecordingService : Service() {
         private const val NOTIFICATION_ID = 4107
 
         fun start(context: Context) {
+            // A location-type foreground service needs a granted location permission (SecurityException in
+            // startForeground on Android 14+); the stopSelf() fallback before startForeground would then crash the
+            // app with "did not then call Service.startForeground()". Without permission there is nothing to keep alive.
+            val fine = ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION)
+            val coarse = ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_COARSE_LOCATION)
+            if (fine != PackageManager.PERMISSION_GRANTED && coarse != PackageManager.PERMISSION_GRANTED) return
             try {
                 ContextCompat.startForegroundService(context, Intent(context, TripRecordingService::class.java))
             } catch (_: Exception) {

@@ -58,7 +58,8 @@ class ClipVoicePlayer(private val context: Context) {
             val all = ShortArray(total)
             var off = 0
             for (p in parts) { System.arraycopy(p.samples, 0, all, off, p.samples.size); off += p.samples.size }
-            playPcm(all, sr, gen)
+            // AudioTrack errors (e.g. an empty decode → zero buffer size) must not kill the process from this thread.
+            try { playPcm(all, sr, gen) } catch (_: Exception) { track = null; finish(gen) }
         }
         return true
     }
