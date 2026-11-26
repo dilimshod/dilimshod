@@ -397,8 +397,8 @@ class DriverCoachEngine(
                 val since = tooCloseSince ?: now
                 tooCloseSince = since
                 if (now - since >= tooClosePersistence) {
-                    val rec = a.recommendedDistanceMeters
-                    rules.offer(CoachMessage.KeepDistance(if (rec.isFinite()) CoachMessage.spokenDistance(rec) else null), now)
+                    // The number is not spoken (user request): the norm is shown on screen next to the lead vehicle.
+                    rules.offer(CoachMessage.KeepDistance(null), now)
                 }
             } else {
                 collisionSince = null

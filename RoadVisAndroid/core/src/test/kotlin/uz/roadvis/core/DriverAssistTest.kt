@@ -553,7 +553,7 @@ class DriverCoachEngineTest {
         engine.update(CoachFrameInput(timestamp = 0.0, speedKmh = 60.0, assessment = close, hasLead = true))
         assertNull(engine.next(0.0))
         engine.update(CoachFrameInput(timestamp = 1.1, speedKmh = 60.0, assessment = close, hasLead = true))
-        assertEquals(CoachMessage.KeepDistance(30), engine.next(1.1))
+        assertEquals(CoachMessage.KeepDistance(null), engine.next(1.1))
 
         val engine2 = DriverCoachEngine()
         val closing = FollowingDistanceCalculator.assess(20.0, 60.0, -40.0, policy, RoadSurfaceCondition.DRY)

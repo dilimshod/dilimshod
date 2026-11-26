@@ -585,7 +585,7 @@ final class DriverCoachEngineTests: XCTestCase {
         engine.update(CoachFrameInput(timestamp: 0, speedKmh: 60, assessment: close, hasLead: true))
         XCTAssertNil(engine.next(now: 0))
         engine.update(CoachFrameInput(timestamp: 1.1, speedKmh: 60, assessment: close, hasLead: true))
-        XCTAssertEqual(engine.next(now: 1.1), .keepDistance(recommendedMeters: 30))
+        XCTAssertEqual(engine.next(now: 1.1), .keepDistance(recommendedMeters: nil))
 
         let engine2 = DriverCoachEngine()
         let closing = FollowingDistanceCalculator.assess(distanceMeters: 20, ownSpeedKmh: 60, relativeSpeedKmh: -40,

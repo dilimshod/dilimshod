@@ -453,9 +453,8 @@ public final class DriverCoachEngine {
                 let since = tooCloseSince ?? now
                 tooCloseSince = since
                 if now - since >= tooClosePersistence {
-                    let rec = a.recommendedDistanceMeters
-                    rules.offer(.keepDistance(recommendedMeters: rec.isFinite ? CoachMessage.spokenDistance(rec) : nil),
-                                now: now)
+                    // The number is not spoken (user request): the norm is shown on screen next to the lead vehicle.
+                    rules.offer(.keepDistance(recommendedMeters: nil), now: now)
                 }
             } else {
                 collisionSince = nil
