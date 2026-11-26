@@ -64,7 +64,10 @@ import uz.roadvis.app.app.AppMode
 import uz.roadvis.app.app.AppState
 import uz.roadvis.app.l10n.L
 import uz.roadvis.app.ui.RV
+import uz.roadvis.app.camera.SoundModeMenu
+import uz.roadvis.app.camera.soundModeIcon
 import uz.roadvis.core.GeoPoint
+import uz.roadvis.core.SoundMode
 import uz.roadvis.core.RouteFeatureKind
 import uz.roadvis.core.RouteTimelineKind
 
@@ -153,10 +156,14 @@ fun NavigatorScreen(app: AppState, isActive: Boolean) {
                     if (!following) RoundButton(Icons.Default.MyLocation, L("nav.center"), tint = RV.accent) { following = true }
                     RoundButton(Icons.Default.Layers, L("nav.mapLayer")) { showSettings = true }
                     RoundButton(Icons.Default.ReportProblem, L("nav.report")) { incidentTarget = IncidentTarget(null) }
-                    val muted = app.speech.isMuted
-                    RoundButton(if (muted) Icons.AutoMirrored.Filled.VolumeOff else Icons.AutoMirrored.Filled.VolumeUp,
-                        if (muted) L("voice.unmute") else L("voice.mute"), tint = if (muted) RV.danger else Color.White) {
-                        app.speech.isMuted = !muted
+                    val soundMode = app.settings.soundMode
+                    var soundMenu by remember { mutableStateOf(false) }
+                    Box {
+                        RoundButton(soundModeIcon(soundMode), L("sound.mode") + ": " + L(soundMode.titleKey),
+                            tint = if (soundMode == SoundMode.ALL) Color.White else RV.danger) {
+                            soundMenu = true
+                        }
+                        SoundModeMenu(app, soundMenu) { soundMenu = false }
                     }
                     RoundButton(Icons.Default.Settings, L("common.settings")) { app.showSettings = true }
                 }

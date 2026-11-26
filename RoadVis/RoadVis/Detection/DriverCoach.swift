@@ -159,7 +159,17 @@ final class DriverCoach {
     private func speakNext(now: TimeInterval) {
         guard let message = engine.next(now: now) else { return }
         let text = coachText(message, language: currentCoachLanguage())
-        speech.speak(VoicePhrase.coach(message, text: text), priority: Self.priority(message.urgency))
+        // Tone first (it also is the whole warning in the "sounds only" mode; `playAlertTone` checks the mode). The
+        // distance tones (collision, keep distance) belong to `DistanceWarningController`, which runs on the same
+        // frames — a second tone here would double up.
+        let distanceOwned: Bool = message.category == .collision || message.category == .tailgating
+        if !distanceOwned, let tone = AlertToneKind.kind(for: message) {
+            speech.playAlertTone(tone)
+        }
+        let priority: SpeechPriority = Self.priority(message.urgency)
+        // Advice about the current moment (lane, distance) is stale after a few seconds of waiting.
+        speech.speak(VoicePhrase.coach(message, text: text), priority: priority,
+                     maxAge: priority >= .high ? SpeechService.defaultMaxAge : 3)
         lastMessage = message
         lastMessageDate = Date()
     }
@@ -168,7 +178,7 @@ final class DriverCoach {
         switch urgency {
         case .low: return .low
         case .normal: return .normal
-        case .high: return .high
+        case .high: return .critical   // collision / pedestrian / red light: never cut off by navigation prompts
         }
     }
 }

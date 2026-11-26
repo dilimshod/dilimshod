@@ -438,7 +438,10 @@ Key shell APIs:
   `.inactive` and repeated phases, so several scenes act only once per app state change.
 - `LocationService`: `location: CLLocation?`, `speedKmh: Double?`, `course`, `heading`, `travelDirection`, `coordinate: GeoPoint?`,
   `isAuthorized`, `authorizationStatus`, `start()`, `stop()`, `setBackgroundUpdates(_:)`, `addListener(_:) -> UUID`, `removeListener(_:)`.
-- `SpeechService`: `speak(_:priority:)`, `stop()`, `isSpeaking`, `isMuted`, `static voiceLanguage` (= "ru-RU", fixed —
+- `SpeechService`: `speak(_:priority:maxAge:)` (priorities low / normal / high / critical — core `SpeechPriority`; normal
+  prompts wait in a 3-item queue and expire after `maxAge`), `playAlertTone(_ kind: AlertToneKind)`, `soundMode`
+  (`SoundModeStore`, "rv.soundMode": all / soundsOnly / voiceOnly / silent — the 🔊 button menu), `stop()`, `isSpeaking`,
+  `isMuted` (derived: voice off), `static voiceLanguage` (= "ru-RU", fixed —
   every prompt is Russian; no setting changes it), `russianVoice()`, `static voice(for:)` (system default voice for the
   language, else an enhanced/premium `com.apple.voice.*` / `com.apple.ttsbundle.*` voice; never novelty/Eloquence).
   The `.playback`/`.voicePrompt` session ducks other audio only while speaking and is deactivated with

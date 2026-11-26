@@ -171,6 +171,7 @@ struct RecognitionView: View {
         if let lastSpeedWarning, now.timeIntervalSince(lastSpeedWarning) < 30 { return }
         lastSpeedWarning = now
         let message = CoachMessage.overSpeedLimit(limitKmh: limit)
+        app.speech.playAlertTone(.speeding)   // only when the voice is off ("sounds only" mode)
         app.speech.speak(VoicePhrase.coach(message, text: coachText(message, language: currentCoachLanguage())),
                          priority: .low)
     }

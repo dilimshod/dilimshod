@@ -40,8 +40,13 @@ final class DriverAssistSettings {
     /// Draw the roadway / sidewalk boundary (two subtle dashed lines) over the camera picture. Persons outside it are
     /// not recognised either way.
     var showRoadwayBoundary: Bool { didSet { defaults.set(showRoadwayBoundary, forKey: Keys.showRoadwayBoundary) } }
-    /// Short alert tones (e.g. forward-collision beep). Independent of voice prompts and the 🔊 mute button.
-    var alertSoundsEnabled: Bool { didSet { defaults.set(alertSoundsEnabled, forKey: "rv.alertSounds") } }
+    /// Short alert tones (collision, pedestrian, red light, …). Derived from the sound mode (`SoundModeStore`,
+    /// "rv.soundMode"): true in the "all" and "sounds only" modes; setting it keeps the voice half of the mode, so
+    /// this toggle and the 🔊 button menu stay in sync.
+    var alertSoundsEnabled: Bool {
+        get { SoundModeStore.shared.mode.tonesEnabled }
+        set { SoundModeStore.shared.mode = SoundModeStore.shared.mode.withTones(newValue) }
+    }
     /// Lane-departure warnings only at or above this GPS speed, km/h.
     var laneWarningMinSpeedKmh: Double { didSet { defaults.set(laneWarningMinSpeedKmh, forKey: Keys.laneWarningMinSpeedKmh) } }
 
@@ -61,7 +66,6 @@ final class DriverAssistSettings {
         signAnnouncementsEnabled = bool(Keys.signAnnouncementsEnabled, true)
         trafficLightHintsEnabled = bool(Keys.trafficLightHintsEnabled, true)
         pedestrianWarningsEnabled = bool(Keys.pedestrianWarningsEnabled, true)
-        alertSoundsEnabled = bool("rv.alertSounds", true)
         showRoadwayBoundary = bool(Keys.showRoadwayBoundary, true)
         let speed = defaults.object(forKey: Keys.laneWarningMinSpeedKmh) == nil
             ? 40 : defaults.double(forKey: Keys.laneWarningMinSpeedKmh)
@@ -76,7 +80,7 @@ struct DriverAssistSettingsSection: View {
 
     var body: some View {
         Section {
-            // Master switch for all spoken prompts (same state as the 🔊 button on the camera screen).
+            // Voice and tone halves of the sound mode (same state as the 🔊 button menu on the camera screen).
             Toggle(isOn: Binding(get: { !app.speech.isMuted }, set: { app.speech.isMuted = !$0 })) {
                 Label(L("assist.voicePrompts"), systemImage: "speaker.wave.2.fill")
             }

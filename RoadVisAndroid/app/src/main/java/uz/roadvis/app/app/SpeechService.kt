@@ -10,6 +10,7 @@ import uz.roadvis.app.l10n.AppLanguage
 import uz.roadvis.app.l10n.LocalizationManager
 import java.util.Locale
 import uz.roadvis.core.RVLang
+import uz.roadvis.core.SoundMode
 import uz.roadvis.core.VoiceComposer
 import uz.roadvis.core.VoicePhrase
 
@@ -20,8 +21,8 @@ enum class SpeechVoiceKind { NATURAL_CLIPS, NATIVE, APPROXIMATE_TURKISH, APPROXI
 
 /**
  * Voice output: natural Edge-voice clips when installed for the phrase, otherwise Android TextToSpeech in the
- * app language (Uzbek → uz if the engine has it, else Turkish, else Russian). Mute state is persisted
- * ("rv.voiceMuted"). Higher-priority speech interrupts lower; equal/lower priority waits (dropped if stale).
+ * app language (Uzbek → uz if the engine has it, else Turkish, else Russian). Mute state is derived from the
+ * persisted sound mode ("rv.soundMode"). Higher-priority speech interrupts lower; equal/lower priority waits (dropped if stale).
  * Port of iOS `SpeechService`.
  */
 class SpeechService(context: Context, private val settings: AppSettings) {
@@ -39,6 +40,14 @@ class SpeechService(context: Context, private val settings: AppSettings) {
         set(value) {
             settings.voiceMuted = value
             if (value) stop()
+        }
+
+    /** Sound mode of the speaker-button menu; a mode without voice stops the current speech at once. */
+    var soundMode: SoundMode
+        get() = settings.soundMode
+        set(value) {
+            settings.soundMode = value
+            if (!value.voiceEnabled) stop()
         }
 
     val language: AppLanguage get() = LocalizationManager.language

@@ -112,6 +112,11 @@ targets:
         UIBackgroundModes: [location, audio]
         UIFileSharingEnabled: true
         LSSupportsOpeningDocumentsInPlace: true
+        # Keep in sync with the hand-written Config/Info.plist: XcodeGen rewrites the file from these properties.
+        UILaunchScreen:
+          UIColorName: LaunchBackground
+          UIImageName: SplashLogo
+          UIImageRespectsSafeAreaInsets: false
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: uz.roadvis.RoadVis

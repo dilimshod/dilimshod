@@ -11,6 +11,11 @@ enum RuStrings {
         "assist.alertSounds": "Звуковые сигналы (тон предупреждения)",
         "voice.mute": "Выключить голосовые подсказки",
         "voice.unmute": "Включить голосовые подсказки",
+        "sound.mode": "Режим звука",
+        "sound.mode.all": "Все звуки и голос",
+        "sound.mode.soundsOnly": "Только звуки",
+        "sound.mode.voiceOnly": "Только голос",
+        "sound.mode.silent": "Без звука",
 
         // MARK: Bonnet calibration
         "settings.fd.hood": "От камеры до переднего бампера (капот)",
