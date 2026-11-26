@@ -104,6 +104,10 @@ public final class PedestrianHazardDetector {
     public var edgeMargin: Double = 0.08
     /// A person already relevant stays relevant until this much farther out (no flicker at the boundary).
     public var relevanceHysteresis: Double = 0.1
+    /// Officers / road workers are kept up to this far beyond the roadway boundary (in roadway half widths): they
+    /// normally stand on the shoulder / kerb. Bounded on purpose — the role is a vest-colour heuristic, so an
+    /// unlimited exemption would surface every sidewalk pedestrian in an orange or lime jacket.
+    public var staffEdgeMargin: Double = 1.0
     /// Minimum lateral speed towards the lane (fraction of image width per second) to count as approaching.
     public var minApproachSpeed: Double
     /// Pedestrians farther than this are ignored, metres.
@@ -111,6 +115,7 @@ public final class PedestrianHazardDetector {
 
     /// Plausibility filter against false positives (a hand, the dashboard, a passenger, a sign or a poster
     /// recognised as "person"): the box must look like a standing person seen in the scene.
+    /// Compared with the track's best score so far (`TrackedObject.peakConfidence`), not the latest frame's.
     public var minConfidence: Double = 0.55
     /// Frames the track must have been matched before it can raise a warning (≈ 0.35 s at 15 fps).
     public var minHits: Int = 5
@@ -130,7 +135,7 @@ public final class PedestrianHazardDetector {
     /// True when the track looks like a real pedestrian in the road scene.
     public func isPlausible(_ t: TrackedObject) -> Bool {
         let b = t.box
-        guard t.confidence >= minConfidence, t.hits >= minHits else { return false }
+        guard max(t.confidence, t.peakConfidence) >= minConfidence, t.hits >= minHits else { return false }
         guard b.width > 0, b.height / b.width >= minAspectRatio, b.height <= maxBoxHeight else { return false }
         guard b.maxY <= 1 - bottomEdgeMargin else { return false }
         // Large boxes cut by the left/right frame edge are almost always parts of the car or the driver's hand.
@@ -188,8 +193,12 @@ public final class PedestrianHazardDetector {
 
             // Sidewalk filter (zone relation of the feet).
             let outside = zone.outsideDistance(x: footX, y: footY)
-            let margin = edgeMargin + (relevant[t.id] != nil ? relevanceHysteresis : 0)
-            let atRoad = outside <= margin
+            let hysteresis = relevant[t.id] != nil ? relevanceHysteresis : 0
+            let margin = edgeMargin + hysteresis
+            // Road staff (officer / worker) stand beside the carriageway: a wider margin keeps them visible. They
+            // are reported with `onRoadway == false` below and never become pedestrian hazards.
+            let isStaff = t.personRole?.isRoadStaff == true
+            let atRoad = outside <= margin || (isStaff && outside <= staffEdgeMargin + hysteresis)
             let nearEdge = outside <= margin + approachMargin
             guard atRoad || (approaching && nearEdge) else {
                 result.filteredIDs.insert(t.id)

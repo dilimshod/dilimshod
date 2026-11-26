@@ -37,21 +37,55 @@ enum ModelStatus: Equatable, Sendable {
 
 /// YOLO object detector (Core ML + Vision).
 ///
-/// Supports both Ultralytics export flavours:
-/// - pipeline models exported with `nms=True` → `VNRecognizedObjectObservation`s (Vision maps the boxes back to the
-///   frame, `confidenceThreshold`/`iouThreshold` inputs are fed through `featureProvider`);
-/// - raw models (`nms=False`, YOLO26/YOLOv10 end-to-end or YOLOv8/YOLO11 `[1, 4+nc, N]`) → an `MLMultiArray` that
-///   is decoded by `YOLODecoder` (letterbox of `.scaleFit` undone with the frame size).
+/// Models. The app bundles four packages with a rectangular 16:9 input, so an upright camera frame fills the whole
+/// model input (nothing is spent on letterbox padding):
+/// - `RoadVisDetector` (YOLO11s, 960×544) and `RoadVisDetectorPortrait` (YOLO11s, 544×960) — `.full` quality;
+/// - `RoadVisDetectorLite` / `RoadVisDetectorLitePortrait` (YOLO11n, same inputs) — `.lite` quality, chosen by the
+///   worker's `DetectorQualityGovernor` while inference is too slow or the phone is hot.
+/// The model is picked per frame from the frame orientation and `preferredLevel` and loaded lazily; when one is
+/// missing or fails to load the next candidate is used (other tier → other orientation → the legacy single models
+/// `yolo26n` / `yolo11n` / `yolov8n`), so a broken package degrades recognition instead of crashing it.
+///
+/// Box geometry. Both Ultralytics export flavours are supported:
+/// - pipeline models exported with `nms=True` → `VNRecognizedObjectObservation`s. Vision normalises their boxes to
+///   the model input, and whether it undoes a `.scaleFit` letterbox is undocumented — so pipelines always run with
+///   `.scaleFill`: no padding exists, input-normalised equals frame-normalised under any Vision behaviour (with the
+///   bundled models the stretch is 0.7 %; a model of another aspect ratio is stretched more, never misplaced);
+/// - raw models (`nms=False`: YOLO26/YOLOv10 end-to-end or YOLOv8/YOLO11 `[1, 4+nc, N]`) → an `MLMultiArray` decoded
+///   by `YOLODecoder`: `.scaleFill` when the aspect ratios match (`DetectorInputGeometry.fit`), otherwise `.scaleFit`
+///   with the letterbox undone explicitly from the frame size.
+///
+/// Thresholds. `Options.confidenceThreshold` is the settings slider. The detector itself (NMS stage / decoder) runs
+/// at `DetectionThresholds.detectorFloor`, the lowest score the tracker can still use; the per-class thresholds are
+/// applied once, by `ObjectTracker` (`DetectionThresholds.perClass`), not a second time here.
 ///
 /// Not thread-safe: create, load and use it on one serial queue. Inference is synchronous on the caller's queue.
 final class VehicleDetector {
-    /// Bundle resource names (`.mlmodelc`), first found wins.
-    static let candidateModelNames = ["RoadVisDetector", "yolo26n", "yolo11n", "yolov8n"]
+    static let landscapeModelName = "RoadVisDetector"
+    static let portraitModelName = "RoadVisDetectorPortrait"
+    static let liteLandscapeModelName = "RoadVisDetectorLite"
+    static let litePortraitModelName = "RoadVisDetectorLitePortrait"
+    /// Single-model bundles of earlier versions / user-supplied exports (any input size), tried last.
+    static let legacyModelNames = ["yolo26n", "yolo11n", "yolov8n"]
+
+    /// Bundle resource names (`.mlmodelc`) in the order they are tried for a frame orientation and quality level.
+    static func candidateModelNames(landscape: Bool, level: DetectorQualityGovernor.Level) -> [String] {
+        let full = landscape ? landscapeModelName : portraitModelName
+        let lite = landscape ? liteLandscapeModelName : litePortraitModelName
+        let otherFull = landscape ? portraitModelName : landscapeModelName
+        let otherLite = landscape ? litePortraitModelName : liteLandscapeModelName
+        var names: [String] = level == .lite ? [lite, full] : [full, lite]
+        // A model of the other orientation still works (stretched), which beats having no detector at all.
+        names.append(contentsOf: level == .lite ? [otherLite, otherFull] : [otherFull, otherLite])
+        names.append(contentsOf: legacyModelNames)
+        return names
+    }
 
     /// Per-frame detection options (taken from the user settings).
     struct Options: Equatable, Sendable {
-        /// Minimum detector score ("уверенность", not accuracy).
-        var confidenceThreshold: Double = 0.35
+        /// Settings slider: minimum detector score ("уверенность", not accuracy) of cars / trucks / buses; the other
+        /// classes follow it with the offsets of `DetectionThresholds`.
+        var confidenceThreshold: Double = DetectionThresholds.defaultGlobal
         /// NMS IoU threshold (raw models and pipeline models with an `iouThreshold` input).
         var iouThreshold: Double = 0.45
         var trackPedestrians: Bool = true
@@ -64,69 +98,136 @@ final class VehicleDetector {
         var detections: [Detection]
         /// Wall-clock duration of the Vision request, milliseconds.
         var inferenceMs: Double
+        /// Bundle name of the model that produced the detections.
+        var modelName: String
     }
 
-    private(set) var status: ModelStatus = .loading
+    /// One loaded Core ML model with its Vision request.
+    private final class LoadedModel {
+        let name: String
+        let visionModel: VNCoreMLModel
+        let request: VNCoreMLRequest
+        let inputWidth: Double
+        let inputHeight: Double
+        /// True for `nms=True` exports (outputs `confidence` + `coordinates` → recognized-object observations).
+        let isPipeline: Bool
+        let classNames: [String]
+        let thresholdInputNames: Set<String>
+        var appliedThresholds: (confidence: Double, iou: Double)?
+        /// Crop option currently set on `request` (true = `.scaleFill`); nil until the first frame.
+        var usesFill: Bool?
 
-    private var coreMLModel: MLModel?
-    private var visionModel: VNCoreMLModel?
-    private var request: VNCoreMLRequest?
-    private var inputWidth: Double = 640
-    private var inputHeight: Double = 640
-    private var classNames: [String] = COCOLabels.names
-    private var thresholdInputNames: Set<String> = []
-    private var appliedThresholds: (confidence: Double, iou: Double)?
+        init(name: String, visionModel: VNCoreMLModel, request: VNCoreMLRequest, inputWidth: Double,
+             inputHeight: Double, isPipeline: Bool, classNames: [String], thresholdInputNames: Set<String>) {
+            self.name = name
+            self.visionModel = visionModel
+            self.request = request
+            self.inputWidth = inputWidth
+            self.inputHeight = inputHeight
+            self.isPipeline = isPipeline
+            self.classNames = classNames
+            self.thresholdInputNames = thresholdInputNames
+        }
+    }
+
+    /// State of the model used for the latest frame (or of the initial load).
+    private(set) var status: ModelStatus = .loading
+    /// Quality level requested for the next frames (the worker's `DetectorQualityGovernor` decides).
+    var preferredLevel: DetectorQualityGovernor.Level = .full
+
+    private var bundle: Bundle = .main
+    /// Loaded models by bundle name. Only models used for the current frame orientation are kept.
+    private var loadedModels: [String: LoadedModel] = [:]
+    /// Names that are not in the bundle or failed to load (not tried again).
+    private var unavailableNames: Set<String> = []
+    private var lastLoadError: String?
+    private var foundAnyModel = false
+    private var loadedForLandscape: Bool?
     /// Reused buffer for raw tensor values (avoids a large allocation per frame).
     private var tensorBuffer: [Float] = []
 
     // MARK: - Loading
 
-    /// Loads the first available detector model from `bundle`. Safe to call again (no-op when already ready).
+    /// Loads the detector for the given frame orientation from `bundle`. Safe to call again (no-op when already
+    /// ready). The model of the other orientation / quality level is loaded on first use by `detect`.
     @discardableResult
-    func load(bundle: Bundle = .main) -> ModelStatus {
+    func load(bundle: Bundle = .main, landscape: Bool = true) -> ModelStatus {
         if status.isReady { return status }
-        guard let located = Self.locateModel(in: bundle) else {
-            status = .missing
-            return status
-        }
-        let (name, url) = located
-        do {
-            let configuration = MLModelConfiguration()
-            configuration.computeUnits = .all
-            let model = try MLModel(contentsOf: url, configuration: configuration)
-            let vnModel = try VNCoreMLModel(for: model)
-            let request = VNCoreMLRequest(model: vnModel)
-            request.imageCropAndScaleOption = .scaleFit
-
-            let description = model.modelDescription
-            if let imageInput = description.inputDescriptionsByName.values.first(where: { $0.type == .image }),
-               let constraint = imageInput.imageConstraint,
-               constraint.pixelsWide > 0, constraint.pixelsHigh > 0 {
-                inputWidth = Double(constraint.pixelsWide)
-                inputHeight = Double(constraint.pixelsHigh)
-            }
-            thresholdInputNames = Set(description.inputDescriptionsByName.keys)
-                .intersection(["iouThreshold", "confidenceThreshold"])
-            classNames = Self.classNames(from: description) ?? COCOLabels.names
-
-            coreMLModel = model
-            visionModel = vnModel
-            self.request = request
-            appliedThresholds = nil
-            status = .ready(name)
-        } catch {
-            status = .failed(error.localizedDescription)
-        }
+        self.bundle = bundle
+        _ = model(landscape: landscape, level: preferredLevel)
         return status
     }
 
-    private static func locateModel(in bundle: Bundle) -> (String, URL)? {
-        for name in candidateModelNames {
-            if let url = bundle.url(forResource: name, withExtension: "mlmodelc") {
-                return (name, url)
+    /// The model for a frame orientation and quality level: the first candidate that is in the bundle and loads.
+    /// Updates `status`. Returns nil when no candidate is usable.
+    private func model(landscape: Bool, level: DetectorQualityGovernor.Level) -> LoadedModel? {
+        if let previous = loadedForLandscape, previous != landscape {
+            // The device was rotated: free the models of the previous orientation.
+            loadedModels.removeAll()
+        }
+        loadedForLandscape = landscape
+        for name in Self.candidateModelNames(landscape: landscape, level: level) {
+            if let loaded = loadedModels[name] {
+                setStatus(.ready(name))
+                return loaded
+            }
+            if unavailableNames.contains(name) { continue }
+            guard let url = bundle.url(forResource: name, withExtension: "mlmodelc") else {
+                unavailableNames.insert(name)
+                continue
+            }
+            foundAnyModel = true
+            do {
+                let loaded = try Self.loadModel(name: name, url: url)
+                loadedModels[name] = loaded
+                setStatus(.ready(name))
+                return loaded
+            } catch {
+                unavailableNames.insert(name)
+                lastLoadError = error.localizedDescription
             }
         }
+        setStatus(foundAnyModel ? .failed(lastLoadError ?? "") : .missing)
         return nil
+    }
+
+    private func setStatus(_ newStatus: ModelStatus) {
+        if status != newStatus { status = newStatus }
+    }
+
+    /// Loads one compiled model. CPU + Neural Engine is requested first (what the Ultralytics iOS SDK uses; keeps the
+    /// GPU free for the camera preview and the map); all compute units are the fallback when that fails.
+    private static func loadModel(name: String, url: URL) throws -> LoadedModel {
+        let model: MLModel
+        do {
+            let configuration = MLModelConfiguration()
+            configuration.computeUnits = .cpuAndNeuralEngine
+            model = try MLModel(contentsOf: url, configuration: configuration)
+        } catch {
+            let configuration = MLModelConfiguration()
+            configuration.computeUnits = .all
+            model = try MLModel(contentsOf: url, configuration: configuration)
+        }
+        let vnModel = try VNCoreMLModel(for: model)
+        let request = VNCoreMLRequest(model: vnModel)
+
+        let description = model.modelDescription
+        var inputWidth: Double = 640
+        var inputHeight: Double = 640
+        if let imageInput = description.inputDescriptionsByName.values.first(where: { $0.type == .image }),
+           let constraint = imageInput.imageConstraint,
+           constraint.pixelsWide > 0, constraint.pixelsHigh > 0 {
+            inputWidth = Double(constraint.pixelsWide)
+            inputHeight = Double(constraint.pixelsHigh)
+        }
+        let outputs = description.outputDescriptionsByName
+        let isPipeline = outputs["coordinates"] != nil && outputs["confidence"] != nil
+        let thresholdInputNames = Set(description.inputDescriptionsByName.keys)
+            .intersection(["iouThreshold", "confidenceThreshold"])
+        let classNames = Self.classNames(from: description) ?? COCOLabels.names
+        return LoadedModel(name: name, visionModel: vnModel, request: request, inputWidth: inputWidth,
+                           inputHeight: inputHeight, isPipeline: isPipeline, classNames: classNames,
+                           thresholdInputNames: thresholdInputNames)
     }
 
     /// Class names from the model: `classLabels` (classifier-style metadata) or the Ultralytics `names`
@@ -158,12 +259,23 @@ final class VehicleDetector {
 
     /// Runs the detector on the frame behind `handler` (created with orientation `.up` for an upright buffer).
     /// - Parameters:
-    ///   - imageWidth/imageHeight: pixel size of the buffer (needed to undo the `.scaleFit` letterbox).
-    /// - Returns: nil when the model is not loaded or Vision failed.
+    ///   - imageWidth/imageHeight: pixel size of the buffer (selects the landscape / portrait model and, for raw
+    ///     models of another aspect ratio, undoes the `.scaleFit` letterbox).
+    /// - Returns: nil when no model is usable or Vision failed.
     func detect(handler: VNImageRequestHandler, imageWidth: Int, imageHeight: Int, options: Options) -> Output? {
-        guard let request, let visionModel else { return nil }
-        updateThresholds(on: visionModel, options: options)
+        let landscape = DetectorInputGeometry.isLandscape(width: Double(imageWidth), height: Double(imageHeight))
+        guard let loaded = model(landscape: landscape, level: preferredLevel) else { return nil }
+        let geometry = DetectorInputGeometry(inputWidth: loaded.inputWidth, inputHeight: loaded.inputHeight,
+                                             sourceWidth: Double(imageWidth), sourceHeight: Double(imageHeight))
+        let fill = loaded.isPipeline || geometry.fit == .fill
+        if loaded.usesFill != fill {
+            loaded.request.imageCropAndScaleOption = fill ? .scaleFill : .scaleFit
+            loaded.usesFill = fill
+        }
+        let floor = DetectionThresholds.detectorFloor(global: options.confidenceThreshold)
+        updateThresholds(on: loaded, confidence: floor, iou: options.iouThreshold)
 
+        let request = loaded.request
         let start = DispatchTime.now().uptimeNanoseconds
         do {
             try handler.perform([request])
@@ -176,70 +288,87 @@ final class VehicleDetector {
         var detections: [Detection] = []
         let objects = results.compactMap { $0 as? VNRecognizedObjectObservation }
         if !objects.isEmpty {
-            detections = mapRecognizedObjects(objects, options: options)
+            detections = mapRecognizedObjects(objects, floor: floor, options: options)
         } else {
             let features = results.compactMap { $0 as? VNCoreMLFeatureValueObservation }
-            detections = decodeRawFeatures(features, imageWidth: imageWidth, imageHeight: imageHeight, options: options)
+            detections = decodeRawFeatures(features, model: loaded, floor: floor,
+                                           sourceWidth: fill ? nil : Double(imageWidth),
+                                           sourceHeight: fill ? nil : Double(imageHeight), options: options)
         }
-        return Output(detections: detections, inferenceMs: elapsedMs)
+        // One object reported as car + truck (per-class NMS) would open two tracks.
+        detections = CrossClassDuplicates.suppress(detections)
+        return Output(detections: Array(detections.prefix(options.maxDetections)), inferenceMs: elapsedMs,
+                      modelName: loaded.name)
     }
 
     /// Feeds the NMS thresholds into pipeline models that expose them as optional inputs.
-    private func updateThresholds(on model: VNCoreMLModel, options: Options) {
-        guard !thresholdInputNames.isEmpty else { return }
-        let confidence = min(max(options.confidenceThreshold, 0.01), 0.99)
-        let iou = min(max(options.iouThreshold, 0.05), 0.95)
-        if let applied = appliedThresholds, applied.confidence == confidence, applied.iou == iou { return }
+    private func updateThresholds(on loaded: LoadedModel, confidence rawConfidence: Double, iou rawIoU: Double) {
+        guard !loaded.thresholdInputNames.isEmpty else { return }
+        let confidence = min(max(rawConfidence, 0.01), 0.99)
+        let iou = min(max(rawIoU, 0.05), 0.95)
+        if let applied = loaded.appliedThresholds, applied.confidence == confidence, applied.iou == iou { return }
         var values: [String: Any] = [:]
-        if thresholdInputNames.contains("confidenceThreshold") {
+        if loaded.thresholdInputNames.contains("confidenceThreshold") {
             values["confidenceThreshold"] = MLFeatureValue(double: confidence)
         }
-        if thresholdInputNames.contains("iouThreshold") {
+        if loaded.thresholdInputNames.contains("iouThreshold") {
             values["iouThreshold"] = MLFeatureValue(double: iou)
         }
         if let provider = try? MLDictionaryFeatureProvider(dictionary: values) {
-            model.featureProvider = provider
-            appliedThresholds = (confidence, iou)
+            loaded.visionModel.featureProvider = provider
+            loaded.appliedThresholds = (confidence, iou)
         }
     }
 
-    private func mapRecognizedObjects(_ objects: [VNRecognizedObjectObservation], options: Options) -> [Detection] {
+    /// True when the tracker can use a detection of this class and score at all (class threshold × continuation
+    /// factor). Everything else is dropped here so it does not use up `maxDetections`.
+    private static func isUsable(kind: VehicleKind, confidence: Double, options: Options) -> Bool {
+        let threshold = DetectionThresholds.threshold(for: kind, global: options.confidenceThreshold)
+        return confidence >= threshold * DetectionThresholds.continuationFactor
+    }
+
+    private func mapRecognizedObjects(_ objects: [VNRecognizedObjectObservation], floor: Double,
+                                      options: Options) -> [Detection] {
         var detections: [Detection] = []
         detections.reserveCapacity(objects.count)
         for object in objects {
             guard let top = object.labels.first else { continue }
             let confidence = Double(object.confidence)
-            guard confidence >= options.confidenceThreshold,
-                  let kind = Self.acceptedKind(label: top.identifier, classIndex: nil, options: options) else { continue }
+            guard confidence >= floor,
+                  let kind = Self.acceptedKind(label: top.identifier, classIndex: nil, options: options),
+                  Self.isUsable(kind: kind, confidence: confidence, options: options) else { continue }
+            // `.scaleFill`: the box is normalised to the model input, which is the whole frame.
             let box = BBox(visionRect: object.boundingBox).clamped
             guard box.width > 0.002, box.height > 0.002 else { continue }
             detections.append(Detection(kind: kind, label: top.identifier, confidence: confidence, box: box))
         }
         detections.sort { $0.confidence > $1.confidence }
-        return Array(detections.prefix(options.maxDetections))
+        return detections
     }
 
-    private func decodeRawFeatures(_ features: [VNCoreMLFeatureValueObservation], imageWidth: Int, imageHeight: Int,
+    private func decodeRawFeatures(_ features: [VNCoreMLFeatureValueObservation], model loaded: LoadedModel,
+                                   floor: Double, sourceWidth: Double?, sourceHeight: Double?,
                                    options: Options) -> [Detection] {
         // The detection head is the largest multi-array output (segmentation models also emit mask prototypes).
         let arrays = features.compactMap { $0.featureValue.multiArrayValue }.filter { $0.shape.count >= 2 }
         guard let tensor = arrays.max(by: { $0.count < $1.count }),
               let shape = Self.copyFloats(from: tensor, into: &tensorBuffer) else { return [] }
         let raw = YOLODecoder.decode(values: tensorBuffer, shape: shape,
-                                     inputWidth: inputWidth, inputHeight: inputHeight,
-                                     confidenceThreshold: options.confidenceThreshold,
+                                     inputWidth: loaded.inputWidth, inputHeight: loaded.inputHeight,
+                                     confidenceThreshold: floor,
                                      iouThreshold: options.iouThreshold,
                                      maxDetections: options.maxDetections * 2,
-                                     sourceWidth: imageWidth > 0 ? Double(imageWidth) : nil,
-                                     sourceHeight: imageHeight > 0 ? Double(imageHeight) : nil)
+                                     sourceWidth: sourceWidth, sourceHeight: sourceHeight)
+        let classNames = loaded.classNames
         var detections: [Detection] = []
         detections.reserveCapacity(raw.count)
         for item in raw {
             let label = classNames.indices.contains(item.classIndex) ? classNames[item.classIndex] : COCOLabels.name(for: item.classIndex)
-            guard let kind = Self.acceptedKind(label: label, classIndex: item.classIndex, options: options) else { continue }
+            guard let kind = Self.acceptedKind(label: label, classIndex: item.classIndex, options: options),
+                  Self.isUsable(kind: kind, confidence: item.score, options: options) else { continue }
             detections.append(Detection(kind: kind, label: label, confidence: item.score, box: item.box))
         }
-        return Array(detections.prefix(options.maxDetections))
+        return detections
     }
 
     /// Maps a label to a `VehicleKind` and applies the class filters from the settings.

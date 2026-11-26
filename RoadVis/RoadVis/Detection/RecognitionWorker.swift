@@ -11,7 +11,8 @@ import Vision
 /// `recognition.processing` queue — never on the main actor.
 ///
 /// Threading contract
-/// - `detector`, `makeClassifier`, `tracker`, `estimator`, `leadTracker` and the frame statistics are confined to `queue`.
+/// - `detector`, `makeClassifier`, `tracker`, `estimator`, `leadTracker`, `qualityGovernor` and the frame statistics
+///   are confined to `queue`.
 /// - Inputs coming from the main actor (GPS, settings), the activity flags and the handlers are lock-protected.
 /// - The experiment recording has its own lock so the main actor can stop it without waiting for inference.
 /// - Results are delivered through `outputHandler` (called on `queue`, at most `maxFramesPerSecond` times per second).
@@ -47,7 +48,7 @@ final class RecognitionWorker: @unchecked Sendable {
         var uniqueCounts: [VehicleKind: Int]
         var fps: Double
         var inferenceMs: Double
-        /// Colour of the largest currently visible confirmed traffic light with ≥ 5 hits and confidence ≥ 0.5
+        /// Colour of the largest currently visible confirmed traffic light with ≥ 5 hits and peak confidence ≥ 0.5
         /// (`.unknown` when not determined); nil when none.
         var lightColor: TrafficLightColor?
         /// Size of the processed (upright) buffer, pixels.
@@ -93,9 +94,16 @@ final class RecognitionWorker: @unchecked Sendable {
 
     /// Upper bound of the processing rate (the camera delivers 30 fps).
     static let maxFramesPerSecond: Double = 15
-    /// A traffic light drives the colour indicator only with this many hits and this detector confidence.
+    /// A traffic light drives the colour indicator only with this many hits and once the track has reached this
+    /// detector confidence (`TrackedObject.peakConfidence` — the best score so far, so a one-frame dip of a solid
+    /// light no longer blanks the indicator). Kept at 0.5 whatever the slider says: in the BDD100K measurement
+    /// (see `DetectionThresholds`) traffic-light precision was only ≈ 50–58 % at 0.25.
     static let lightMinHits = 5
     static let lightMinConfidence = 0.5
+    /// A pedestrian can raise a warning once its track has reached this detector confidence (plus the hit / shape
+    /// checks of `PedestrianHazardDetector`). Same value as the person threshold at the default slider position;
+    /// the previous 0.55 was stacked on top of the tracker's own 0.5.
+    static let pedestrianMinConfidence = DetectionThresholds.threshold(for: .person)
     /// Lane detection interval, seconds (≈ 5 Hz).
     static let laneInterval: TimeInterval = 0.2
     /// Width of the downsampled image analysed by the lane detector, pixels.
@@ -107,8 +115,14 @@ final class RecognitionWorker: @unchecked Sendable {
     // MARK: Queue-confined
     private let detector = VehicleDetector()
     private let makeClassifier = MakeClassifier()
-    /// Persons are counted only once they are on / at the roadway (`PersonSceneResult.relevantIDs`).
+    /// Persons are counted only once they are on / at the roadway (`PersonSceneResult.relevantIDs`). The per-class
+    /// confidence table (`tracker.minConfidence`) is refreshed from the settings slider on every frame.
     private let tracker = ObjectTracker(config: ObjectTracker.Config(deferredCountKinds: [.person]))
+    /// Full (YOLO11s) vs lite (YOLO11n) detector, decided from the measured inference time and the thermal state.
+    private var qualityGovernor = DetectorQualityGovernor(config: .iOS)
+    private var appliedConfidence: Double?
+    private var reportedDetectorStatus: ModelStatus = .loading
+    private var makeClassifierStatus: ModelStatus = .loading
     private let estimator = MonocularSpeedEstimator()
     private let leadTracker = LeadVehicleTracker()
     private let laneDetector = LaneDetector()
@@ -139,6 +153,7 @@ final class RecognitionWorker: @unchecked Sendable {
 
     init(camera: CameraService) {
         self.camera = camera
+        pedestrianDetector.minConfidence = Self.pedestrianMinConfidence
     }
 
     // MARK: - Configuration (any thread)
@@ -166,12 +181,17 @@ final class RecognitionWorker: @unchecked Sendable {
     /// Loads the detector and the make classifier on the processing queue and reports their status.
     func loadModels() {
         queue.async { [self] in
-            let detectorStatus = detector.load()
+            // Orientation hint: the rotation applied to the camera output (90° / 270° = upright portrait frames).
+            // A wrong guess only costs time — the model for the real frame shape is loaded with the first frame.
+            let angle = Int(camera.videoRotationAngle.rounded())
+            let detectorStatus = detector.load(landscape: angle % 180 == 0)
+            reportedDetectorStatus = detectorStatus
             locked { detectorReady = detectorStatus.isReady }
             // Report the detector right away; the make classifier is optional and may take a moment more.
             statusHandler?(ModelStatuses(detector: detectorStatus, makeClassifier: .loading))
             let makeStatus = makeClassifier.load()
-            statusHandler?(ModelStatuses(detector: detectorStatus, makeClassifier: makeStatus))
+            makeClassifierStatus = makeStatus
+            statusHandler?(ModelStatuses(detector: reportedDetectorStatus, makeClassifier: makeStatus))
         }
     }
 
@@ -190,6 +210,11 @@ final class RecognitionWorker: @unchecked Sendable {
             queue.async { [self] in
                 lastFrameTimestamp = nil
                 fpsEstimate = 0
+                // Live tracks must not survive the gap: after minutes in the navigator / background the first
+                // frame would continue them (confirmed state, hits, make / colour / role votes) with whatever
+                // overlaps their old boxes. Unique counters and track IDs are kept (`reset(generation:)` clears those).
+                tracker.dropTracks()
+                estimator.reset()
                 leadTracker.reset()
                 laneDetector.reset()
                 pedestrianDetector.reset()
@@ -293,10 +318,13 @@ final class RecognitionWorker: @unchecked Sendable {
 
         // Frames are rotated upright by the capture connection, so Vision always uses `.up`.
         let handler = VNImageRequestHandler(cvPixelBuffer: pixelBuffer, orientation: .up, options: [:])
-        guard let result = detector.detect(handler: handler, imageWidth: width, imageHeight: height,
-                                           options: frameInputs.detection) else {
+        let detectorOutput = detector.detect(handler: handler, imageWidth: width, imageHeight: height,
+                                             options: frameInputs.detection)
+        // The model in use changes with the frame orientation and the quality level (or fails to load lazily).
+        publishDetectorStatusIfChanged()
+        guard let result = detectorOutput else {
             // No detector: still publish the lane estimate so the lane overlay / departure warning work.
-            if frameInputs.laneDetectionEnabled, !locked({ detectorReady }) {
+            if frameInputs.laneDetectionEnabled, !detector.status.isReady {
                 outputHandler?(Output(generation: generation, tracks: [], visibleCounts: [:],
                                       uniqueCounts: tracker.uniqueCounts, fps: fpsEstimate, inferenceMs: 0,
                                       lightColor: nil, frameSize: CGSize(width: width, height: height),
@@ -306,6 +334,18 @@ final class RecognitionWorker: @unchecked Sendable {
             }
             return
         }
+        // Full ↔ lite detector for the next frames, from this frame's inference time and the thermal state.
+        let thermal = ProcessInfo.processInfo.thermalState
+        detector.preferredLevel = qualityGovernor.record(
+            inferenceMs: result.inferenceMs, constrained: thermal == .serious || thermal == .critical,
+            timestamp: ProcessInfo.processInfo.systemUptime)
+        // One threshold table for the detector floor and the tracker (no second hidden per-class filter).
+        let confidence = frameInputs.detection.confidenceThreshold
+        if appliedConfidence != confidence {
+            tracker.minConfidence = DetectionThresholds.perClass(global: confidence)
+            appliedConfidence = confidence
+        }
+
         var detections = result.detections
         classifyTrafficLights(&detections, in: pixelBuffer, width: width, height: height)
         classifyPersonRoles(&detections, in: pixelBuffer, width: width, height: height)
@@ -348,7 +388,7 @@ final class RecognitionWorker: @unchecked Sendable {
             visibleCounts[track.kind, default: 0] += 1
             // Indicator only for a solid, currently visible light (no flicker from one-off false positives).
             if track.kind == .trafficLight, track.missed == 0, track.hits >= Self.lightMinHits,
-               track.confidence >= Self.lightMinConfidence, track.box.area > (largestLight?.box.area ?? 0) {
+               track.peakConfidence >= Self.lightMinConfidence, track.box.area > (largestLight?.box.area ?? 0) {
                 largestLight = track
             }
         }
@@ -487,6 +527,14 @@ final class RecognitionWorker: @unchecked Sendable {
                 rectX: Int((box.x * Double(width)).rounded(.down)), rectY: Int((box.y * Double(height)).rounded(.down)),
                 rectWidth: rectWidth, rectHeight: rectHeight, step: step)
         }
+    }
+
+    /// Reports the detector status again when the model in use changed (orientation / quality level / lazy load).
+    private func publishDetectorStatusIfChanged() {
+        let current = detector.status
+        guard current != reportedDetectorStatus else { return }
+        reportedDetectorStatus = current
+        statusHandler?(ModelStatuses(detector: current, makeClassifier: makeClassifierStatus))
     }
 
     /// Exponential moving averages of the processing rate and the inference time.

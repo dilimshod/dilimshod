@@ -1,6 +1,9 @@
 package uz.roadvis.app.camera
 
 import android.content.Context
+import android.content.res.Configuration
+import android.os.Build
+import android.os.PowerManager
 import android.os.SystemClock
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.ImageProxy
@@ -9,6 +12,8 @@ import uz.roadvis.app.detection.ModelStatus
 import uz.roadvis.app.detection.YoloDetector
 import uz.roadvis.core.CameraGeometry
 import uz.roadvis.core.Detection
+import uz.roadvis.core.DetectionThresholds
+import uz.roadvis.core.DetectorQualityGovernor
 import uz.roadvis.core.EgoCorridor
 import uz.roadvis.core.LaneDetector
 import uz.roadvis.core.LaneEstimate
@@ -93,15 +98,27 @@ class RecognitionWorker(context: Context) : ImageAnalysis.Analyzer {
     @Volatile private var active = false
     @Volatile private var detectorReady = false
 
+    private val appContext: Context = context.applicationContext
+
     // Executor-confined
     private val detector = YoloDetector(context.applicationContext)
     private val makeClassifier = MakeClassifier(context.applicationContext)
-    /** Persons are counted only once they are on / at the roadway (`PersonSceneResult.relevantIDs`). */
+    /**
+     * Persons are counted only once they are on / at the roadway (`PersonSceneResult.relevantIDs`). The per-class
+     * confidence table ([ObjectTracker.minConfidence]) follows the settings slider.
+     */
     private val tracker = ObjectTracker(ObjectTracker.Config(deferredCountKinds = setOf(VehicleKind.PERSON)))
+    /** 384×640 vs 544×960 detector input, decided from the measured inference time and the thermal status. */
+    private val qualityGovernor = DetectorQualityGovernor(DetectorQualityGovernor.Config.android)
+    private var appliedConfidence = Double.NaN
+    private var reportedDetectorStatus: ModelStatus = ModelStatus.Loading
+    private var makeClassifierStatus: ModelStatus = ModelStatus.Loading
+    private var thermalConstrained = false
+    private var lastThermalCheck = Double.NEGATIVE_INFINITY
     private val estimator = MonocularSpeedEstimator()
     private val leadTracker = LeadVehicleTracker()
     private val laneDetector = LaneDetector()
-    private val pedestrianDetector = PedestrianHazardDetector()
+    private val pedestrianDetector = PedestrianHazardDetector().apply { minConfidence = PEDESTRIAN_MIN_CONFIDENCE }
     private val roadwayEstimator = RoadwayZoneEstimator()
     private var lastLaneUptime = Double.NEGATIVE_INFINITY
     private var laneEstimate: LaneEstimate? = null
@@ -117,11 +134,15 @@ class RecognitionWorker(context: Context) : ImageAnalysis.Analyzer {
     /** Loads the detector and the make classifier on the processing thread and reports their status. */
     fun loadModels() {
         executor.execute {
-            val detectorStatus = detector.load()
+            // Orientation hint for the first session; the one for the real frame shape is created with the first frame.
+            val landscape = appContext.resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
+            val detectorStatus = detector.load(landscape)
+            reportedDetectorStatus = detectorStatus
             detectorReady = detectorStatus.isReady
             statusHandler?.invoke(ModelStatuses(detectorStatus, ModelStatus.Loading))
             val makeStatus = makeClassifier.load()
-            statusHandler?.invoke(ModelStatuses(detectorStatus, makeStatus))
+            makeClassifierStatus = makeStatus
+            statusHandler?.invoke(ModelStatuses(reportedDetectorStatus, makeStatus))
         }
     }
 
@@ -134,6 +155,10 @@ class RecognitionWorker(context: Context) : ImageAnalysis.Analyzer {
             } else {
                 lastFrameTimestamp = null
                 fpsEstimate = 0.0
+                // Live tracks must not survive the gap (they would be continued by whatever overlaps their old
+                // boxes when frames come back). Unique counters and track IDs are kept.
+                tracker.dropTracks()
+                estimator.reset()
                 leadTracker.reset()
                 laneDetector.reset()
                 pedestrianDetector.reset()
@@ -207,6 +232,12 @@ class RecognitionWorker(context: Context) : ImageAnalysis.Analyzer {
         updateLanes(rgba, width, height, bytesPerRow, inputs)
 
         val result = if (detectorReady) detector.detect(rgba, width, height, bytesPerRow, inputs.detection) else null
+        // The session in use changes with the frame orientation and the quality level.
+        val detectorStatus = detector.status
+        if (detectorReady && detectorStatus != reportedDetectorStatus) {
+            reportedDetectorStatus = detectorStatus
+            statusHandler?.invoke(ModelStatuses(detectorStatus, makeClassifierStatus))
+        }
         if (result == null) {
             // No detector: still publish the lane estimate so the lane overlay / departure warning work.
             if (inputs.laneDetectionEnabled && !detectorReady) {
@@ -216,6 +247,15 @@ class RecognitionWorker(context: Context) : ImageAnalysis.Analyzer {
             }
             return
         }
+        // Input size for the next frames, from this frame's inference time and the thermal status.
+        detector.preferredLevel = qualityGovernor.record(result.inferenceMs, isThermalConstrained(), uptimeSeconds())
+        // One threshold table for the decoder floor and the tracker (no second hidden per-class filter).
+        val confidence = inputs.detection.confidenceThreshold
+        if (appliedConfidence != confidence) {
+            tracker.minConfidence = DetectionThresholds.perClass(confidence)
+            appliedConfidence = confidence
+        }
+
         var detections = result.detections
         detections = classifyTrafficLights(detections, rgba, width, height, bytesPerRow)
         detections = classifyPersonRoles(detections, rgba, width, height, bytesPerRow)
@@ -247,7 +287,7 @@ class RecognitionWorker(context: Context) : ImageAnalysis.Analyzer {
             visibleCounts[t.kind] = (visibleCounts[t.kind] ?: 0) + 1
             // Indicator only for a solid, currently visible light (no flicker from one-off false positives).
             if (t.kind == VehicleKind.TRAFFIC_LIGHT && t.missed == 0 && t.hits >= LIGHT_MIN_HITS &&
-                t.confidence >= LIGHT_MIN_CONFIDENCE && t.box.area > (largestLight?.box?.area ?: 0.0)
+                t.peakConfidence >= LIGHT_MIN_CONFIDENCE && t.box.area > (largestLight?.box?.area ?: 0.0)
             ) largestLight = t
         }
         val lightColor = largestLight?.let { it.lightColor ?: TrafficLightColor.UNKNOWN }
@@ -351,6 +391,22 @@ class RecognitionWorker(context: Context) : ImageAnalysis.Analyzer {
         }
     }
 
+    /** True while the system reports thermal status "severe" or worse (API 29+; polled every few seconds). */
+    private fun isThermalConstrained(): Boolean {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return false
+        val now = uptimeSeconds()
+        if (now - lastThermalCheck >= THERMAL_CHECK_INTERVAL) {
+            lastThermalCheck = now
+            thermalConstrained = try {
+                val power = appContext.getSystemService(Context.POWER_SERVICE) as? PowerManager
+                (power?.currentThermalStatus ?: PowerManager.THERMAL_STATUS_NONE) >= PowerManager.THERMAL_STATUS_SEVERE
+            } catch (_: Throwable) {
+                false
+            }
+        }
+        return thermalConstrained
+    }
+
     /** Exponential moving averages of the processing rate and the inference time. */
     private fun updateStatistics(timestamp: Double, inferenceMs: Double) {
         lastFrameTimestamp?.let { last ->
@@ -368,9 +424,17 @@ class RecognitionWorker(context: Context) : ImageAnalysis.Analyzer {
     companion object {
         /** Upper bound of the processing rate (the camera delivers 30 fps). */
         const val MAX_FPS = 15.0
-        /** A traffic light drives the colour indicator only with this many hits and this detector confidence. */
+        /**
+         * A traffic light drives the colour indicator only with this many hits and once the track has reached this
+         * detector confidence ([TrackedObject.peakConfidence]). Kept at 0.5 whatever the slider says: traffic-light
+         * precision was only ≈ 50–58 % at 0.25 in the BDD100K measurement (see [DetectionThresholds]).
+         */
         const val LIGHT_MIN_HITS = 5
         const val LIGHT_MIN_CONFIDENCE = 0.5
+        /** A pedestrian can raise a warning once its track has reached the person threshold of the default slider. */
+        val PEDESTRIAN_MIN_CONFIDENCE = DetectionThresholds.threshold(VehicleKind.PERSON, DetectionThresholds.DEFAULT_GLOBAL_NANO)
+        /** Seconds between thermal status polls. */
+        const val THERMAL_CHECK_INTERVAL = 5.0
         /** Lane detection interval, seconds (≈ 5 Hz). */
         const val LANE_INTERVAL = 0.2
         /** Width of the downsampled image analysed by the lane detector, pixels. */

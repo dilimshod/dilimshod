@@ -57,7 +57,13 @@ class PedestrianHazardTest {
         val d = PedestrianHazardDetector()
         val p = person(1, 0.5, 0.7, t = 0.0)
         p.confidence = 0.45
+        p.peakConfidence = 0.45
         assertTrue(d.update(listOf(p), 40.0, g, 0.0).isEmpty())
+        // A one-frame dip of a track that was solid before does not silence the warning.
+        val dip = person(3, 0.5, 0.7, t = 0.0)
+        dip.confidence = 0.45
+        assertEquals(0.8, dip.peakConfidence, 1e-9)
+        assertEquals(PedestrianHazardLevel.DANGER, d.update(listOf(dip), 40.0, g, 0.0).firstOrNull()?.level)
         val q = person(2, 0.5, 0.7, t = 0.0)
         q.hits = 2
         assertTrue(d.update(listOf(q), 40.0, g, 0.0).isEmpty())

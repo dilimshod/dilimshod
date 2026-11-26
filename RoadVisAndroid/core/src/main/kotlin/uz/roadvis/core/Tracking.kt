@@ -34,6 +34,12 @@ data class TrackedObject(
     var estimatedSpeedKmh: Double? = null,
     /** Majority of recent person-role observations (≥ 5 needed; null before / for non-persons). Colour heuristic. */
     var personRole: PersonRole? = null,
+    /**
+     * Highest detector confidence the track has had so far. Gates that ask "is this a solid object?" use it instead of
+     * the latest frame's score, which dips on single frames (and may sit below the class threshold while a confirmed
+     * track is continued by a low-score detection).
+     */
+    var peakConfidence: Double = confidence,
 )
 
 /**
@@ -59,16 +65,32 @@ class ObjectTracker(val config: Config = Config()) {
         val maxAreaRatio: Double = 2.5,
         /** Unconfirmed (tentative) tracks are dropped after this many missed frames. */
         val maxMissedTentative: Int = 2,
-        /** Per-class minimum detector confidence applied before tracking (classes not listed: no extra filter). */
+        /**
+         * Per-class minimum detector confidence needed to open a track (classes not listed: no filter). Initial value
+         * of [ObjectTracker.minConfidence], which the owner may replace per frame (settings slider).
+         */
         val minConfidence: Map<VehicleKind, Double> = defaultMinConfidence,
         /** Kinds counted only when the owner marks the confirmed track relevant ([markRelevant]). */
         val deferredCountKinds: Set<VehicleKind> = emptySet(),
+        /**
+         * A detection scoring below its class minimum but at least `minimum × continuationFactor` may still continue
+         * an already confirmed track (it never opens a track). 1 = off.
+         */
+        val continuationFactor: Double = DetectionThresholds.CONTINUATION_FACTOR,
+        /** Tracks not seen for longer than this are forgotten before matching, seconds (frames may just stop). */
+        val maxIdleSeconds: Double = 3.0,
     ) {
         companion object {
-            val defaultMinConfidence: Map<VehicleKind, Double> =
-                mapOf(VehicleKind.TRAFFIC_LIGHT to 0.5, VehicleKind.STOP_SIGN to 0.55, VehicleKind.PERSON to 0.5)
+            /** Thresholds at the default slider position, see [DetectionThresholds]. */
+            val defaultMinConfidence: Map<VehicleKind, Double> = DetectionThresholds.perClass()
         }
     }
+
+    /**
+     * Per-class confidence needed to open a track. Starts as [Config.minConfidence]; the app sets it from the settings
+     * slider ([DetectionThresholds.perClass]) — the same table the detector floor is derived from.
+     */
+    var minConfidence: Map<VehicleKind, Double> = config.minConfidence
 
     private class MakeVote(var count: Int, var confidenceSum: Double)
 
@@ -99,12 +121,33 @@ class ObjectTracker(val config: Config = Config()) {
         nextID = 1
     }
 
+    /**
+     * Forgets the live tracks but keeps the unique counters and the ID sequence. Call it when frames stop for a while
+     * (pause, background): otherwise the first frame after the gap would continue the old tracks — confirmed state,
+     * hit count, make / colour / role votes — with whatever overlaps their last boxes.
+     */
+    fun dropTracks() {
+        states.clear()
+    }
+
     fun update(detections: List<Detection>, timestamp: Double): List<TrackedObject> {
         frameDetectionCount += detections.size
 
-        val dets = detections.filter { d ->
-            val minimum = config.minConfidence[d.kind] ?: return@filter true
-            d.confidence >= minimum
+        // Tracks whose last observation is too old (frames stopped without dropTracks()) are not continued.
+        if (config.maxIdleSeconds > 0) states.removeAll { timestamp - it.obj.lastSeen > config.maxIdleSeconds }
+
+        // Per-class confidence filter with hysteresis: at or above the class minimum a detection may open a track;
+        // between `minimum × continuationFactor` and the minimum it may only continue a confirmed track.
+        val factor = min(1.0, max(0.0, config.continuationFactor))
+        val dets = ArrayList<Detection>(detections.size)
+        val canSpawn = ArrayList<Boolean>(detections.size)
+        for (d in detections) {
+            val minimum = minConfidence[d.kind] ?: 0.0
+            if (d.confidence >= minimum) {
+                dets.add(d); canSpawn.add(true)
+            } else if (d.confidence >= minimum * factor) {
+                dets.add(d); canSpawn.add(false)
+            }
         }
 
         val predicted: List<BBox> = states.map { st ->
@@ -124,6 +167,8 @@ class ObjectTracker(val config: Config = Config()) {
             val p = predicted[ti]
             for ((di, d) in dets.withIndex()) {
                 if (!compatible(st.obj.kind, d.kind)) continue
+                // Low-score detections only keep confirmed tracks alive.
+                if (!canSpawn[di] && !st.obj.isConfirmed) continue
                 val iou = p.iou(d.box)
                 val penalty = if (st.obj.kind == d.kind) 0.0 else 0.05
                 var score = -1.0
@@ -157,7 +202,7 @@ class ObjectTracker(val config: Config = Config()) {
         states.removeAll { st -> st.obj.missed > (if (st.obj.isConfirmed) config.maxMissed else config.maxMissedTentative) }
 
         for ((di, d) in dets.withIndex()) {
-            if (detMatched[di]) continue
+            if (detMatched[di] || !canSpawn[di]) continue
             val st = State(TrackedObject(id = nextID, kind = d.kind, label = d.label, box = d.box,
                 confidence = d.confidence, firstSeen = timestamp, lastSeen = timestamp))
             nextID += 1
@@ -200,6 +245,7 @@ class ObjectTracker(val config: Config = Config()) {
         val o = st.obj
         o.box = newBox
         o.confidence = d.confidence
+        o.peakConfidence = max(o.peakConfidence, d.confidence)
         o.hits += 1
         o.missed = 0
         o.lastSeen = timestamp

@@ -1,9 +1,19 @@
 #!/usr/bin/env python3
 """Export an Ultralytics YOLO detector to Core ML for the RoadVis iOS app.
 
-The app looks for a model named ``RoadVisDetector`` (then ``yolo26n``, ``yolo11n``, ``yolov8n``) inside the
-app bundle. Xcode compiles every ``*.mlpackage`` placed in ``RoadVis/RoadVis/Models/`` (a synchronized
-folder) into ``<name>.mlmodelc`` automatically, so exporting to the default ``--out`` path is all that is needed.
+The app bundles four detector packages (``VehicleDetector.swift`` picks one per frame orientation and load tier):
+
+* ``RoadVisDetector``             — YOLO11s, 544x960 (HxW), landscape camera frames 1920x1080
+* ``RoadVisDetectorPortrait``     — YOLO11s, 960x544, portrait camera frames 1080x1920
+* ``RoadVisDetectorLite``         — YOLO11n, 544x960, used while inference is too slow / the phone is hot
+* ``RoadVisDetectorLitePortrait`` — YOLO11n, 960x544
+
+``--bundle`` exports all four in one go. The input is rectangular 16:9 on purpose: the camera frame fills the whole
+model input (Vision ``.scaleFill``, 0.7 % stretch), nothing is spent on letterbox padding. Legacy single square
+models (``yolo26n``, ``yolo11n``, ``yolov8n`` or a square ``RoadVisDetector``) still load as a fallback.
+
+Xcode compiles every ``*.mlpackage`` placed in ``RoadVis/RoadVis/Models/`` (a synchronized folder) into
+``<name>.mlmodelc`` automatically, so exporting to the default ``--out`` path is all that is needed.
 
 Two output layouts are supported by the app:
 
@@ -16,9 +26,14 @@ Examples (macOS or Linux, Python 3.10–3.13)::
 
     python3 -m venv .venv && source .venv/bin/activate
     pip install -r tools/requirements.txt
-    python tools/export_yolo_coreml.py                           # yolo11n.pt, 640 px, NMS, FP16
-    python tools/export_yolo_coreml.py --weights yolo26n.pt      # newest Ultralytics model
-    python tools/export_yolo_coreml.py --quantize 8              # ~2x smaller, slightly less accurate
+    python tools/export_yolo_coreml.py --bundle --force          # the four packages shipped in the repo
+    python tools/export_yolo_coreml.py --weights yolo11s.pt --imgsz 544 960 --force      # one package (H W)
+    python tools/export_yolo_coreml.py --weights yolo26s.pt --imgsz 544 960 --force      # newest Ultralytics model
+    python tools/export_yolo_coreml.py --imgsz 640               # legacy square yolo11n (letterboxed by the app)
+    python tools/export_yolo_coreml.py --bundle --quantize 8     # ~2x smaller, slightly less accurate
+    python tools/export_yolo_coreml.py --check photo.jpg --out RoadVis/Models/RoadVisDetector.mlpackage
+        # no export: runs the detector stage of an existing package on a photo (macOS only — Core ML
+        # prediction does not exist on Linux; there only the spec printed after the export can be checked)
 
 Licence: Ultralytics code and pretrained weights are AGPL-3.0 (or an Ultralytics Enterprise licence).
 Distributing an app that embeds these weights has licence implications — read Models/README.md.
@@ -32,7 +47,16 @@ import sys
 from pathlib import Path
 
 REPO_APP_DIR = Path(__file__).resolve().parent.parent  # .../RoadVis
-DEFAULT_OUT = REPO_APP_DIR / "RoadVis" / "Models" / "RoadVisDetector.mlpackage"
+MODELS_DIR = REPO_APP_DIR / "RoadVis" / "Models"
+DEFAULT_OUT = MODELS_DIR / "RoadVisDetector.mlpackage"
+
+# (package name, weights, (height, width)) of the detectors shipped with the app, see VehicleDetector.swift.
+BUNDLE = [
+    ("RoadVisDetector", "yolo11s.pt", (544, 960)),
+    ("RoadVisDetectorPortrait", "yolo11s.pt", (960, 544)),
+    ("RoadVisDetectorLite", "yolo11n.pt", (544, 960)),
+    ("RoadVisDetectorLitePortrait", "yolo11n.pt", (960, 544)),
+]
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -44,7 +68,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--weights", default="yolo11n.pt",
                    help="Ultralytics weights: yolo11n.pt, yolo26n.pt, yolo11s.pt, or a path to your own best.pt "
                         "(official weights are downloaded automatically)")
-    p.add_argument("--imgsz", type=int, default=640, help="square input size in pixels (multiple of 32)")
+    p.add_argument("--imgsz", type=int, nargs="+", default=[544, 960], metavar="PX",
+                   help="input size: one value = square, two values = HEIGHT WIDTH (multiples of 32). "
+                        "544 960 for landscape 16:9 frames, 960 544 for portrait")
+    p.add_argument("--bundle", action="store_true",
+                   help="export the four packages the app ships (s + n, landscape + portrait) into Models/; "
+                        "--weights, --imgsz and --out are ignored")
+    p.add_argument("--check", type=Path, metavar="IMAGE",
+                   help="do not export: run the detector stage of the existing --out package on IMAGE and print "
+                        "the boxes (sanity check; macOS only, Core ML cannot predict on Linux)")
     nms = p.add_mutually_exclusive_group()
     nms.add_argument("--nms", dest="nms", action="store_true", default=True,
                      help="embed Apple NMS so Vision returns VNRecognizedObjectObservation")
@@ -57,7 +89,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--iou", type=float, default=0.45, help="default IoU threshold stored in the NMS stage")
     p.add_argument("--out", type=Path, default=DEFAULT_OUT, help="destination .mlpackage path")
     p.add_argument("--force", action="store_true", help="overwrite --out if it already exists")
-    return p.parse_args(argv)
+    args = p.parse_args(argv)
+    if len(args.imgsz) not in (1, 2) or any(v <= 0 or v % 32 for v in args.imgsz):
+        p.error("--imgsz takes one or two positive multiples of 32 (HEIGHT WIDTH)")
+    return args
+
+
+def image_size(imgsz: list[int]) -> tuple[int, int]:
+    """(height, width) from the --imgsz values."""
+    return (imgsz[0], imgsz[0]) if len(imgsz) == 1 else (imgsz[0], imgsz[1])
 
 
 def export(args: argparse.Namespace) -> Path:
@@ -78,7 +118,8 @@ def export(args: argparse.Namespace) -> Path:
     if model.task != "detect":
         sys.exit(f"{args.weights} is a '{model.task}' model; a detection model is required")
 
-    export_kwargs = dict(format="coreml", imgsz=args.imgsz, nms=args.nms, conf=args.conf, iou=args.iou)
+    # Ultralytics takes imgsz=(height, width); the Core ML image input then is width x height.
+    export_kwargs = dict(format="coreml", imgsz=image_size(args.imgsz), nms=args.nms, conf=args.conf, iou=args.iou)
     # Ultralytics ≥ 8.4 uses a unified `quantize` argument; older releases used half/int8.
     if "quantize" in DEFAULT_CFG_DICT:
         export_kwargs["quantize"] = args.quantize
@@ -180,9 +221,94 @@ def describe(path: Path) -> None:
         print(f"Class names: {names[:160]}{'…' if len(names) > 160 else ''}")
 
 
+def check(package: Path, image_path: Path, conf: float, iou: float) -> int:
+    """Runs the ML Program stage of ``package`` on ``image_path`` and prints the detections.
+
+    macOS only: coremltools cannot run predictions on Linux (there the export can only be verified structurally,
+    see ``describe``). The image is stretched to the model input exactly like Vision ``.scaleFill`` does in the app,
+    the raw ``[N, 80]`` scores / ``[N, 4]`` normalized boxes of the first stage are thresholded and NMS-ed here with
+    numpy. Returns the number of detections.
+    """
+    import tempfile
+
+    if sys.platform != "darwin":
+        sys.exit("--check needs macOS: Core ML models cannot be executed on this platform")
+
+    import coremltools as ct
+    import numpy as np
+    from PIL import Image
+
+    model = ct.models.MLModel(str(package), skip_model_load=True)
+    spec = model.get_spec()
+    names = _class_names(spec)
+    if spec.WhichOneof("Type") == "pipeline":
+        stage = spec.pipeline.models[0]
+    else:
+        stage = spec
+    image_input = next(f for f in stage.description.input if f.type.WhichOneof("Type") == "imageType")
+    width, height = image_input.type.imageType.width, image_input.type.imageType.height
+    with tempfile.TemporaryDirectory() as tmp:
+        stage_path = Path(tmp) / "stage.mlpackage"
+        ct.models.MLModel(stage, weights_dir=model.weights_dir, skip_model_load=True).save(str(stage_path))
+        runnable = ct.models.MLModel(str(stage_path), compute_units=ct.ComputeUnit.CPU_ONLY)
+        source = Image.open(image_path).convert("RGB")
+        result = runnable.predict({image_input.name: source.resize((width, height), Image.BILINEAR)})
+    arrays = sorted((np.asarray(v) for v in result.values()), key=lambda a: a.shape[-1])
+    if len(arrays) != 2 or arrays[0].shape[-1] != 4:
+        print(f"Unexpected outputs {[a.shape for a in arrays]} — raw (--no-nms) packages are not checked here")
+        return 0
+    boxes, scores = arrays[0].reshape(-1, 4), arrays[1].reshape(arrays[0].reshape(-1, 4).shape[0], -1)
+    cls = scores.argmax(1)
+    best = scores.max(1)
+    order = [i for i in np.argsort(-best) if best[i] >= conf]
+    kept: list[int] = []
+    for i in order:  # per-class greedy NMS on normalized (cx, cy, w, h)
+        if all(cls[i] != cls[k] or _iou(boxes[i], boxes[k]) <= iou for k in kept):
+            kept.append(i)
+    print(f"{package.name}: input {width}x{height}, image {source.width}x{source.height}, "
+          f"{len(kept)} detections at conf >= {conf}")
+    for i in kept[:40]:
+        cx, cy, w, h = (float(v) for v in boxes[i])
+        label = names[cls[i]] if cls[i] < len(names) else f"class{cls[i]}"
+        print(f"  {label:14s} {best[i]:.2f}  x={cx - w / 2:.3f} y={cy - h / 2:.3f} w={w:.3f} h={h:.3f}")
+    return len(kept)
+
+
+def _iou(a, b) -> float:
+    """IoU of two (cx, cy, w, h) boxes."""
+    ax1, ay1, ax2, ay2 = a[0] - a[2] / 2, a[1] - a[3] / 2, a[0] + a[2] / 2, a[1] + a[3] / 2
+    bx1, by1, bx2, by2 = b[0] - b[2] / 2, b[1] - b[3] / 2, b[0] + b[2] / 2, b[1] + b[3] / 2
+    inter = max(0.0, min(ax2, bx2) - max(ax1, bx1)) * max(0.0, min(ay2, by2) - max(ay1, by1))
+    union = a[2] * a[3] + b[2] * b[3] - inter
+    return float(inter / union) if union > 0 else 0.0
+
+
+def _class_names(spec) -> list[str]:
+    """Class names from the Ultralytics ``names`` metadata (``{0: 'person', …}``)."""
+    import ast
+
+    literal = dict(spec.description.metadata.userDefined).get("names", "")
+    try:
+        parsed = ast.literal_eval(literal)
+        return [str(parsed[i]) for i in sorted(parsed)]
+    except (ValueError, SyntaxError, TypeError):
+        return []
+
+
 def main(argv: list[str] | None = None) -> int:
     """Entry point."""
     args = parse_args(argv)
+    if args.check is not None:
+        if args.bundle:
+            total = [check(MODELS_DIR / f"{name}.mlpackage", args.check, args.conf, args.iou) for name, _, _ in BUNDLE]
+            return 0 if all(total) else 1
+        return 0 if check(args.out, args.check, args.conf, args.iou) else 1
+    if args.bundle:
+        for name, weights, (height, width) in BUNDLE:
+            args.weights, args.imgsz, args.out = weights, [height, width], MODELS_DIR / f"{name}.mlpackage"
+            describe(export(args))
+        print("\nDone. Open RoadVis.xcodeproj — Xcode picks up Models/*.mlpackage automatically.")
+        return 0
     path = export(args)
     describe(path)
     print("\nDone. Open RoadVis.xcodeproj — Xcode picks up Models/*.mlpackage automatically.")

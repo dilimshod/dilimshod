@@ -80,8 +80,14 @@ class PedestrianHazardDetector(
     var edgeMargin: Double = 0.08
     /** A person already relevant stays relevant until this much farther out (no flicker at the boundary). */
     var relevanceHysteresis: Double = 0.1
+    /**
+     * Officers / road workers are kept up to this far beyond the roadway boundary (in roadway half widths): they
+     * normally stand on the shoulder / kerb. Bounded on purpose — the role is a vest-colour heuristic.
+     */
+    var staffEdgeMargin: Double = 1.0
 
     /** Plausibility filter against false positives: the box must look like a standing person seen in the scene. */
+    /** Compared with the track's best score so far ([TrackedObject.peakConfidence]), not the latest frame's. */
     var minConfidence: Double = 0.55
     /** Frames the track must have been matched before it can raise a warning. */
     var minHits: Int = 5
@@ -100,7 +106,7 @@ class PedestrianHazardDetector(
     /** True when the track looks like a real pedestrian in the road scene. */
     fun isPlausible(t: TrackedObject): Boolean {
         val b = t.box
-        if (!(t.confidence >= minConfidence && t.hits >= minHits)) return false
+        if (!(max(t.confidence, t.peakConfidence) >= minConfidence && t.hits >= minHits)) return false
         if (!(b.width > 0 && b.height / b.width >= minAspectRatio && b.height <= maxBoxHeight)) return false
         if (b.maxY > 1 - bottomEdgeMargin) return false
         if ((b.minX <= 0.01 || b.maxX >= 0.99) && b.height > 0.3) return false
@@ -147,8 +153,12 @@ class PedestrianHazardDetector(
             }
 
             val outside = zone.outsideDistance(footX, footY)
-            val margin = edgeMargin + (if (relevant.containsKey(t.id)) relevanceHysteresis else 0.0)
-            val atRoad = outside <= margin
+            val hysteresis = if (relevant.containsKey(t.id)) relevanceHysteresis else 0.0
+            val margin = edgeMargin + hysteresis
+            // Road staff stand beside the carriageway: a wider margin keeps them visible. They are reported with
+            // onRoadway = false below and never become pedestrian hazards.
+            val isStaff = t.personRole?.isRoadStaff == true
+            val atRoad = outside <= margin || (isStaff && outside <= staffEdgeMargin + hysteresis)
             val nearEdge = outside <= margin + approachMargin
             if (!(atRoad || (approaching && nearEdge))) {
                 filteredIDs.add(t.id)

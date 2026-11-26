@@ -100,7 +100,7 @@ final class AppSettings {
         func string(_ key: String, _ fallback: String) -> String {
             defaults.string(forKey: key) ?? fallback
         }
-        detectionConfidence = double(Keys.detectionConfidence, 0.45)
+        detectionConfidence = double(Keys.detectionConfidence, DetectionThresholds.defaultGlobal)
         nmsIoUThreshold = double(Keys.nmsIoUThreshold, 0.45)
         makeRecognitionEnabled = bool(Keys.makeRecognitionEnabled, true)
         showDistanceEstimates = bool(Keys.showDistanceEstimates, true)
@@ -175,7 +175,9 @@ final class AppSettings {
     }
 
     private enum Keys {
-        static let detectionConfidence = "rv.detectionConfidence"
+        /// ".v2": the default went from 0.45 to `DetectionThresholds.defaultGlobal` (0.30) and the slider now moves
+        /// every class threshold, so values stored by earlier versions are not carried over.
+        static let detectionConfidence = "rv.detectionConfidence.v2"
         static let nmsIoUThreshold = "rv.nmsIoUThreshold"
         static let makeRecognitionEnabled = "rv.makeRecognitionEnabled"
         static let showDistanceEstimates = "rv.showDistanceEstimates"

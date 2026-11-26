@@ -44,6 +44,7 @@ public struct TrackedObject: Identifiable, Hashable, Sendable {
     public var distanceMeters: Double?       // set by MonocularSpeedEstimator
     public var relativeSpeedKmh: Double?     // + = moving away from camera
     public var estimatedSpeedKmh: Double?    // own speed + relative speed (only when plausible)
+    public var peakConfidence: Double        // best detector score so far (light indicator / pedestrian gates use it)
 }
 public final class ObjectTracker {
     public struct Config: Sendable {
@@ -57,6 +58,8 @@ public final class ObjectTracker {
     /// Returns currently visible tracks (missed == 0), confirmed or not. Unique counting uses confirmed tracks only.
     public func update(detections: [Detection], timestamp: TimeInterval) -> [TrackedObject]
     public func addMakeObservation(trackID: Int, make: String, confidence: Double)
+    public var minConfidence: [VehicleKind: Double]            // per-class score to open a track (slider table)
+    public func dropTracks()                                   // forget live tracks, keep counters and IDs (pause)
     public private(set) var uniqueCounts: [VehicleKind: Int]   // confirmed unique objects since reset
     public var totalUniqueVehicles: Int { get }                // sum over kinds where isVehicle
     public private(set) var frameDetectionCount: Int           // total per-frame detections fed (not unique)
@@ -520,8 +523,19 @@ struct TrafficLightIndicatorView: View { init(color: TrafficLightColor, lampSize
     static func estimateAccessibilityLabel(for:) -> String }          // "Светофор: ≈ Красный (оценка камеры)"
 struct TrafficLightDotView: View { init(color: TrafficLightColor, size: CGFloat = 14) }   // added
 ```
-The detector model is looked up in the bundle by name, first found wins: `RoadVisDetector`, `yolo26n`, `yolo11n`,
-`yolov8n` (`.mlmodelc`). The make classifier: `VehicleMakeClassifier.mlmodelc`. Missing model → `.missing`, the UI shows
+The detector model is picked per frame by `VehicleDetector.candidateModelNames(landscape:level:)`, first one that is
+in the bundle and loads wins: landscape frames `RoadVisDetector` (YOLO11s 960×544) / `RoadVisDetectorLite` (YOLO11n),
+portrait frames `RoadVisDetectorPortrait` (544×960) / `RoadVisDetectorLitePortrait`; then the other tier, the other
+orientation, and the legacy single models `yolo26n`, `yolo11n`, `yolov8n` (`.mlmodelc`). The tier (`.full` / `.lite`)
+comes from the worker's `DetectorQualityGovernor` (mean inference > 55 ms or thermal state ≥ serious → lite).
+Pipeline (NMS) models always run with `.scaleFill`, so their boxes are frame-normalised without relying on Vision
+undoing a letterbox; raw models use `.scaleFill` when the aspect ratios match (`DetectorInputGeometry.fit`), else
+`.scaleFit` + `YOLODecoder` un-letterboxing. Confidence: the settings slider is the car/truck/bus threshold, the other
+classes follow with fixed offsets (`DetectionThresholds.perClass(global:)`); the detector runs at
+`DetectionThresholds.detectorFloor`, `ObjectTracker.minConfidence` (set per frame) opens tracks at the class threshold
+and lets a confirmed track continue down to threshold × 0.7; `CrossClassDuplicates.suppress` removes car+truck /
+car+bus / motorcycle+bicycle boxes on one object (IoU ≥ 0.7). `RecognitionWorker.setActive(false)` calls
+`ObjectTracker.dropTracks()` (live tracks forgotten, unique counters and IDs kept). The make classifier: `VehicleMakeClassifier.mlmodelc`. Missing model → `.missing`, the UI shows
 an explanatory banner, the app keeps working (speed, navigator).
 Frames are rotated upright by the capture connection (`AVCaptureDevice.RotationCoordinator`; while a preview layer is
 attached, the coordinator's *preview* angle is used for the frames too), so Vision always runs with orientation `.up` and
@@ -797,7 +811,8 @@ Honesty: distances "≈ … (оценка)", detector scores "увереннос
 - Core ML model classes are NOT generated (`COREML_CODEGEN_LANGUAGE = None`): load models by bundle resource name
   (`Bundle.main.url(forResource: "RoadVisDetector", withExtension: "mlmodelc")`). Still avoid naming Swift types
   `RoadVisDetector*` / `VehicleMakeClassifier*` so the project keeps working if someone re-enables generation.
-- `RoadVis/Models/RoadVisDetector.mlpackage` (present): YOLO11n COCO-80, 640×640 RGB image input named `image`,
-  pipeline mlProgram(FP16) → NonMaximumSuppression; optional Double inputs `iouThreshold` (default 0.45) and
+- `RoadVis/Models/RoadVisDetector.mlpackage` + `RoadVisDetectorPortrait` (YOLO11s) and `RoadVisDetectorLite` +
+  `RoadVisDetectorLitePortrait` (YOLO11n), all present: COCO-80, RGB image input named `image`, 960×544 (landscape) or
+  544×960 (portrait), pipeline mlProgram(FP16) → NonMaximumSuppression; optional Double inputs `iouThreshold` (default 0.45) and
   `confidenceThreshold` (default 0.25); outputs `confidence` [N×80] and `coordinates` [N×4] (normalized x,y,w,h) →
   Vision returns `VNRecognizedObjectObservation` with COCO labels ("car", "traffic light", …).

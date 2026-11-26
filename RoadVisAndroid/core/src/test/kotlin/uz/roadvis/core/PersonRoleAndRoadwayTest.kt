@@ -160,6 +160,36 @@ class PersonRoleAndRoadwayTest {
         assertEquals(setOf(2), r.filteredIDs)
     }
 
+    @Test fun staffOnShoulderIsKeptButPedestrianThereIsNot() {
+        val d = PedestrianHazardDetector()
+        d.roadway = RoadwayZone(leftBottom = 0.1, leftTop = 0.47, rightBottom = 0.9, rightTop = 0.53, horizonY = 0.42,
+            source = RoadwayZone.Source.LANES)
+        // Zone at y = 0.65: x ≈ 0.323…0.677. x = 0.25 is ≈ 0.41 half widths outside: the shoulder.
+        val outside = d.effectiveRoadway.outsideDistance(0.25, 0.65)
+        assertTrue(outside > 0.3 && outside < 0.5)
+        var r = PersonSceneResult()
+        for (i in 0 until 6) {
+            val t = i * 0.1
+            r = d.evaluate(listOf(person(1, 0.25, 0.65, t = t, role = PersonRole.TRAFFIC_OFFICER),
+                person(2, 0.75, 0.65, t = t), person(3, 0.75, 0.65, t = t, role = PersonRole.PEDESTRIAN)), 40.0, g, t)
+        }
+        assertEquals(setOf(1), r.relevantIDs)
+        assertEquals(setOf(2, 3), r.filteredIDs)
+        assertEquals(listOf(1), r.staff.map { it.trackID })
+        assertEquals(false, r.staff.firstOrNull()?.onRoadway)
+        assertEquals(false, r.staff.firstOrNull()?.inOwnLane)
+        assertTrue(r.hazards.isEmpty())
+        // Beyond the staff margin even staff are filtered.
+        val far = d.evaluate(listOf(person(4, 0.05, 0.65, t = 1.0, role = PersonRole.ROAD_WORKER)), 40.0, g, 1.0)
+        assertTrue(d.effectiveRoadway.outsideDistance(0.05, 0.65) > d.staffEdgeMargin)
+        assertEquals(setOf(4), far.filteredIDs)
+        // Margin switched off: the old behaviour.
+        d.reset()
+        d.staffEdgeMargin = 0.0
+        val strict = d.evaluate(listOf(person(5, 0.25, 0.65, t = 2.0, role = PersonRole.TRAFFIC_OFFICER)), 40.0, g, 2.0)
+        assertEquals(setOf(5), strict.filteredIDs)
+    }
+
     @Test fun coachAnnouncesOfficerOncePerCooldown() {
         val engine = DriverCoachEngine()
         val officer = RoadStaffSighting(7, PersonRole.TRAFFIC_OFFICER, BBox(0.5, 0.5, 0.04, 0.12), 30.0, onRoadway = true, inOwnLane = false)

@@ -197,7 +197,43 @@ final class PersonRoleAndRoadwayTests: XCTestCase {
         XCTAssertTrue(r.hazards.isEmpty)
         XCTAssertEqual(r.staff.map(\.trackID), [1])
         XCTAssertEqual(r.staff.first?.role, .trafficOfficer)
-        XCTAssertEqual(r.filteredIDs, [2])   // the worker on the sidewalk is not kept
+        XCTAssertEqual(r.filteredIDs, [2])   // the worker far out on the sidewalk is not kept
+    }
+
+    func testStaffOnShoulderIsKeptButPedestrianThereIsNot() {
+        let d = PedestrianHazardDetector()
+        d.roadway = RoadwayZone(leftBottom: 0.1, leftTop: 0.47, rightBottom: 0.9, rightTop: 0.53, horizonY: 0.42,
+                                source: .lanes)
+        // Zone at y = 0.65: x ≈ 0.323…0.677 (half width ≈ 0.177). x = 0.25 is ≈ 0.41 half widths outside the left
+        // boundary: the shoulder. An officer standing there is kept as staff beside the road; a pedestrian is not.
+        let outside = d.effectiveRoadway.outsideDistance(x: 0.25, y: 0.65)
+        XCTAssertGreaterThan(outside, 0.3)
+        XCTAssertLessThan(outside, 0.5)
+        var r = PersonSceneResult()
+        for i in 0..<6 {
+            let t = Double(i) * 0.1
+            r = d.evaluate(tracks: [person(1, x: 0.25, bottom: 0.65, t: t, role: .trafficOfficer),
+                                    person(2, x: 0.75, bottom: 0.65, t: t),
+                                    person(3, x: 0.75, bottom: 0.65, t: t, role: .pedestrian)],
+                           ownSpeedKmh: 40, geometry: g, timestamp: t)
+        }
+        XCTAssertEqual(r.relevantIDs, [1])
+        XCTAssertEqual(r.filteredIDs, [2, 3])
+        XCTAssertEqual(r.staff.map(\.trackID), [1])
+        XCTAssertEqual(r.staff.first?.onRoadway, false)
+        XCTAssertEqual(r.staff.first?.inOwnLane, false)
+        XCTAssertTrue(r.hazards.isEmpty)
+        // Beyond the staff margin (one roadway half width) even staff are filtered.
+        let far = d.evaluate(tracks: [person(4, x: 0.05, bottom: 0.65, t: 1, role: .roadWorker)], ownSpeedKmh: 40,
+                             geometry: g, timestamp: 1)
+        XCTAssertGreaterThan(d.effectiveRoadway.outsideDistance(x: 0.05, y: 0.65), d.staffEdgeMargin)
+        XCTAssertEqual(far.filteredIDs, [4])
+        // Margin switched off: the old behaviour.
+        d.reset()
+        d.staffEdgeMargin = 0
+        let strict = d.evaluate(tracks: [person(5, x: 0.25, bottom: 0.65, t: 2, role: .trafficOfficer)], ownSpeedKmh: 40,
+                                geometry: g, timestamp: 2)
+        XCTAssertEqual(strict.filteredIDs, [5])
     }
 
     // MARK: - Coach and trip events

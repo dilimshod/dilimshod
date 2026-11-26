@@ -30,7 +30,8 @@ public enum VehicleKind: String, CaseIterable, Codable, Hashable, Sendable {
             self = .motorcycle
         case "bicycle", "bike", "cyclist":
             self = .bicycle
-        case "person", "pedestrian", "people":
+        // "rider" is the BDD100K class of a person on a two-wheeler (BDD-fine-tuned weights work as a drop-in).
+        case "person", "pedestrian", "people", "rider":
             self = .person
         case "traffic light", "trafficlight", "traffic signal":
             self = .trafficLight

@@ -9,6 +9,10 @@ public struct TrackedObject: Identifiable, Hashable, Sendable {
     public var box: BBox
     /// Latest detector confidence (model score, not accuracy).
     public var confidence: Double
+    /// Highest detector confidence the track has had so far. Gates that ask "is this a solid object?" use it
+    /// instead of the latest frame's score, which dips on single frames (and may sit below the class threshold
+    /// while a confirmed track is continued by a low-score detection).
+    public var peakConfidence: Double
     public var hits: Int
     /// Consecutive frames without a matching detection.
     public var missed: Int
@@ -35,12 +39,14 @@ public struct TrackedObject: Identifiable, Hashable, Sendable {
                 hits: Int = 1, missed: Int = 0, firstSeen: TimeInterval, lastSeen: TimeInterval,
                 isConfirmed: Bool = false, make: String? = nil, makeConfidence: Double? = nil,
                 lightColor: TrafficLightColor? = nil, distanceMeters: Double? = nil,
-                relativeSpeedKmh: Double? = nil, estimatedSpeedKmh: Double? = nil, personRole: PersonRole? = nil) {
+                relativeSpeedKmh: Double? = nil, estimatedSpeedKmh: Double? = nil, personRole: PersonRole? = nil,
+                peakConfidence: Double? = nil) {
         self.id = id
         self.kind = kind
         self.label = label
         self.box = box
         self.confidence = confidence
+        self.peakConfidence = max(confidence, peakConfidence ?? confidence)
         self.hits = hits
         self.missed = missed
         self.firstSeen = firstSeen
@@ -78,18 +84,29 @@ public final class ObjectTracker {
         public var maxAreaRatio: Double
         /// Unconfirmed (tentative) tracks are dropped after this many missed frames.
         public var maxMissedTentative: Int
-        /// Per-class minimum detector confidence applied before tracking (classes not listed: no extra filter).
+        /// Per-class minimum detector confidence needed to open a track (classes not listed: no filter). Initial
+        /// value of `ObjectTracker.minConfidence`, which the owner may replace per frame (settings slider).
         public var minConfidence: [VehicleKind: Double]
+        /// A detection scoring below its class minimum but at least `minimum × continuationFactor` may still
+        /// continue an already confirmed track (it never opens a track). 1 = off.
+        public var continuationFactor: Double
+        /// Tracks not seen for longer than this are forgotten before matching, seconds (frames may stop without
+        /// the owner calling `dropTracks()`, e.g. a capture interruption). Well above `maxMissed` frames at the
+        /// lowest processing rate.
+        public var maxIdleSeconds: Double
         /// Kinds that are counted only when the owner marks the confirmed track relevant (`markRelevant(trackIDs:)`),
         /// e.g. persons inside the roadway zone (a pedestrian on the sidewalk is not counted).
         public var deferredCountKinds: Set<VehicleKind>
 
-        public static let defaultMinConfidence: [VehicleKind: Double] = [.trafficLight: 0.5, .stopSign: 0.55, .person: 0.5]
+        /// Thresholds at the default slider position, see `DetectionThresholds` for the measurements behind them.
+        public static let defaultMinConfidence: [VehicleKind: Double] = DetectionThresholds.perClass()
 
         public init(iouThreshold: Double = 0.3, maxMissed: Int = 8, minHits: Int = 3, boxSmoothing: Double = 0.6,
                     centerGate: Double = 1.0, maxAreaRatio: Double = 2.5, maxMissedTentative: Int = 2,
                     minConfidence: [VehicleKind: Double] = Config.defaultMinConfidence,
-                    deferredCountKinds: Set<VehicleKind> = []) {
+                    deferredCountKinds: Set<VehicleKind> = [],
+                    continuationFactor: Double = DetectionThresholds.continuationFactor,
+                    maxIdleSeconds: Double = 3.0) {
             self.iouThreshold = iouThreshold
             self.maxMissed = maxMissed
             self.minHits = minHits
@@ -99,6 +116,8 @@ public final class ObjectTracker {
             self.maxMissedTentative = maxMissedTentative
             self.minConfidence = minConfidence
             self.deferredCountKinds = deferredCountKinds
+            self.continuationFactor = continuationFactor
+            self.maxIdleSeconds = maxIdleSeconds
         }
     }
 
@@ -115,6 +134,10 @@ public final class ObjectTracker {
     }
 
     public let config: Config
+    /// Per-class confidence needed to open a track. Starts as `config.minConfidence`; the app sets it every frame
+    /// from the settings slider (`DetectionThresholds.perClass(global:)`) — the same table the detector floor is
+    /// derived from, so there is no second hidden threshold.
+    public var minConfidence: [VehicleKind: Double]
     private var states: [State] = []
     private var nextID = 1
     public private(set) var uniqueCounts: [VehicleKind: Int] = [:]
@@ -122,6 +145,7 @@ public final class ObjectTracker {
 
     public init(config: Config = Config()) {
         self.config = config
+        minConfidence = config.minConfidence
     }
 
     public var totalUniqueVehicles: Int {
@@ -133,6 +157,13 @@ public final class ObjectTracker {
         uniqueCounts.removeAll()
         frameDetectionCount = 0
         nextID = 1
+    }
+
+    /// Forgets the live tracks but keeps the unique counters and the ID sequence. Call it when frames stop for a
+    /// while (pause, background, camera error): otherwise the first frame after the gap would continue the old
+    /// tracks — confirmed state, hit count, make / colour / role votes — with whatever overlaps their last boxes.
+    public func dropTracks() {
+        states.removeAll()
     }
 
     /// Classes that may be confused by the detector (car ↔ truck ↔ bus, motorcycle ↔ bicycle) can still match.
@@ -147,10 +178,28 @@ public final class ObjectTracker {
     public func update(detections: [Detection], timestamp: TimeInterval) -> [TrackedObject] {
         frameDetectionCount += detections.count
 
-        // Per-class confidence filter (e.g. traffic lights / stop signs are noisy near the global threshold).
-        let detections = detections.filter { d in
-            guard let minimum = config.minConfidence[d.kind] else { return true }
-            return d.confidence >= minimum
+        // Tracks whose last observation is too old (frames stopped without `dropTracks()`) are not continued.
+        if config.maxIdleSeconds > 0 {
+            states.removeAll { timestamp - $0.object.lastSeen > config.maxIdleSeconds }
+        }
+
+        // Per-class confidence filter with hysteresis: at or above the class minimum a detection may open a track;
+        // between `minimum × continuationFactor` and the minimum it may only continue a confirmed track.
+        let factor = min(1, max(0, config.continuationFactor))
+        let rawDetections = detections
+        var detections: [Detection] = []
+        var canSpawn: [Bool] = []
+        detections.reserveCapacity(rawDetections.count)
+        canSpawn.reserveCapacity(rawDetections.count)
+        for d in rawDetections {
+            let minimum = minConfidence[d.kind] ?? 0
+            if d.confidence >= minimum {
+                detections.append(d)
+                canSpawn.append(true)
+            } else if d.confidence >= minimum * factor {
+                detections.append(d)
+                canSpawn.append(false)
+            }
         }
 
         // Predict current boxes of existing tracks with the constant-velocity model (position and size).
@@ -171,6 +220,8 @@ public final class ObjectTracker {
         for (ti, st) in states.enumerated() {
             let p = predicted[ti]
             for (di, d) in detections.enumerated() where Self.compatible(st.object.kind, d.kind) {
+                // Low-score detections only keep confirmed tracks alive.
+                if !canSpawn[di] && !st.object.isConfirmed { continue }
                 let iou = p.iou(d.box)
                 let penalty = st.object.kind == d.kind ? 0 : 0.05
                 var score = -1.0
@@ -212,7 +263,7 @@ public final class ObjectTracker {
 
 
         // Unmatched detections: new tracks.
-        for (di, d) in detections.enumerated() where !detMatched[di] {
+        for (di, d) in detections.enumerated() where !detMatched[di] && canSpawn[di] {
             var st = State(object: TrackedObject(id: nextID, kind: d.kind, label: d.label, box: d.box,
                                                  confidence: d.confidence, firstSeen: timestamp, lastSeen: timestamp))
             nextID += 1
@@ -257,6 +308,7 @@ public final class ObjectTracker {
         }
         st.object.box = newBox
         st.object.confidence = d.confidence
+        st.object.peakConfidence = max(st.object.peakConfidence, d.confidence)
         st.object.hits += 1
         st.object.missed = 0
         st.object.lastSeen = timestamp
