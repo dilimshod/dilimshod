@@ -213,8 +213,15 @@ public final class PedestrianHazardDetector {
         var seen = Set<Int>()
         let zone = effectiveRoadway
         let fallbackApproachMargin = approachMarginFactor / max(1, roadWidthFactor)
-        for t in tracks where t.kind == .person && t.missed == 0 {
+        for t in tracks where t.kind == .person {
             seen.insert(t.id)
+            if t.missed > 0 {
+                // Coasted track (predicted box, `ObjectTracker.Config.coastFrames`): never a warning and no motion
+                // sample from a prediction. It only keeps its previous sidewalk / roadway classification and its
+                // history, so a sidewalk person does not flash up and the crossing-intent history survives the gap.
+                if relevant[t.id] != nil { result.relevantIDs.insert(t.id) } else { result.filteredIDs.insert(t.id) }
+                continue
+            }
             let footX = t.box.midX, footY = min(1, t.box.maxY)
             let roadCenter = zone.centerX(atY: footY) ?? corridor.centerX
             let zoneHalf = zone.halfWidth(atY: footY)
@@ -327,8 +334,10 @@ public final class PedestrianHazardDetector {
                                                    inOwnLane: inLane, onRoadway: onRoad, approaching: approaching))
         }
         for id in history.keys where !seen.contains(id) { history[id] = nil }
+        let coastedIDs = Set(tracks.filter { $0.kind == .person && $0.missed > 0 }.map(\.id))
         for id in result.filteredIDs { relevant[id] = nil }
-        for id in result.relevantIDs { relevant[id] = timestamp }
+        // A coasted person does not refresh its relevance time (it still expires 1 s after the last detection).
+        for id in result.relevantIDs where !coastedIDs.contains(id) { relevant[id] = timestamp }
         relevant = relevant.filter { timestamp - $0.value <= 1.0 }
         result.hazards.sort {
             $0.level != $1.level ? $0.level > $1.level : ($0.distanceMeters ?? .infinity) < ($1.distanceMeters ?? .infinity)

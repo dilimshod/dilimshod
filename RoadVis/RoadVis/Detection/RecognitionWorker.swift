@@ -28,6 +28,12 @@ final class RecognitionWorker: @unchecked Sendable {
         var followingDistanceEnabled = true
         /// Horizon of the own-lane corridor, fraction of the frame height (`settings.corridorHorizon`).
         var corridorHorizon = EgoCorridor.default.horizonY
+        /// Measure the horizon from the lane vanishing point (`LaneHorizonEstimator`); `corridorHorizon` is then only
+        /// the start value (`settings.autoHorizonEnabled`).
+        var autoHorizonEnabled = true
+        /// Last measured horizons of earlier sessions (nil = none), used until this session has its own estimate.
+        var storedHorizonPortrait: Double?
+        var storedHorizonLandscape: Double?
         /// Camera → front bumper distance subtracted from the lead distance (`settings.hoodLengthMeters`).
         var cameraToBumperMeters = 2.2
         /// Run the classical lane-marking detector (~5 Hz, on a downsampled copy of the frame).
@@ -71,6 +77,12 @@ final class RecognitionWorker: @unchecked Sendable {
         var roadwayZone: RoadwayZone?
         /// Own-lane corridor the lead was picked from (centre follows a confident lane estimate).
         var corridor: EgoCorridor
+        /// Horizon row in use on this frame (manual setting, or the measured one while auto horizon is on).
+        var horizonY: Double
+        /// Horizon measured in this session from the lane vanishing point (nil until the estimator converged or
+        /// while auto horizon is off), with the frame orientation it belongs to.
+        var measuredHorizon: Double?
+        var measuredHorizonIsLandscape: Bool
     }
 
     /// Load results of the two models.
@@ -130,6 +142,12 @@ final class RecognitionWorker: @unchecked Sendable {
     private let roadwayEstimator = RoadwayZoneEstimator()
     private var lastLaneUptime: TimeInterval = -.infinity
     private var laneEstimate: LaneEstimate?
+    /// Horizon from the lane vanishing point (`settings.autoHorizonEnabled`). `measuredHorizon` is the value in use;
+    /// it changes only when the estimator moves by more than `LaneHorizonEstimator.applyDelta`.
+    private var horizonEstimator = LaneHorizonEstimator()
+    private var measuredHorizon: Double?
+    /// Orientation the estimator's samples belong to (nil before the first frame).
+    private var horizonIsLandscape: Bool?
     /// Smoothed corridor centre X (follows `LaneEstimate.laneCenterX` when the lane estimate is confident).
     private var corridorCenterX = 0.5
     private var generation = 0
@@ -313,8 +331,10 @@ final class RecognitionWorker: @unchecked Sendable {
         guard width > 0, height > 0 else { return }
         let timestamp = time.isValid && time.seconds.isFinite ? time.seconds : ProcessInfo.processInfo.systemUptime
 
+        // One horizon for the lane ROI, the lead corridor, the roadway zone and the light selection of this frame.
+        let horizon = horizonInUse(inputs: frameInputs, width: width, height: height)
         // Lanes first: independent of the detector, and the lead corridor below follows the fresh lane estimate.
-        updateLanes(in: pixelBuffer, width: width, height: height, inputs: frameInputs)
+        updateLanes(in: pixelBuffer, width: width, height: height, inputs: frameInputs, horizon: horizon)
 
         // Frames are rotated upright by the capture connection, so Vision always uses `.up`.
         let handler = VNImageRequestHandler(cvPixelBuffer: pixelBuffer, orientation: .up, options: [:])
@@ -331,7 +351,9 @@ final class RecognitionWorker: @unchecked Sendable {
                                       frameSize: CGSize(width: width, height: height),
                                       processedFrames: processedFrames, leadVehicle: nil,
                                       laneEstimate: laneEstimate, pedestrianHazards: [], roadStaff: [],
-                                      roadwayZone: nil, corridor: leadTracker.corridor))
+                                      roadwayZone: nil, corridor: leadTracker.corridor, horizonY: horizon,
+                                      measuredHorizon: measuredHorizon,
+                                      measuredHorizonIsLandscape: width >= height))
             }
             return
         }
@@ -358,10 +380,11 @@ final class RecognitionWorker: @unchecked Sendable {
         tracks = estimator.update(tracks: tracks, ownSpeedKmh: frameInputs.ownSpeedKmh,
                                   geometry: geometry, timestamp: timestamp)
         let leadVehicle = updateLeadVehicle(tracks: tracks, inputs: frameInputs, geometry: geometry,
-                                            timestamp: timestamp)
+                                            timestamp: timestamp, horizon: horizon)
         // Roadway / sidewalk split: persons outside the roadway zone (not moving toward it) are dropped here, before
         // drawing, counting and logging.
-        let scene = updatePedestrians(tracks: tracks, inputs: frameInputs, geometry: geometry, timestamp: timestamp)
+        let scene = updatePedestrians(tracks: tracks, inputs: frameInputs, geometry: geometry, timestamp: timestamp,
+                                      horizon: horizon)
         if !scene.filteredIDs.isEmpty {
             tracks.removeAll { scene.filteredIDs.contains($0.id) }
         }
@@ -394,7 +417,7 @@ final class RecognitionWorker: @unchecked Sendable {
         // the largest box.
         let observedLight = TrafficLightSelection.ownLane(
             in: tracks, corridorCenterX: corridorCenterX,
-            horizonY: min(0.8, max(0.1, frameInputs.corridorHorizon)), minHits: Self.lightMinHits)
+            horizonY: horizon, minHits: Self.lightMinHits)
         let lightColor: TrafficLightColor? = observedLight?.color
 
         let output = Output(generation: generation, tracks: tracks, visibleCounts: visibleCounts,
@@ -404,7 +427,8 @@ final class RecognitionWorker: @unchecked Sendable {
                             processedFrames: processedFrames, leadVehicle: leadVehicle, laneEstimate: laneEstimate,
                             pedestrianHazards: pedestrianHazards, roadStaff: roadStaff,
                             roadwayZone: frameInputs.detection.trackPedestrians ? roadwayEstimator.zone : nil,
-                            corridor: leadTracker.corridor)
+                            corridor: leadTracker.corridor, horizonY: horizon, measuredHorizon: measuredHorizon,
+                            measuredHorizonIsLandscape: width >= height)
         outputHandler?(output)
     }
 
@@ -413,12 +437,11 @@ final class RecognitionWorker: @unchecked Sendable {
     /// (`LaneEstimate.laneCenterX`, smoothed, clamped 0.35–0.65) while the lane estimate is confident (≥ 0.5), else
     /// it returns to the frame centre. Resets the tracker while the feature is off so it restarts cleanly.
     private func updateLeadVehicle(tracks: [TrackedObject], inputs: Inputs, geometry: CameraGeometry,
-                                   timestamp: TimeInterval) -> LeadVehicle? {
+                                   timestamp: TimeInterval, horizon: Double) -> LeadVehicle? {
         guard inputs.followingDistanceEnabled else {
             leadTracker.reset()
             return nil
         }
-        let horizon = min(0.8, max(0.1, inputs.corridorHorizon))
         corridorCenterX = EgoCorridor.smoothedCenterX(previous: corridorCenterX,
                                                       lane: inputs.laneDetectionEnabled ? laneEstimate : nil)
         let centerX = (corridorCenterX * 1000).rounded() / 1000
@@ -437,13 +460,12 @@ final class RecognitionWorker: @unchecked Sendable {
     /// widened, same horizon as the lead tracker): pedestrian hazards, officers / road workers, and the sidewalk
     /// persons to drop. Runs whenever persons are tracked — the sidewalk filter applies even with warnings off.
     private func updatePedestrians(tracks: [TrackedObject], inputs: Inputs, geometry: CameraGeometry,
-                                   timestamp: TimeInterval) -> PersonSceneResult {
+                                   timestamp: TimeInterval, horizon: Double) -> PersonSceneResult {
         guard inputs.detection.trackPedestrians else {
             pedestrianDetector.reset()
             roadwayEstimator.reset()
             return PersonSceneResult()
         }
-        let horizon = min(0.8, max(0.1, inputs.corridorHorizon))
         let corridor = EgoCorridor.forFrame(horizonY: horizon, imageWidth: geometry.imageWidth,
                                             imageHeight: geometry.imageHeight)
         if pedestrianDetector.corridor != corridor {
@@ -460,7 +482,13 @@ final class RecognitionWorker: @unchecked Sendable {
 
     /// Runs the lane detector at ≈ 5 Hz on a downsampled (≤ 160 px wide) marking-brightness copy of the locked BGRA
     /// buffer (rows above the horizon are skipped). Between runs the previous estimate is repeated.
-    private func updateLanes(in pixelBuffer: CVPixelBuffer, width: Int, height: Int, inputs: Inputs) {
+    ///
+    /// Each lane frame also yields the vanishing point of the two raw line fits; while auto horizon is on and the
+    /// car drives at least `LaneHorizonEstimator.minSpeedKmh`, it is fed to `horizonEstimator`. A converged estimate
+    /// that differs from the horizon in use by more than `LaneHorizonEstimator.applyDelta` becomes `measuredHorizon`
+    /// (used from the next frame on by everything that shares the horizon).
+    private func updateLanes(in pixelBuffer: CVPixelBuffer, width: Int, height: Int, inputs: Inputs,
+                             horizon: Double) {
         guard inputs.laneDetectionEnabled else {
             if laneEstimate != nil {
                 laneDetector.reset()
@@ -473,9 +501,9 @@ final class RecognitionWorker: @unchecked Sendable {
               CVPixelBufferGetPixelFormatType(pixelBuffer) == kCVPixelFormatType_32BGRA,
               !CVPixelBufferIsPlanar(pixelBuffer) else { return }
         lastLaneUptime = now
-        let horizon = min(0.8, max(0.1, inputs.corridorHorizon))
         if laneDetector.config.horizonY != horizon {
-            laneDetector.config.horizonY = horizon
+            // Keeps the smoothed lines where they are in the picture (their stored top x is tied to the horizon row).
+            laneDetector.setHorizon(horizon)
         }
         guard CVPixelBufferLockBaseAddress(pixelBuffer, .readOnly) == kCVReturnSuccess else { return }
         let image: LaneImage
@@ -489,6 +517,38 @@ final class RecognitionWorker: @unchecked Sendable {
         _ = CVPixelBufferUnlockBaseAddress(pixelBuffer, .readOnly)
         guard image.width > 0 else { return }
         laneEstimate = laneDetector.process(image, timestamp: now)
+
+        guard inputs.autoHorizonEnabled, let speed = inputs.ownSpeedKmh, speed.isFinite,
+              speed >= LaneHorizonEstimator.minSpeedKmh else { return }
+        if let estimate: Double = horizonEstimator.add(laneDetector.lastVanishingPoint),
+           LaneHorizonEstimator.shouldApply(estimate: estimate, current: horizon) {
+            measuredHorizon = estimate
+        }
+    }
+
+    /// Horizon row for this frame, clamped to 0.1…0.8: the manual setting, or — while auto horizon is on — the
+    /// horizon measured in this session, else the one stored from an earlier session for this frame orientation,
+    /// else the manual setting. A change of the frame orientation (or switching auto off) discards the estimate:
+    /// the horizon row of a portrait frame says nothing about a landscape one.
+    private func horizonInUse(inputs: Inputs, width: Int, height: Int) -> Double {
+        let landscape = width >= height
+        if horizonIsLandscape != landscape || !inputs.autoHorizonEnabled {
+            if horizonIsLandscape != nil || measuredHorizon != nil {
+                horizonEstimator.reset()
+                measuredHorizon = nil
+            }
+            horizonIsLandscape = landscape
+        }
+        var value: Double = inputs.corridorHorizon
+        if inputs.autoHorizonEnabled {
+            let stored: Double? = landscape ? inputs.storedHorizonLandscape : inputs.storedHorizonPortrait
+            if let measured = measuredHorizon {
+                value = measured
+            } else if let stored, stored.isFinite, LaneHorizonEstimator.rowRange.contains(stored) {
+                value = stored
+            }
+        }
+        return min(0.8, max(0.1, value))
     }
 
     /// Estimates the colour of every traffic light from the BGRA pixels inside its box.
@@ -584,7 +644,8 @@ final class RecognitionWorker: @unchecked Sendable {
         recording.log.markFrame()
         let frameIndex = recording.log.frameCount
         let now = Date()
-        for track in tracks {
+        // Coasted tracks (`missed ≥ 1`, predicted box) are not detections: the research log holds measured boxes only.
+        for track in tracks where track.missed == 0 {
             recording.log.append(ExperimentRecord(
                 timestamp: now, frameIndex: frameIndex, trackID: track.id, kind: track.kind, label: track.label,
                 confidence: track.confidence, box: track.box, make: track.make, makeConfidence: track.makeConfidence,

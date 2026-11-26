@@ -77,12 +77,14 @@ final class DetectionTuningTests: XCTestCase {
         tracks = tracker.update(detections: [det(.stopSign, 0.40)], timestamp: 0.3)
         XCTAssertEqual(tracks.first?.id, id)
         XCTAssertEqual(tracks.first?.missed, 0)
-        XCTAssertEqual(tracks.first?.hits, 4)
+        // A low-score continuation is not a hit (it must not help confirm or re-vote a track).
+        XCTAssertEqual(tracks.first?.hits, 3)
         XCTAssertEqual(tracks.first?.confidence ?? 0, 0.40, accuracy: 1e-9)
         XCTAssertEqual(tracks.first?.peakConfidence ?? 0, 0.60, accuracy: 1e-9)
-        // Below the continuation floor: a miss.
+        // Below the continuation floor: a miss (the confirmed track is only coasted, `missed == 1`).
         tracks = tracker.update(detections: [det(.stopSign, 0.30)], timestamp: 0.4)
-        XCTAssertTrue(tracks.isEmpty)
+        XCTAssertTrue(tracks.filter { $0.missed == 0 }.isEmpty)
+        XCTAssertEqual(tracks.first?.missed, 1)
         // A low score never opens a track and never feeds a tentative one.
         let fresh = ObjectTracker()
         XCTAssertTrue(fresh.update(detections: [det(.stopSign, 0.40)], timestamp: 0).isEmpty)
@@ -92,7 +94,7 @@ final class DetectionTuningTests: XCTestCase {
         // Hysteresis off: the old strict behaviour.
         let strict = ObjectTracker(config: ObjectTracker.Config(continuationFactor: 1))
         for i in 0..<3 { _ = strict.update(detections: [det(.stopSign, 0.6)], timestamp: Double(i) * 0.1) }
-        XCTAssertTrue(strict.update(detections: [det(.stopSign, 0.45)], timestamp: 0.3).isEmpty)
+        XCTAssertTrue(strict.update(detections: [det(.stopSign, 0.45)], timestamp: 0.3).filter { $0.missed == 0 }.isEmpty)
     }
 
     func testDropTracksKeepsCountersAndIDs() {

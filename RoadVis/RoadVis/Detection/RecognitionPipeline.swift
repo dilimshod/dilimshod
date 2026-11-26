@@ -109,11 +109,14 @@ final class RecognitionPipeline {
 
     /// Centre X of the own-lane corridor the worker picked the lead from (follows a confident lane estimate).
     private(set) var corridorCenterX = 0.5
+    /// Horizon row the worker used on the latest frame (the manual setting, or the measured one with auto horizon).
+    private(set) var horizonInUse: Double?
 
     /// Own-lane corridor used to pick the lead vehicle (for drawing).
     var egoCorridor: EgoCorridor {
         // Same aspect-aware corridor as the worker uses (portrait frames get a wider one), so the overlay matches.
-        EgoCorridor.forFrame(centerX: corridorCenterX, horizonY: min(0.8, max(0.1, settings.corridorHorizon)),
+        EgoCorridor.forFrame(centerX: corridorCenterX,
+                             horizonY: min(0.8, max(0.1, horizonInUse ?? settings.corridorHorizon)),
                              imageWidth: Double(frameSize.width), imageHeight: Double(frameSize.height))
     }
 
@@ -395,6 +398,15 @@ final class RecognitionPipeline {
         if abs(inferenceMs - output.inferenceMs) >= 1 { inferenceMs = output.inferenceMs }
         if frameSize != output.frameSize { frameSize = output.frameSize }
         if abs(corridorCenterX - output.corridor.centerX) >= 0.003 { corridorCenterX = output.corridor.centerX }
+        if horizonInUse != output.horizonY { horizonInUse = output.horizonY }
+        // Remember the measured horizon for the next start (per frame orientation; 0 = none stored).
+        if settings.autoHorizonEnabled, let measured = output.measuredHorizon {
+            if output.measuredHorizonIsLandscape {
+                if abs(settings.autoHorizonLandscape - measured) > 0.005 { settings.autoHorizonLandscape = measured }
+            } else if abs(settings.autoHorizonPortrait - measured) > 0.005 {
+                settings.autoHorizonPortrait = measured
+            }
+        }
         if currentLightColor != output.lightColor {
             currentLightColor = output.lightColor
             signals.cameraLightColor = output.lightColor
@@ -487,7 +499,9 @@ final class RecognitionPipeline {
         var freshIDs = Set<Int>()
         for track in fresh {
             freshIDs.insert(track.id)
-            recentTracks[track.id] = (track, now)
+            // Tracks coasted by the tracker (`missed ≥ 1`, predicted box) are drawn as they come but do not restart
+            // the hold time: the hold runs from the last real detection.
+            if track.missed == 0 { recentTracks[track.id] = (track, now) }
         }
         for (id, entry) in recentTracks where !freshIDs.contains(id) {
             if entry.track.isConfirmed, now - entry.seen <= Self.trackHoldSeconds {
@@ -605,6 +619,9 @@ final class RecognitionPipeline {
         let makeEnabled = settings.makeRecognitionEnabled
         let followingEnabled = settings.followingDistanceEnabled
         let horizon = settings.corridorHorizon
+        let autoHorizon = settings.autoHorizonEnabled
+        let storedPortrait: Double? = settings.autoHorizonPortrait > 0 ? settings.autoHorizonPortrait : nil
+        let storedLandscape: Double? = settings.autoHorizonLandscape > 0 ? settings.autoHorizonLandscape : nil
         let hood = settings.hoodLengthMeters
         let lanes = assist.laneDetectionNeeded
         let pedestrians = assist.pedestrianWarningsEnabled
@@ -615,6 +632,9 @@ final class RecognitionPipeline {
             inputs.makeRecognitionEnabled = makeEnabled
             inputs.followingDistanceEnabled = followingEnabled
             inputs.corridorHorizon = horizon
+            inputs.autoHorizonEnabled = autoHorizon
+            inputs.storedHorizonPortrait = storedPortrait
+            inputs.storedHorizonLandscape = storedLandscape
             inputs.cameraToBumperMeters = hood
         }
     }
@@ -631,6 +651,7 @@ final class RecognitionPipeline {
             _ = settings.makeRecognitionEnabled
             _ = settings.followingDistanceEnabled
             _ = settings.corridorHorizon
+            _ = settings.autoHorizonEnabled
             _ = settings.hoodLengthMeters
             _ = settings.followingTimeGapDry
             _ = settings.stoppedGapMeters

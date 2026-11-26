@@ -318,7 +318,8 @@ public struct LeadVehicle: Hashable, Sendable {
 /// Selects the lead vehicle — the vehicle directly AHEAD in the own lane, not one in the adjacent lane — and estimates
 /// its distance by fusing the apparent width and height of its box with typical vehicle dimensions.
 ///
-/// Selection: only confirmed vehicles seen on this frame that are strictly ahead (`EgoCorridor.isStrictlyAhead`) and
+/// Selection: only confirmed vehicles seen on this frame (or coasted by the tracker for ≤ `coastMissed` frames — then
+/// only the current lead, whose last measured distance is repeated) that are strictly ahead (`EgoCorridor.isStrictlyAhead`) and
 /// whose box does not touch the left / right frame edge (a car passing in the adjacent lane) are candidates. Among them
 /// the lowest score wins: closeness rank (boxes whose bottom edges are within `rankTolerance` share a rank) plus
 /// `lateralPenalty` × the normalized lateral offset, so a centred car beats a slightly closer off-centre one — but a
@@ -361,6 +362,19 @@ public final class LeadVehicleTracker {
     private var smoothed: Double?
     private var samples: [(t: TimeInterval, d: Double)] = []
     private var lostSince: TimeInterval?
+    /// Box, cue description and closing speed of the last frame on which the lead was really detected.
+    private var lastBox: BBox?
+    private var lastMethod: String?
+    private var lastRelativeSpeedKmh: Double?
+
+    /// A coasted track (`TrackedObject.missed` ≥ 1, box predicted by `ObjectTracker`) may stay / become the lead for
+    /// this many missed frames. Same replay measurement as `ObjectTracker.Config.defaultCoastFrames`: lead dropouts
+    /// shorter than 1 s fell from 262 to 53 and lead ID switches from 62 to 32 with 3 frames.
+    public var coastMissed: Int = ObjectTracker.Config.defaultCoastFrames
+    /// When the lead's track ID changes but the new box overlaps the previous lead box at least this much (and the
+    /// class is the same), it is the same vehicle under a new ID: the smoothed distance and the closing-speed
+    /// samples are kept. Reasoning, not measured.
+    public var sameVehicleIoU: Double = 0.5
 
     public init(corridor: EgoCorridor = .default, selection: SelectionConfig = SelectionConfig()) {
         self.corridor = corridor
@@ -373,6 +387,9 @@ public final class LeadVehicleTracker {
         smoothed = nil
         samples.removeAll()
         lostSince = nil
+        lastBox = nil
+        lastMethod = nil
+        lastRelativeSpeedKmh = nil
     }
 
     /// Raw (unsmoothed) distance for a box, or nil when no cue is usable.
@@ -402,7 +419,28 @@ public final class LeadVehicleTracker {
     }
 
     public func update(tracks: [TrackedObject], geometry: CameraGeometry, timestamp: TimeInterval) -> LeadVehicle? {
-        let chosen = selectLead(from: tracks)
+        var chosen = selectLead(from: tracks)
+        if let coasted = chosen, coasted.missed > 0,
+           !(coasted.id == currentID && coasted.kind == currentKind && smoothed != nil) {
+            // Only the CURRENT lead may be bridged by a predicted box. Any other coasted track has no measured
+            // distance and must not hide a vehicle that is really detected on this frame.
+            chosen = selectLead(from: tracks.filter { $0.missed == 0 })
+        }
+        if let lead = chosen, lead.missed > 0 {
+            // Coasted lead: the box is a prediction. Show the last smoothed distance and do NOT add a sample, so
+            // neither the distance nor the closing-speed regression is fed by extrapolated boxes.
+            guard lead.id == currentID, lead.kind == currentKind, let value = smoothed else {
+                // A coasted track that was not the lead on its last detected frame has no measured distance.
+                if lostSince == nil { lostSince = timestamp }
+                if let since = lostSince, timestamp - since > 0.8 { reset() }
+                return nil
+            }
+            lostSince = nil
+            let gap = max(0.2, value - max(0, cameraToBumperMeters))
+            return LeadVehicle(trackID: lead.id, kind: lead.kind, box: lead.box, distanceMeters: gap,
+                               cameraDistanceMeters: value, relativeSpeedKmh: lastRelativeSpeedKmh,
+                               method: lastMethod ?? "")
+        }
         guard let lead = chosen, let (raw, method) = Self.rawDistance(for: lead.kind, box: lead.box, geometry: geometry),
               raw.isFinite, raw > 0.3, raw < 150 else {
             if lostSince == nil { lostSince = timestamp }
@@ -411,11 +449,18 @@ public final class LeadVehicleTracker {
         }
         lostSince = nil
         if lead.id != currentID || lead.kind != currentKind {
+            // Same vehicle under a new track ID (the old track was lost and the detector re-found the car where it
+            // was): keep the smoothing. A class change always restarts it (different typical sizes).
+            let sameVehicle = lead.kind == currentKind && (lastBox.map { $0.iou(lead.box) >= sameVehicleIoU } ?? false)
             currentID = lead.id
             currentKind = lead.kind
-            smoothed = nil
-            samples.removeAll()
+            if !sameVehicle {
+                smoothed = nil
+                samples.removeAll()
+            }
         }
+        lastBox = lead.box
+        lastMethod = method
         let alpha = 0.35
         let value = smoothed.map { $0 + alpha * (raw - $0) } ?? raw
         smoothed = value
@@ -437,6 +482,7 @@ public final class LeadVehicleTracker {
                 if abs(kmh) < 150 { rel = kmh }
             }
         }
+        lastRelativeSpeedKmh = rel
         let gap = max(0.2, value - max(0, cameraToBumperMeters))
         return LeadVehicle(trackID: lead.id, kind: lead.kind, box: lead.box, distanceMeters: gap,
                            cameraDistanceMeters: value, relativeSpeedKmh: rel, method: method)
@@ -469,7 +515,7 @@ extension LeadVehicleTracker {
     /// Lead candidates (strictly ahead, not at a side edge) with their selection score (lower is better).
     func scoredCandidates(_ tracks: [TrackedObject]) -> [(track: TrackedObject, score: Double)] {
         let candidates = tracks.filter {
-            $0.isConfirmed && $0.missed == 0 && $0.kind.isVehicle && $0.kind != .bicycle
+            $0.isConfirmed && $0.missed <= coastMissed && $0.kind.isVehicle && $0.kind != .bicycle
                 && !touchesSideEdge($0.box)
                 && corridor.isStrictlyAhead($0.box, centerFraction: selection.centerFraction,
                                             minOverlap: selection.minOverlap)

@@ -98,6 +98,23 @@ public final class ObjectTracker {
         /// Kinds that are counted only when the owner marks the confirmed track relevant (`markRelevant(trackIDs:)`),
         /// e.g. persons inside the roadway zone (a pedestrian on the sidewalk is not counted).
         public var deferredCountKinds: Set<VehicleKind>
+        /// Confirmed tracks without a detection are still RETURNED by `update` for this many frames ("coasting"),
+        /// with `missed ≥ 1` and the box extrapolated by the constant-velocity model. 0 = only tracks seen on the
+        /// frame are returned (the behaviour before coasting existed).
+        public var coastFrames: Int
+        /// Minimum IoU (predicted track box vs detection) of the second association stage, in which low-score
+        /// detections continue confirmed tracks that no full-score detection matched.
+        public var secondIoU: Double
+
+        /// Coasting length. Measured by replaying a real drive log (4778 logged frames, assumed 15 fps; harness
+        /// scratchpad/lane/core/Tests/RoadVisCoreTests/ExpTrackerReplay.swift) at the then-default threshold 0.45:
+        /// lead vehicle present on 1332 frames with 262 dropouts < 1 s and 62 lead ID switches without coasting;
+        /// 1891 / 53 / 32 with 3 frames; 1784 / 80 / 44 with 2; 2034 / 33 / 26 with 5 (0.33 s of pure prediction —
+        /// judged too long for a distance readout). 3 frames = 0.2 s at 15 fps.
+        public static let defaultCoastFrames: Int = 3
+        /// Second-stage IoU. Same replay: 0.3 gave +9 % frames with a matched confirmed vehicle track and fewer
+        /// confirmed IDs (191 → 184); 0.5 gave no gain. Method: ByteTrack (arXiv 2110.06864).
+        public static let defaultSecondIoU: Double = 0.3
 
         /// Thresholds at the default slider position, see `DetectionThresholds` for the measurements behind them.
         public static let defaultMinConfidence: [VehicleKind: Double] = DetectionThresholds.perClass()
@@ -107,7 +124,8 @@ public final class ObjectTracker {
                     minConfidence: [VehicleKind: Double] = Config.defaultMinConfidence,
                     deferredCountKinds: Set<VehicleKind> = [],
                     continuationFactor: Double = DetectionThresholds.continuationFactor,
-                    maxIdleSeconds: Double = 3.0) {
+                    maxIdleSeconds: Double = 3.0, coastFrames: Int = Config.defaultCoastFrames,
+                    secondIoU: Double = Config.defaultSecondIoU) {
             self.iouThreshold = iouThreshold
             self.maxMissed = maxMissed
             self.minHits = minHits
@@ -119,6 +137,8 @@ public final class ObjectTracker {
             self.deferredCountKinds = deferredCountKinds
             self.continuationFactor = continuationFactor
             self.maxIdleSeconds = maxIdleSeconds
+            self.coastFrames = max(0, coastFrames)
+            self.secondIoU = secondIoU
         }
     }
 
@@ -144,6 +164,8 @@ public final class ObjectTracker {
     private var nextID = 1
     public private(set) var uniqueCounts: [VehicleKind: Int] = [:]
     public private(set) var frameDetectionCount = 0
+    /// Number of second-stage (low-score) matches so far (diagnostics / tests).
+    public private(set) var lowScoreMatches = 0
 
     public init(config: Config = Config()) {
         self.config = config
@@ -158,6 +180,7 @@ public final class ObjectTracker {
         states.removeAll()
         uniqueCounts.removeAll()
         frameDetectionCount = 0
+        lowScoreMatches = 0
         nextID = 1
     }
 
@@ -176,6 +199,12 @@ public final class ObjectTracker {
         return (motor.contains(a) && motor.contains(b)) || (twoWheel.contains(a) && twoWheel.contains(b))
     }
 
+    /// Feeds the detections of one frame.
+    ///
+    /// Returns the tracks matched on this frame (`missed == 0`) plus, for at most `Config.coastFrames` frames, the
+    /// CONFIRMED tracks that were not matched: those carry `missed ≥ 1` and a box predicted by the constant-velocity
+    /// model. Consumers that must not act on a predicted box (pedestrian warnings, traffic-light logic, distance
+    /// samples, the research log) filter on `missed == 0`.
     @discardableResult
     public func update(detections: [Detection], timestamp: TimeInterval) -> [TrackedObject] {
         frameDetectionCount += detections.count
@@ -222,8 +251,9 @@ public final class ObjectTracker {
         for (ti, st) in states.enumerated() {
             let p = predicted[ti]
             for (di, d) in detections.enumerated() where Self.compatible(st.object.kind, d.kind) {
-                // Low-score detections only keep confirmed tracks alive.
-                if !canSpawn[di] && !st.object.isConfirmed { continue }
+                // Low-score detections take part only in the second stage below (ByteTrack order: a full-score
+                // detection is never left without its track because a low-score box overlapped it better).
+                if !canSpawn[di] { continue }
                 let iou = p.iou(d.box)
                 let penalty = st.object.kind == d.kind ? 0 : 0.05
                 var score = -1.0
@@ -252,6 +282,26 @@ public final class ObjectTracker {
             trackMatched[p.track] = true
             detMatched[p.det] = true
             apply(detection: detections[p.det], to: p.track, timestamp: timestamp)
+        }
+
+        // Second association (ByteTrack "BYTE" step): confirmed tracks that no full-score detection matched may be
+        // continued by a low-score detection of a compatible class, by IoU on the predicted box only (no centre
+        // gate). Such a match refreshes box, velocity and `lastSeen`, but adds no hit and no class vote, and it
+        // never opens or confirms a track.
+        var lowPairs: [(track: Int, det: Int, score: Double)] = []
+        for (di, d) in detections.enumerated() where !canSpawn[di] {
+            for (ti, st) in states.enumerated()
+            where !trackMatched[ti] && st.object.isConfirmed && Self.compatible(st.object.kind, d.kind) {
+                let iou = predicted[ti].iou(d.box)
+                if iou >= config.secondIoU { lowPairs.append((ti, di, iou)) }
+            }
+        }
+        lowPairs.sort { $0.score > $1.score }
+        for p in lowPairs where !trackMatched[p.track] && !detMatched[p.det] {
+            trackMatched[p.track] = true
+            detMatched[p.det] = true
+            lowScoreMatches += 1
+            apply(detection: detections[p.det], to: p.track, timestamp: timestamp, lowScore: true)
         }
 
         // Unmatched tracks: age them. Their box stays at the last observation; the prediction above extrapolates
@@ -289,10 +339,22 @@ public final class ObjectTracker {
             states.append(st)
         }
 
-        return states.filter { $0.object.missed == 0 }.map(\.object)
+        return states.compactMap { st -> TrackedObject? in
+            if st.object.missed == 0 { return st.object }
+            guard st.object.isConfirmed, st.object.missed <= config.coastFrames else { return nil }
+            // Coasted: the stored box stays at the last observation (re-acquisition predicts from it); only the
+            // returned copy is extrapolated. `dt` is clamped like the matching prediction above.
+            var object = st.object
+            let dt = max(0, min(1, timestamp - object.lastSeen))
+            let w = max(0.002, object.box.width + st.sizeRate.dw * dt)
+            let h = max(0.002, object.box.height + st.sizeRate.dh * dt)
+            object.box = BBox(x: object.box.midX + st.velocity.dx * dt - w / 2,
+                              y: object.box.midY + st.velocity.dy * dt - h / 2, width: w, height: h)
+            return object
+        }
     }
 
-    private func apply(detection d: Detection, to index: Int, timestamp: TimeInterval) {
+    private func apply(detection d: Detection, to index: Int, timestamp: TimeInterval, lowScore: Bool = false) {
         var st = states[index]
         let old = st.object.box
         let dt = timestamp - st.object.lastSeen
@@ -311,12 +373,13 @@ public final class ObjectTracker {
         st.object.box = newBox
         st.object.confidence = d.confidence
         st.object.peakConfidence = max(st.object.peakConfidence, d.confidence)
-        st.object.hits += 1
+        if !lowScore { st.object.hits += 1 }
         st.object.missed = 0
         st.object.lastSeen = timestamp
-        st.object.label = d.label
-
-        st.kindVotes[d.kind, default: 0] += d.confidence
+        if !lowScore {
+            st.object.label = d.label
+            st.kindVotes[d.kind, default: 0] += d.confidence
+        }
         if let best = st.kindVotes.max(by: { $0.value < $1.value })?.key {
             st.object.kind = best
         }

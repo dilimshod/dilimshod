@@ -55,7 +55,13 @@ public final class ObjectTracker {
         public init(iouThreshold: Double = 0.3, maxMissed: Int = 8, minHits: Int = 3, boxSmoothing: Double = 0.6)
     }
     public init(config: Config = Config())
-    /// Returns currently visible tracks (missed == 0), confirmed or not. Unique counting uses confirmed tracks only.
+    /// Returns the tracks matched on this frame (missed == 0, confirmed or not) PLUS confirmed tracks coasted for at
+    /// most Config.coastFrames (3) frames: missed ≥ 1, box predicted by the constant-velocity model. Consumers that
+    /// must not act on a predicted box filter on missed == 0 (pedestrian hazards, lights, stop signs, speed samples,
+    /// research log); LeadVehicleTracker accepts missed ≤ coastMissed and then repeats its last smoothed distance.
+    /// Two association stages: full-score detections first (IoU / centre gate), then low-score detections
+    /// (class threshold × continuationFactor … threshold) continue still-unmatched CONFIRMED tracks by IoU ≥
+    /// Config.secondIoU; such a match adds no hit and no class vote. Unique counting uses confirmed tracks only.
     public func update(detections: [Detection], timestamp: TimeInterval) -> [TrackedObject]
     public func addMakeObservation(trackID: Int, make: String, confidence: Double)
     public var minConfidence: [VehicleKind: Double]            // per-class score to open a track (slider table)
@@ -739,6 +745,12 @@ Settings: `followingDistanceEnabled`, `followingTimeGapDry` (wet ×2, snow ×3, 
 
 Pipeline (Detection/). `RecognitionWorker` runs `LeadVehicleTracker` on its queue after tracking + `MonocularSpeedEstimator` every
 processed frame (corridor horizon = `settings.corridorHorizon` clamped 0.1…0.8, `CameraGeometry` from the camera FOV + buffer size),
+Horizon: `Output.horizonY` is the row actually used. With `settings.autoHorizonEnabled` (default on) it is measured by
+`LaneHorizonEstimator` from `LaneDetector.lastVanishingPoint` (fed only at ≥ 30 km/h; ≥ 12 samples, interquartile range ≤ 0.04;
+applied when it differs by > 0.015); `settings.corridorHorizon` is then the start value / fallback and
+`settings.autoHorizonPortrait/Landscape` keep the last measurement per orientation. Synthetic-image evidence only.
+`LaneDetector`: per-frame adaptive candidate thresholds (`adaptiveThresholds`), pixel-wise maximum of the last
+`Config.accumulateFrames` (3) lane frames, crossing check at the middle ROI row, `setHorizon(_:)` to move the horizon.
 `Inputs.followingDistanceEnabled/corridorHorizon`, `Output.leadVehicle`. The main actor computes the assessment (frames ≤ 15 Hz;
 GPS updates refresh it only when no frame arrived for 0.5 s):
 ```swift

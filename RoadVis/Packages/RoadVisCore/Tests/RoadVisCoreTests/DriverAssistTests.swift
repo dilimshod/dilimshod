@@ -122,11 +122,25 @@ final class LaneDetectorTests: XCTestCase {
         }
         let before = detector.process(SyntheticRoad.image(leftBottom: 10, rightBottom: 150), timestamp: 1.2).leftConfidence
         var after = 1.0
-        for i in 0..<4 {
+        // The detector analyses the maximum of the last 3 lane frames (dashed lines), so the markings stay in the
+        // analysed picture for 2 more frames (0.4 s at 5 Hz) before the decay starts: 2 + 4 frames here.
+        for i in 0..<6 {
             after = detector.process(SyntheticRoad.image(leftBottom: nil, rightBottom: nil, seed: UInt64(i + 50)),
                                      timestamp: 1.4 + Double(i) * 0.2).leftConfidence
         }
         XCTAssertLessThan(after, before * 0.5)
+        // Without accumulation the old 4-frame bound holds.
+        let single = LaneDetector(config: LaneDetector.Config(accumulateFrames: 1))
+        for i in 0..<5 {
+            single.process(SyntheticRoad.image(leftBottom: 10, rightBottom: 150, seed: UInt64(i + 1)), timestamp: Double(i) * 0.2)
+        }
+        let singleBefore = single.process(SyntheticRoad.image(leftBottom: 10, rightBottom: 150), timestamp: 1.2).leftConfidence
+        var singleAfter = 1.0
+        for i in 0..<4 {
+            singleAfter = single.process(SyntheticRoad.image(leftBottom: nil, rightBottom: nil, seed: UInt64(i + 50)),
+                                         timestamp: 1.4 + Double(i) * 0.2).leftConfidence
+        }
+        XCTAssertLessThan(singleAfter, singleBefore * 0.5)
     }
 
     func testYellowMarkingFromBGRA() {

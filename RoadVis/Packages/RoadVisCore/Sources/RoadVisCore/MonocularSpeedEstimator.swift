@@ -65,6 +65,17 @@ public final class MonocularSpeedEstimator {
         var result = tracks
         for i in result.indices {
             var t = result[i]
+            if t.missed > 0 {
+                // Coasted track (predicted box, see `ObjectTracker.Config.coastFrames`): no new sample — a predicted
+                // box height is not a measurement. The last measured distance stays on screen; speeds are withheld.
+                let recent = (history[t.id] ?? []).suffix(3).map(\.z).sorted()
+                t.distanceMeters = recent.isEmpty ? nil : recent[recent.count / 2]
+                t.relativeSpeedKmh = nil
+                t.estimatedSpeedKmh = nil
+                if !recent.isEmpty { lastSeen[t.id] = timestamp }
+                result[i] = t
+                continue
+            }
             guard let realH = t.kind.typicalHeightMeters,
                   t.box.maxY < 0.985, t.box.minY > 0.005, // truncated boxes give wrong heights
                   let z = MonocularDistance.distance(realHeight: realH, normalizedBoxHeight: t.box.height, geometry: geometry),
