@@ -31,7 +31,6 @@ class ClipVoicePlayer(private val context: Context) {
     @Volatile var isPlaying = false
         private set
     var rate: Float = 1.1f
-    var onFinished: (() -> Unit)? = null
 
     /** Asset file name for a clip id, or null when not installed. */
     fun fileFor(name: String): String? = when {
@@ -44,22 +43,33 @@ class ClipVoicePlayer(private val context: Context) {
 
     fun installedCount(prefix: String): Int = available.count { it.startsWith(prefix) }
 
-    /** Plays the named clips gaplessly. Returns false when any clip is missing (caller falls back to TTS). */
-    fun play(names: List<String>, interrupt: Boolean = true): Boolean {
+    /**
+     * Plays the named clips gaplessly. Returns false when any clip is missing (caller falls back to TTS).
+     * [onEnd] is called once for this request unless it was replaced / stopped meanwhile: `true` after the last
+     * sample was played (main thread), `false` when a clip could not be decoded or the audio track failed (decoder
+     * thread) — the caller then says the phrase with TTS instead of dropping it. A phrase is never played partially.
+     */
+    fun play(names: List<String>, interrupt: Boolean = true, onEnd: ((played: Boolean) -> Unit)? = null): Boolean {
         if (!hasAll(names)) return false
         if (interrupt) stop()
         val gen = ++generation
         isPlaying = true
         executor.execute {
-            val parts = names.mapNotNull { pcm(it) }
-            if (gen != generation || parts.isEmpty()) { finish(gen); return@execute }
-            val sr = parts.first().sampleRate
-            val total = parts.sumOf { it.samples.size }
+            val parts = names.map { pcm(it) }
+            if (gen != generation) return@execute
+            val decoded = parts.filterNotNull().filter { it.samples.isNotEmpty() }
+            if (decoded.size != names.size) { finish(gen, false, onEnd); return@execute }
+            val sr = decoded.first().sampleRate
+            val total = decoded.sumOf { it.samples.size }
             val all = ShortArray(total)
             var off = 0
-            for (p in parts) { System.arraycopy(p.samples, 0, all, off, p.samples.size); off += p.samples.size }
+            for (p in decoded) { System.arraycopy(p.samples, 0, all, off, p.samples.size); off += p.samples.size }
             // AudioTrack errors (e.g. an empty decode → zero buffer size) must not kill the process from this thread.
-            try { playPcm(all, sr, gen) } catch (_: Exception) { track = null; finish(gen) }
+            try { playPcm(all, sr, gen, onEnd) } catch (_: Exception) {
+                track?.let { runCatching { it.release() } }
+                track = null
+                finish(gen, false, onEnd)
+            }
         }
         return true
     }
@@ -71,13 +81,13 @@ class ClipVoicePlayer(private val context: Context) {
         isPlaying = false
     }
 
-    private fun finish(gen: Int) {
+    private fun finish(gen: Int, played: Boolean, onEnd: ((Boolean) -> Unit)?) {
         if (gen != generation) return
         isPlaying = false
-        onFinished?.invoke()
+        onEnd?.invoke(played)
     }
 
-    private fun playPcm(samples: ShortArray, sampleRate: Int, gen: Int) {
+    private fun playPcm(samples: ShortArray, sampleRate: Int, gen: Int, onEnd: ((Boolean) -> Unit)?) {
         val t = AudioTrack.Builder()
             .setAudioAttributes(
                 AudioAttributes.Builder()
@@ -100,11 +110,16 @@ class ClipVoicePlayer(private val context: Context) {
             override fun onMarkerReached(track: AudioTrack?) {
                 runCatching { track?.release() }
                 if (this@ClipVoicePlayer.track === track) this@ClipVoicePlayer.track = null
-                finish(gen)
+                finish(gen, true, onEnd)
             }
             override fun onPeriodicNotification(track: AudioTrack?) {}
         }, android.os.Handler(android.os.Looper.getMainLooper()))
         t.play()
+        // Stopped / replaced while the track was being built: do not leave it playing.
+        if (gen != generation) {
+            runCatching { t.pause(); t.flush(); t.release() }
+            if (track === t) track = null
+        }
     }
 
     private fun pcm(name: String): Pcm? = synchronized(cache) {

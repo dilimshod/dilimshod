@@ -54,6 +54,7 @@ import androidx.lifecycle.LifecycleEventObserver
 import kotlinx.coroutines.delay
 import uz.roadvis.app.app.AppState
 import uz.roadvis.app.app.SpeechPriority
+import uz.roadvis.core.AlertToneKind
 import uz.roadvis.core.CoachMessage
 import uz.roadvis.core.VoicePhrase
 import kotlin.math.roundToInt
@@ -119,6 +120,8 @@ fun CameraScreen(app: AppState, isActive: Boolean) {
             if (now - last < 30) return@collect
             last = now
             val m = CoachMessage.OverSpeedLimit(limit)
+            // In the "sounds only" mode the tone is the whole reminder (`playAlertTone` checks the mode).
+            app.speech.playAlertTone(AlertToneKind.SPEEDING)
             app.speech.speak(VoicePhrase.coach(m, CoachPhrases.phrase(m)), SpeechPriority.LOW)
         }
     }

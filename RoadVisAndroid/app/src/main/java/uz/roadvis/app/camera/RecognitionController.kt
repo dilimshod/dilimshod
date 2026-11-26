@@ -104,7 +104,7 @@ class RecognitionController(val app: AppState) {
         )
 
     // Main-thread logic
-    private val warnings = DistanceWarningController { settings.alertSoundsEnabled }
+    private val warnings = DistanceWarningController()
     val coach = DriverCoach(app, assist)
     private val laneDeparture = LaneDepartureDetector()
     private val eventMonitor = CameraDrivingEventMonitor()
@@ -129,6 +129,7 @@ class RecognitionController(val app: AppState) {
     init {
         // The coach speaks the distance warnings (no duplicate speech); the controller gives haptics and the tone.
         warnings.speech = null
+        warnings.tones = { kind -> app.speech.playAlertTone(kind) }
         worker.outputHandler = { output -> main.post { apply(output) } }
         worker.statusHandler = { statuses -> main.post { applyModelStatuses(statuses) } }
         pushSettings()

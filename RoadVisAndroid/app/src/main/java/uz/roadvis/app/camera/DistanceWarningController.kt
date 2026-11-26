@@ -1,10 +1,9 @@
 package uz.roadvis.app.camera
 
-import android.media.AudioManager
-import android.media.ToneGenerator
 import uz.roadvis.app.app.SpeechPriority
 import uz.roadvis.app.app.SpeechService
 import uz.roadvis.app.l10n.L
+import uz.roadvis.core.AlertToneKind
 import uz.roadvis.core.DistanceStatus
 import uz.roadvis.core.FollowingDistanceAssessment
 import uz.roadvis.core.FollowingDistancePolicy
@@ -17,14 +16,18 @@ enum class AssistHaptic { ERROR, WARNING, LIGHT, SOFT }
  * Haptic / tone / voice warnings for the gap to the lead vehicle (port of iOS `DistanceWarningController`, fed once
  * per processed frame on the main thread).
  * - Moving + danger with a time to collision below `policy.collisionWarningSeconds` (held ≥ 0.2 s) → error haptic,
- *   short alert tone (only when `alertSoundsEnabled`), voice "collision" (high priority, ≤ every 5 s).
- * - Moving + danger without such a TTC (too close, held ≥ 1 s) → light haptic, voice "keep distance" (≤ every 12 s).
+ *   collision alert tone, voice "collision" (critical priority — interrupts everything, ≤ every 5 s).
+ * - Moving + danger without such a TTC (too close, held ≥ 1 s) → light haptic, voice "keep distance" (≤ every 12 s);
+ *   in the "sounds only" mode a short tone instead.
+ * Tones follow the sound mode (`AlertToneKind.shouldPlay`, checked by `SpeechService.playAlertTone`); haptics do not.
  * - Standing: never a sound or voice — one soft haptic when the gap drops below the stopped gap.
  * Voice is given only when [speech] is set; the driver coach takes over the spoken warnings (as on iOS) and sets it
  * to null, so nothing is said twice.
  */
-class DistanceWarningController(private val alertSoundsEnabled: () -> Boolean) {
+class DistanceWarningController {
     var speech: SpeechService? = null
+    /** Plays an alert tone when the sound mode allows it (`SpeechService.playAlertTone`); stays set when the coach speaks. */
+    var tones: ((AlertToneKind) -> Boolean)? = null
     var haptic: ((AssistHaptic) -> Unit)? = null
 
     private var lastCollisionAlert: Double? = null
@@ -33,7 +36,6 @@ class DistanceWarningController(private val alertSoundsEnabled: () -> Boolean) {
     private var tooCloseSince: Double? = null
     private var stoppedHapticFired = false
     private var stoppedEpisodeLeadID: Int? = null
-    private var tone: ToneGenerator? = null
 
     fun evaluate(assessment: FollowingDistanceAssessment?, leadID: Int?, policy: FollowingDistancePolicy,
                  enabled: Boolean, now: Double = RecognitionWorker.uptimeSeconds()) {
@@ -72,8 +74,8 @@ class DistanceWarningController(private val alertSoundsEnabled: () -> Boolean) {
             lastCollisionAlert = now
             lastKeepDistanceAlert = now   // no "keep distance" right after the collision warning
             haptic?.invoke(AssistHaptic.ERROR)
-            playAlertTone()
-            speech?.speak(VoicePhrase.fixed("collision_alert", L("voice.collision")), SpeechPriority.HIGH)
+            tones?.invoke(AlertToneKind.COLLISION)
+            speech?.speak(VoicePhrase.fixed("collision_alert", L("voice.collision")), SpeechPriority.CRITICAL)
         } else if (isTooClose(assessment, policy)) {
             collisionSince = null
             val since = tooCloseSince ?: now
@@ -82,7 +84,8 @@ class DistanceWarningController(private val alertSoundsEnabled: () -> Boolean) {
             lastKeepDistanceAlert?.let { if (now - it < KEEP_DISTANCE_REPEAT) return }
             lastKeepDistanceAlert = now
             haptic?.invoke(AssistHaptic.LIGHT)
-            speech?.speak(VoicePhrase.fixed("keep_distance", L("voice.keepDistance")), SpeechPriority.NORMAL)
+            tones?.invoke(AlertToneKind.ATTENTION)
+            speech?.speak(VoicePhrase.fixed("keep_distance", L("voice.keepDistance")), SpeechPriority.NORMAL, maxAge = 3.0)
         } else {
             collisionSince = null
             tooCloseSince = null
@@ -95,16 +98,6 @@ class DistanceWarningController(private val alertSoundsEnabled: () -> Boolean) {
         tooCloseSince = null
         stoppedHapticFired = false
         stoppedEpisodeLeadID = null
-    }
-
-    private fun playAlertTone() {
-        if (!alertSoundsEnabled()) return
-        try {
-            val t = tone ?: ToneGenerator(AudioManager.STREAM_ALARM, 85).also { tone = it }
-            t.startTone(ToneGenerator.TONE_PROP_BEEP2, 220)
-        } catch (_: RuntimeException) {
-            tone = null
-        }
     }
 
     companion object {

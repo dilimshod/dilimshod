@@ -26,6 +26,8 @@ import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.RecordVoiceOver
+import androidx.compose.material.icons.automirrored.filled.VolumeOff
+import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.VolumeOff
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -216,10 +218,10 @@ fun StatusDotButton(c: RecognitionController, onClick: () -> Unit) {
 
 /** Icon of a sound mode (speaker-button and its menu). */
 fun soundModeIcon(mode: SoundMode): ImageVector = when (mode) {
-    SoundMode.ALL -> Icons.Filled.VolumeUp
+    SoundMode.ALL -> Icons.AutoMirrored.Filled.VolumeUp
     SoundMode.SOUNDS_ONLY -> Icons.Filled.Notifications
     SoundMode.VOICE_ONLY -> Icons.Filled.RecordVoiceOver
-    SoundMode.SILENT -> Icons.Filled.VolumeOff
+    SoundMode.SILENT -> Icons.AutoMirrored.Filled.VolumeOff
 }
 
 /** Menu with the four sound modes (title, icon per mode, check mark on the current one). */

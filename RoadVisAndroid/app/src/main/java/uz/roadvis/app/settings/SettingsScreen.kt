@@ -222,7 +222,7 @@ private fun DriverAssistSections(app: AppState) {
     FormSection(header = L("assist.title"), footer = L("assist.footer")) {
         // Master switch for all spoken prompts (same state as the speaker button on the camera screen).
         ToggleRow(L("assist.voicePrompts"), !app.speech.isMuted, { app.speech.isMuted = !it }, icon = Icons.AutoMirrored.Filled.VolumeUp)
-        ToggleRow(L("assist.alertSounds"), app.settings.alertSoundsEnabled, { app.settings.alertSoundsEnabled = it }, icon = Icons.Filled.Notifications)
+        ToggleRow(L("assist.alertSounds"), app.settings.alertSoundsEnabled, { app.speech.soundMode = app.settings.soundMode.withTones(it) }, icon = Icons.Filled.Notifications)
         ToggleRow(L("assist.voice"), x.voiceCoachingEnabled, { x.voiceCoachingEnabled = it }, icon = Icons.Filled.RecordVoiceOver)
         ToggleRow(L("assist.pedestrians"), x.pedestrianWarningsEnabled, { x.pedestrianWarningsEnabled = it }, icon = Icons.AutoMirrored.Filled.DirectionsWalk)
         ToggleRow(L("assist.lights"), x.trafficLightHintsEnabled, { x.trafficLightHintsEnabled = it }, icon = Icons.Filled.Traffic, enabled = x.voiceCoachingEnabled)

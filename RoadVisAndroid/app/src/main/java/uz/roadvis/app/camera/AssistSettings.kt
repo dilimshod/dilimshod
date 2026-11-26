@@ -9,7 +9,7 @@ import androidx.compose.runtime.mutableStateOf
  * Settings of the beginner-driver assistant (port of iOS `DriverAssistSettings`, same "rv." keys and defaults).
  * They are not part of [uz.roadvis.app.app.AppSettings], so the camera feature reads them from the shared
  * "roadvis" SharedPreferences and follows changes written by any other screen (settings) through a listener.
- * `alertSoundsEnabled` lives in AppSettings ("rv.alertSounds").
+ * `alertSoundsEnabled` lives in AppSettings (derived from the sound mode, "rv.soundMode").
  */
 class AssistSettings(context: Context) {
     private val prefs: SharedPreferences = context.getSharedPreferences("roadvis", Context.MODE_PRIVATE)
