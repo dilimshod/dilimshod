@@ -10,7 +10,9 @@ import Observation
 /// (GPS speed derivative, confirmed by `CMDeviceMotion.userAcceleration` — no permission needed,
 /// `HarshMotionDetector`), plus camera events delivered through `ingest(_:)` (wired by `AppState` to
 /// `RecognitionPipeline.onDrivingEvent`). Everything goes through `DrivingEventDebouncer`.
-/// Optionally starts the camera research CSV (`RecognitionPipeline.startRecording()`) for the trip.
+/// Optionally starts the camera research CSV (`RecognitionPipeline.startRecording()`) for the trip (setting
+/// «CSV камеры во время поездки» or «Журнал для исследования»). Recording has no on-screen controls: `AppState`
+/// starts / stops it automatically (setting «Фоновая запись поездок»), Settings → Поездки offers manual control.
 /// The in-progress trip is autosaved every 60 s, so a killed app still leaves its trip in the history.
 @Observable
 @MainActor
@@ -105,7 +107,8 @@ final class TripRecorder {
         startMotion()
 
         startedCameraCSV = false
-        if settings.tripRecordCameraCSV, !recognition.isRecording {
+        // The research CSV («Журнал для исследования» / «CSV камеры во время поездки») follows the trip recording.
+        if settings.tripRecordCameraCSV || settings.recordExperimentLog, !recognition.isRecording {
             recognition.startRecording()
             startedCameraCSV = true
         }

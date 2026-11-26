@@ -11,15 +11,22 @@ import UIKit
 /// - a compact red / orange pedestrian warning ("Yield to the pedestrian!") centred under the top row while a pedestrian
 ///   is on / about to enter the roadway ahead;
 /// - compact banners under the top row (model problems hide themselves after a few seconds);
-/// - bottom row (44 pt translucent buttons): research recording, navigator.
+/// - bottom-right: navigator button. There is no recording control: trip recording (and the research CSV that
+///   follows it) runs silently in the background and is controlled in Settings → Поездки.
 ///
 /// Camera layers (full screen, same aspect-fill mapping): own-lane corridor, corner-bracket boxes with the lead vehicle
 /// highlighted, the animated distance line to the lead, tap targets (tap a box → detail card), and a red edge glow
 /// during a forward-collision warning. The tap targets sit below the HUD, so every button keeps working.
 ///
 /// The camera itself is started/stopped by `AppState.updateCameraForMode()`, not by this view.
+///
+/// `RootView` keeps this view mounted behind the navigator; while `isActive` is false the HUD and every per-frame
+/// layer are not built (no 15 Hz re-rendering while hidden) and the preview layer is disconnected when the
+/// navigator's camera window needs the session connection. The preview layer itself is never re-created.
 struct RecognitionView: View {
     @Environment(AppState.self) private var app
+    /// True while the camera screen is the visible screen.
+    var isActive: Bool = true
     @Environment(\.verticalSizeClass) private var verticalSizeClass
 
     @State private var showStatus = false
@@ -27,8 +34,6 @@ struct RecognitionView: View {
     @State private var selectedTrackID: Int?
     @AppStorage(FollowingDistanceHUD.expandedKey) private var distanceHUDExpanded = false
     @State private var lastSpeedWarning: Date?
-    @State private var export: RecordingExport?
-    @State private var isSavingRecording = false
     @State private var hideModelBanner = false
     @AppStorage("rv.countersExpanded") private var countersExpanded = false
 
@@ -42,30 +47,37 @@ struct RecognitionView: View {
             if pipeline.cameraPermissionDenied {
                 CameraPermissionCard()
             } else {
-                CameraPreviewView(session: pipeline.camera.session)
+                // Stays mounted while hidden; disconnected only when the navigator's camera window shows the camera.
+                CameraPreviewView(session: pipeline.camera.session,
+                                  isConnected: isActive || !app.settings.showCameraPiP)
                     .ignoresSafeArea()
-                LiveDetectionLayer(pipeline: pipeline, settings: app.settings,
-                                   selectedTrackID: $selectedTrackID, labelInsets: leadLabelInsets)
-                    .ignoresSafeArea()
+                if isActive {
+                    LiveDetectionLayer(pipeline: pipeline, settings: app.settings,
+                                       selectedTrackID: $selectedTrackID, labelInsets: leadLabelInsets)
+                        .ignoresSafeArea()
+                }
             }
 
-            hud(pipeline: pipeline)
+            if isActive {
+                hud(pipeline: pipeline)
 
-            if !pipeline.cameraPermissionDenied {
-                TrackDetailLayer(pipeline: pipeline, selectedTrackID: $selectedTrackID)
+                if !pipeline.cameraPermissionDenied {
+                    TrackDetailLayer(pipeline: pipeline, selectedTrackID: $selectedTrackID)
+                        .ignoresSafeArea()
+                }
+                CollisionWarningGlow(pipeline: pipeline, settings: app.settings)
                     .ignoresSafeArea()
             }
-            CollisionWarningGlow(pipeline: pipeline, settings: app.settings)
-                .ignoresSafeArea()
         }
         .onChange(of: app.location.speedKmh) { _, speed in
-            checkSpeedWarning(speed)
+            // Spoken only while the camera screen is shown (as before both screens stayed mounted).
+            if isActive { checkSpeedWarning(speed) }
+        }
+        .onChange(of: isActive) { _, active in
+            if !active { selectedTrackID = nil }
         }
         .sheet(isPresented: $showStatus) {
             RecognitionStatusView(pipeline: pipeline)
-        }
-        .sheet(item: $export) { item in
-            RecordingExportSheet(export: item)
         }
         .sheet(isPresented: $showNorms) {
             DistanceNormsSheet()
@@ -134,18 +146,10 @@ struct RecognitionView: View {
 
             Spacer(minLength: 0)
 
-            ZStack(alignment: .bottom) {
-                HStack(alignment: .bottom) {
-                    Spacer()
-                    NavigatorCornerButton {
-                        app.switchTo(.navigator)
-                    }
-                }
-                RecordButton(isRecording: pipeline.isRecording,
-                             startedAt: pipeline.recordingStartedAt,
-                             isSaving: isSavingRecording,
-                             isEnabled: pipeline.isRecording || pipeline.detectorStatus.isReady) {
-                    toggleRecording(pipeline)
+            HStack(alignment: .bottom) {
+                Spacer()
+                NavigatorCornerButton {
+                    app.switchTo(.navigator)
                 }
             }
         }
@@ -155,20 +159,6 @@ struct RecognitionView: View {
     }
 
     // MARK: - Actions
-
-    private func toggleRecording(_ pipeline: RecognitionPipeline) {
-        if pipeline.isRecording {
-            isSavingRecording = true
-            Task {
-                let urls = await pipeline.finishRecording()
-                isSavingRecording = false
-                let error = urls.isEmpty ? (pipeline.recordingError ?? L("rec.noDataToSave")) : nil
-                export = RecordingExport(urls: urls, error: error)
-            }
-        } else {
-            pipeline.startRecording()
-        }
-    }
 
     /// Speaks the over-limit reminder (app language) at most once per 30 s while the limit (+ tolerance) is exceeded.
     private func checkSpeedWarning(_ speed: Double?) {
@@ -756,79 +746,6 @@ private struct InfoBanner: View {
 
 // MARK: - Bottom
 
-/// Starts/stops the research recording; shows the elapsed time while recording.
-private struct RecordButton: View {
-    let isRecording: Bool
-    let startedAt: Date?
-    let isSaving: Bool
-    let isEnabled: Bool
-    let action: () -> Void
-
-    var body: some View {
-        Button(action: action) {
-            HStack(spacing: 7) {
-                ZStack {
-                    Circle()
-                        .strokeBorder(isRecording ? RVTheme.recording : Color.white, lineWidth: 2)
-                        .frame(width: 22, height: 22)
-                        .rvPulse(isRecording, minOpacity: 0.35, period: 1.4)
-                    if isRecording {
-                        RoundedRectangle(cornerRadius: 2, style: .continuous)
-                            .fill(RVTheme.recording)
-                            .frame(width: 9, height: 9)
-                            .transition(.scale.combined(with: .opacity))
-                    } else {
-                        Circle()
-                            .fill(RVTheme.recording)
-                            .frame(width: 14, height: 14)
-                            .transition(.scale.combined(with: .opacity))
-                    }
-                }
-                .animation(RVTheme.snappy, value: isRecording)
-                if isSaving {
-                    ProgressView()
-                        .controlSize(.small)
-                        .tint(.white)
-                        .accessibilityLabel(L("rec.saving"))
-                } else if isRecording, let startedAt {
-                    TimelineView(.periodic(from: startedAt, by: 1)) { context in
-                        Text(Self.elapsedText(from: startedAt, to: context.date))
-                    }
-                } else {
-                    Text(l: "rec.record")
-                }
-            }
-            .rvNumeric(14, weight: .semibold)
-            .contentTransition(.numericText())
-            .foregroundStyle(.white)
-            .rvTextShadow()
-            .padding(.leading, 11)
-            .padding(.trailing, 14)
-            .frame(height: RVTheme.HUD.hit)
-            .rvGlassCapsule(tint: isRecording ? RVTheme.recording : nil, shadow: false)
-            .overlay {
-                if isRecording {
-                    Capsule().strokeBorder(RVTheme.recording, lineWidth: 1.5)
-                }
-            }
-        }
-        .buttonStyle(RVPressableButtonStyle())
-        .disabled(!isEnabled || isSaving)
-        .opacity(isEnabled ? 1 : 0.45)
-        .accessibilityLabel(isRecording ? L("rec.record.stop") : L("rec.record.start"))
-        .accessibilityHint(L("rec.record.hint"))
-    }
-
-    /// "04:17" or "1:02:03".
-    static func elapsedText(from start: Date, to now: Date) -> String {
-        let total = max(0, Int(now.timeIntervalSince(start)))
-        let hours = total / 3600, minutes = (total % 3600) / 60, seconds = total % 60
-        return hours > 0
-            ? String(format: "%d:%02d:%02d", hours, minutes, seconds)
-            : String(format: "%02d:%02d", minutes, seconds)
-    }
-}
-
 /// Round accent button in the bottom-right corner that switches to the navigator (48 pt, translucent).
 private struct NavigatorCornerButton: View {
     let action: () -> Void
@@ -847,64 +764,5 @@ private struct NavigatorCornerButton: View {
         .buttonStyle(RVPressableButtonStyle())
         .accessibilityLabel(L("common.navigator"))
         .accessibilityHint(L("rec.toMap.hint"))
-    }
-}
-
-// MARK: - Recording export
-
-/// Files of a finished recording (or the reason why nothing was written).
-private struct RecordingExport: Identifiable {
-    let id = UUID()
-    let urls: [URL]
-    let error: String?
-}
-
-/// Sheet with the CSV files of a recording and a share button.
-private struct RecordingExportSheet: View {
-    let export: RecordingExport
-    @Environment(\.dismiss) private var dismiss
-
-    var body: some View {
-        NavigationStack {
-            List {
-                if let error = export.error {
-                    Section {
-                        Label(error, systemImage: "exclamationmark.triangle.fill")
-                            .foregroundStyle(.orange)
-                    }
-                }
-                if !export.urls.isEmpty {
-                    Section(L("rec.export.files")) {
-                        ForEach(export.urls, id: \.self) { url in
-                            Label(url.lastPathComponent, systemImage: "doc.text")
-                                .font(.system(size: 14, design: .monospaced))
-                                .lineLimit(2)
-                        }
-                    }
-                    Section {
-                        ShareLink(items: export.urls) {
-                            Label(L("rec.export.share"), systemImage: "square.and.arrow.up")
-                                .font(RVTheme.font(17, weight: .semibold))
-                                .frame(maxWidth: .infinity, minHeight: 44)
-                        }
-                    }
-                }
-                Section(L("rec.export.inside")) {
-                    Text(l: "rec.export.detections")
-                    Text(l: "rec.export.summary")
-                    Text(l: "rec.export.note")
-                        .foregroundStyle(.secondary)
-                }
-                .font(RVTheme.font(14, weight: .regular))
-            }
-            .navigationTitle(export.urls.isEmpty ? L("rec.export.notSaved") : L("rec.export.saved"))
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
-                    Button(L("common.done")) { dismiss() }
-                }
-            }
-        }
-        .presentationDetents([.medium, .large])
     }
 }

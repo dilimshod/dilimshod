@@ -4,13 +4,18 @@ import SwiftUI
 /// Shows the traffic-light colour, the number of visible vehicles and — when a lead vehicle is tracked — a badge with
 /// the ≈ gap to it in the status colour; a pedestrian on / about to enter the roadway shows a small red (orange for
 /// caution) walking-figure badge at the top. Tapping it switches back to the full-screen camera.
+///
+/// `isActive` is false while the navigator is hidden behind the camera screen: the preview layer stays mounted but
+/// disconnected (the full-screen preview owns the session connection) and the per-frame overlays are not built.
 struct CameraPiPView: View {
     let pipeline: RecognitionPipeline
+    let isActive: Bool
     @Environment(AppState.self) private var app
     @Environment(\.verticalSizeClass) private var verticalSizeClass
 
-    init(pipeline: RecognitionPipeline) {
+    init(pipeline: RecognitionPipeline, isActive: Bool = true) {
         self.pipeline = pipeline
+        self.isActive = isActive
     }
 
     private var size: CGSize {
@@ -18,16 +23,19 @@ struct CameraPiPView: View {
     }
 
     private var isLive: Bool {
-        pipeline.isRunning && !pipeline.cameraPermissionDenied && !pipeline.isCameraInterrupted
+        isActive && pipeline.isRunning && !pipeline.cameraPermissionDenied && !pipeline.isCameraInterrupted
     }
 
     var body: some View {
         ZStack {
             Color.black
+            if !pipeline.cameraPermissionDenied {
+                // Always mounted (no layer re-creation on screen switches); connected only while visible and live.
+                CameraPreviewView(session: pipeline.camera.session, isConnected: isLive)
+            }
             if isLive {
-                CameraPreviewView(session: pipeline.camera.session)
                 PiPDetectionLayer(pipeline: pipeline)
-            } else {
+            } else if isActive {
                 placeholder
             }
         }
@@ -61,14 +69,6 @@ struct CameraPiPView: View {
             }
         }
         .animation(RVTheme.snappy, value: pipeline.topPedestrianHazard == nil)
-        .overlay(alignment: .topTrailing) {
-            if pipeline.isRecording {
-                Circle()
-                    .fill(Color.red)
-                    .frame(width: 10, height: 10)
-                    .padding(8)
-            }
-        }
         .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 14, style: .continuous)

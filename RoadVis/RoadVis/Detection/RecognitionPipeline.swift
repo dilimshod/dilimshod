@@ -124,10 +124,11 @@ final class RecognitionPipeline {
     @ObservationIgnored private let signals: TrafficSignalService
     @ObservationIgnored private let worker: RecognitionWorker
     @ObservationIgnored private var wantsRunning = false
+    /// False while the camera is only kept warm (session running, no inference) — see `start(processing:)`.
+    @ObservationIgnored private var wantsProcessing = true
     @ObservationIgnored private var isRequestingPermission = false
     @ObservationIgnored private var isFinishingRecording = false
     @ObservationIgnored private var generation = 0
-    @ObservationIgnored private var lastRecordSetting: Bool
     @ObservationIgnored private let warnings = DistanceWarningController()
     @ObservationIgnored private let assist: DriverAssistSettings
     @ObservationIgnored private var laneDeparture = LaneDepartureDetector()
@@ -157,7 +158,6 @@ final class RecognitionPipeline {
         let camera = CameraService()
         self.camera = camera
         self.worker = RecognitionWorker(camera: camera)
-        self.lastRecordSetting = settings.recordExperimentLog
 
         worker.outputHandler = { [weak self] output in
             DispatchQueue.main.async { [weak self] in
@@ -202,15 +202,23 @@ final class RecognitionPipeline {
 
     /// Starts the camera and recognition (asks for camera permission on first use).
     /// Calling it again while running is harmless (the app calls it on every mode switch and foreground).
-    func start() {
-        // A recording is started automatically (setting "record experiment log") only when the camera was idle,
-        // not on repeated start() calls, so a recording the user stopped is not restarted behind their back.
-        let wasIdle = !wantsRunning
+    ///
+    /// `processing: false` keeps the capture session running ("warm") without running the detector and clears the
+    /// visible objects — used while the navigator is shown without the camera window, so switching back to the
+    /// camera is instant. A later `start()` resumes the recognition on the next frame.
+    ///
+    /// The research CSV is not started here: it follows the trip recording (`TripRecorder`).
+    func start(processing: Bool = true) {
+        let wasProcessing = wantsRunning && wantsProcessing
         wantsRunning = true
+        wantsProcessing = processing
+        if wasProcessing && !processing {
+            pauseProcessing()
+        }
         switch CameraService.authorizationStatus {
         case .authorized:
             cameraPermissionDenied = false
-            startCamera(autoRecord: wasIdle)
+            startCamera()
         case .notDetermined:
             guard !isRequestingPermission else { return }
             isRequestingPermission = true
@@ -220,7 +228,7 @@ final class RecognitionPipeline {
                 self.isRequestingPermission = false
                 self.cameraPermissionDenied = !granted
                 if granted && self.wantsRunning {
-                    self.startCamera(autoRecord: true)
+                    self.startCamera()
                 }
             }
         case .denied, .restricted:
@@ -240,11 +248,19 @@ final class RecognitionPipeline {
         clearVisibleState()
     }
 
-    private func startCamera(autoRecord: Bool) {
+    /// Detector off, in-flight results dropped, visible objects cleared; the capture session keeps running.
+    private func pauseProcessing() {
+        worker.setActive(false)
+        generation += 1
+        worker.setGeneration(generation)
+        clearVisibleState()
+    }
+
+    private func startCamera() {
         cameraError = nil
         pushSettings()
         pushLocation()
-        worker.setActive(true)
+        worker.setActive(wantsProcessing)
         camera.start { [weak self] error in
             let message = error?.localizedDescription
             DispatchQueue.main.async { [weak self] in
@@ -252,9 +268,6 @@ final class RecognitionPipeline {
                     self?.cameraDidStart(errorMessage: message)
                 }
             }
-        }
-        if autoRecord && settings.recordExperimentLog && !isRecording {
-            startRecording()
         }
     }
 
@@ -357,7 +370,7 @@ final class RecognitionPipeline {
     // MARK: - Updates from the worker / camera
 
     private func apply(_ output: RecognitionWorker.Output) {
-        guard output.generation == generation, wantsRunning else { return }
+        guard output.generation == generation, wantsRunning, wantsProcessing else { return }
         let now = ProcessInfo.processInfo.systemUptime
         let displayed = displayTracks(from: output.tracks, now: now)
         // Avoid invalidating the overlay when nothing changed (e.g. an empty road).
@@ -573,8 +586,9 @@ final class RecognitionPipeline {
         }
     }
 
-    /// Re-pushes the recognition settings whenever one of them changes; turning on "record experiment log"
-    /// while the camera runs starts a recording. Following-distance settings refresh the assessment right away.
+    /// Re-pushes the recognition settings whenever one of them changes. Following-distance settings refresh the
+    /// assessment right away. ("Record experiment log" no longer starts a recording here: the CSV follows the trip
+    /// recording, see `TripRecorder`.)
     private func observeSettings() {
         withObservationTracking {
             _ = settings.detectionConfidence
@@ -582,7 +596,6 @@ final class RecognitionPipeline {
             _ = settings.trackPedestrians
             _ = settings.detectTrafficLights
             _ = settings.makeRecognitionEnabled
-            _ = settings.recordExperimentLog
             _ = settings.followingDistanceEnabled
             _ = settings.corridorHorizon
             _ = settings.followingTimeGapDry
@@ -597,13 +610,6 @@ final class RecognitionPipeline {
                 guard let self else { return }
                 self.pushSettings()
                 self.refreshFollowingDistance(fromFrame: false)
-                let record = self.settings.recordExperimentLog
-                if record != self.lastRecordSetting {
-                    self.lastRecordSetting = record
-                    if record && self.wantsRunning && !self.isRecording {
-                        self.startRecording()
-                    }
-                }
                 self.observeSettings()
             }
         }

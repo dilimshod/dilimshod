@@ -1,13 +1,28 @@
 import SwiftUI
 
-/// Settings sections of the navigator («Маршрутизация», «Пробки»). Its body consists of `Section`s only, so it is
+/// Settings sections of the navigator («Карта», «Маршрутизация», «Пробки»). Its body consists of `Section`s only, so it is
 /// meant to be placed inside the `Form` of `SettingsView`.
 struct NavigationSettingsSection: View {
     @Environment(AppState.self) private var app
     @AppStorage(NavigatorSettingsKeys.osrmEndpoint) private var osrmEndpoint = OSRM.defaultEndpoint
+    @AppStorage(NavigatorSettingsKeys.mapStyle) private var mapStyleRaw = NavigatorMapStyle.default.rawValue
 
     var body: some View {
         @Bindable var settings = app.settings
+        let mapStyle = NavigatorMapStyle.resolve(mapStyleRaw)
+
+        Section {
+            Picker(L("nav.mapLayer"), selection: Binding(get: { mapStyle.rawValue }, set: { mapStyleRaw = $0 })) {
+                ForEach(NavigatorMapStyle.allCases) { option in
+                    Label(option.displayName, systemImage: option.symbolName).tag(option.rawValue)
+                }
+            }
+            .pickerStyle(.inline)
+        } header: {
+            Text(l: "navset.map")
+        } footer: {
+            Text(l: "navset.map.footer")
+        }
 
         Section {
             Picker(L("navset.engine"), selection: $settings.routingEngine) {
@@ -76,8 +91,11 @@ struct NavigationSettingsSection: View {
         }
 
         Section {
-            Toggle(L("navset.appleTraffic"), isOn: $settings.showTrafficOnMap)
-                .frame(minHeight: 44)
+            // Apple traffic is drawn only on the Apple «Гибрид» layer (not over OSM tiles or plain imagery).
+            if mapStyle == .hybrid {
+                Toggle(L("navset.appleTraffic"), isOn: $settings.showTrafficOnMap)
+                    .frame(minHeight: 44)
+            }
 
             VStack(alignment: .leading, spacing: 6) {
                 Text(l: "navset.customTiles")

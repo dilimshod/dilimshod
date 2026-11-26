@@ -4,8 +4,8 @@ import SwiftUI
 /// TOP-LEFT corner, directly below the speedometer row: white SF Symbol turn arrow + white distance ("350 м"),
 /// an optional small street / instruction line, and a thin white countdown bar for the last 300 m. No heavy plate —
 /// only a very light material and a soft shadow; ≈ 48 pt tall. Tap → back to the navigator.
-/// While a trip is recorded a tiny red dot with the elapsed time is shown (without navigation: a small chip with
-/// a stop button). Self-contained: reads `AppState`, renders nothing when there is nothing to show.
+/// Trip recording runs silently in the background (controlled in Settings → Поездки), so nothing about it is
+/// shown here. Self-contained: reads `AppState`, renders nothing when there is nothing to show.
 ///
 /// Embedding (RecognitionView HUD, leading column right under the `SpeedHUD()` / `RoadLine` row):
 /// `NavigationMiniBanner()`
@@ -17,22 +17,18 @@ struct NavigationMiniBanner: View {
 
     var body: some View {
         let nav = app.navigation
-        let recorder = app.tripRecorder
         Group {
             if nav.state == .navigating || nav.state == .arrived {
-                guidance(nav, recorder: recorder)
-            } else if recorder.isRecording || recorder.isFinishing {
-                recordingChip(recorder)
+                guidance(nav)
             }
         }
         .frame(maxWidth: 260, alignment: .leading)
         .animation(RVTheme.snappy, value: nav.state)
-        .animation(RVTheme.snappy, value: recorder.isRecording)
     }
 
     // MARK: - Guidance
 
-    private func guidance(_ nav: NavigationService, recorder: TripRecorder) -> some View {
+    private func guidance(_ nav: NavigationService) -> some View {
         Button {
             app.switchTo(.navigator)
         } label: {
@@ -49,9 +45,6 @@ struct NavigationMiniBanner: View {
                                 .opacity(0.85)
                                 .lineLimit(1)
                         }
-                    }
-                    if recorder.isRecording || recorder.isFinishing {
-                        recordingDot(recorder)
                     }
                 }
                 if let fraction = countdownFraction(nav) {
@@ -118,64 +111,6 @@ struct NavigationMiniBanner: View {
         guard nav.state == .navigating, let progress = nav.progress, !progress.isOffRoute,
               let distance = progress.distanceToNextManeuver, distance <= Self.countdownDistance else { return nil }
         return min(1, max(0, 1 - distance / Self.countdownDistance))
-    }
-
-    // MARK: - Recording
-
-    private func recordingDot(_ recorder: TripRecorder) -> some View {
-        HStack(spacing: 4) {
-            Circle()
-                .fill(RVTheme.recording)
-                .frame(width: 7, height: 7)
-                .rvPulse(recorder.isRecording, minOpacity: 0.35, period: 1.4)
-            if let started = recorder.startedAt {
-                Text(started, style: .timer)
-                    .font(RVTheme.font(10, weight: .semibold))
-                    .monospacedDigit()
-                    .opacity(0.85)
-            }
-        }
-        .padding(.leading, 4)
-        .accessibilityLabel(L("trip.recording"))
-    }
-
-    private func recordingChip(_ recorder: TripRecorder) -> some View {
-        HStack(spacing: 5) {
-            Circle()
-                .fill(RVTheme.recording)
-                .frame(width: 7, height: 7)
-                .rvPulse(recorder.isRecording, minOpacity: 0.35, period: 1.4)
-            if recorder.isFinishing {
-                Text(l: "trip.saving")
-            } else if let started = recorder.startedAt {
-                Text(started, style: .timer)
-                    .monospacedDigit()
-                if recorder.liveEventCount > 0 {
-                    Text(l: "mini.eventsShort", recorder.liveEventCount)
-                        .foregroundStyle(RVTheme.caution)
-                }
-            }
-            if recorder.isRecording {
-                Button {
-                    app.stopTripRecording()
-                } label: {
-                    Image(systemName: "stop.fill")
-                        .font(.system(size: 11, weight: .bold))
-                        .frame(width: 32, height: 32)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel(L("trip.record.stop"))
-            }
-        }
-        .font(RVTheme.font(11, weight: .semibold))
-        .foregroundStyle(.white)
-        .padding(.leading, 10)
-        .padding(.trailing, 2)
-        .frame(minHeight: 32)
-        .background(.ultraThinMaterial.opacity(0.35), in: Capsule(style: .continuous))
-        .shadow(color: RVTheme.textShadow, radius: 3, x: 0, y: 1)
-        .fixedSize()
     }
 
     private func accessibilityText(_ nav: NavigationService) -> String {

@@ -16,19 +16,28 @@ extension Notification.Name {
 /// built for this layer (`videoRotationAngleForHorizonLevelPreview`, observed with KVO). `CameraService` uses the
 /// same preview-based angle for its frames while a preview is attached, so boxes drawn with aspect-fill geometry
 /// line up with the picture in every orientation.
+///
+/// `isConnected = false` keeps the view (and its layer) alive but disconnects it from the session. The app keeps
+/// the full-screen preview and the navigator's PiP window mounted at the same time, but connects only the visible
+/// one: some iOS versions allow a single connected preview layer per session, and a hidden layer must not steal the
+/// connection. When a peer disconnects, a connected preview that lost its connection re-attaches itself.
 struct CameraPreviewView: UIViewRepresentable {
     let session: AVCaptureSession
     let videoGravity: AVLayerVideoGravity
+    let isConnected: Bool
 
-    init(session: AVCaptureSession, videoGravity: AVLayerVideoGravity = .resizeAspectFill) {
+    init(session: AVCaptureSession, videoGravity: AVLayerVideoGravity = .resizeAspectFill, isConnected: Bool = true) {
         self.session = session
         self.videoGravity = videoGravity
+        self.isConnected = isConnected
     }
 
     func makeUIView(context: Context) -> PreviewUIView {
         let view = PreviewUIView()
         view.previewLayer.videoGravity = videoGravity
-        view.attach(session: session)
+        if isConnected {
+            view.attach(session: session)
+        }
         return view
     }
 
@@ -36,8 +45,12 @@ struct CameraPreviewView: UIViewRepresentable {
         if uiView.previewLayer.videoGravity != videoGravity {
             uiView.previewLayer.videoGravity = videoGravity
         }
-        if uiView.previewLayer.session !== session {
-            uiView.attach(session: session)
+        if isConnected {
+            if uiView.previewLayer.session !== session {
+                uiView.attach(session: session)
+            }
+        } else if uiView.previewLayer.session != nil {
+            uiView.detach()
         }
     }
 

@@ -1,6 +1,7 @@
 import SwiftUI
 
-/// Settings → «Поездки»: autostart with «Поехали», camera CSV, event thresholds, manual start / stop and the history.
+/// Settings → «Поездки»: the on/off switch of the silent background trip recording, the history, manual start / stop,
+/// camera CSV and event thresholds. This is the only place where recording is controlled (no on-screen buttons).
 struct TripSettingsSection: View {
     @Environment(AppState.self) private var app
 
@@ -8,6 +9,15 @@ struct TripSettingsSection: View {
         @Bindable var settings = app.settings
         let recorder = app.tripRecorder
         Section {
+            Toggle(isOn: $settings.tripAutoRecord) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(l: "tripset.auto")
+                    Text(l: "tripset.auto.detail")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
             NavigationLink {
                 TripHistoryView()
             } label: {
@@ -22,6 +32,8 @@ struct TripSettingsSection: View {
                 }
             }
             if recorder.isRecording {
+                Label(L("tripset.recordingNow"), systemImage: "record.circle")
+                    .foregroundStyle(.secondary)
                 Button(role: .destructive) {
                     app.stopTripRecording()
                 } label: {
@@ -35,7 +47,6 @@ struct TripSettingsSection: View {
                 }
                 .disabled(recorder.isFinishing)
             }
-            Toggle(L("tripset.auto"), isOn: $settings.tripAutoRecord)
             Toggle(L("tripset.cameraCSV"), isOn: $settings.tripRecordCameraCSV)
             Stepper(value: $settings.tripSpeedToleranceKmh, in: 0...20, step: 1) {
                 valueRow(L("tripset.tolerance"), "+\(Int(settings.tripSpeedToleranceKmh)) \(RVFormat.appKmh)")

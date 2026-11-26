@@ -4,11 +4,17 @@ import SwiftUI
 
 /// Full-screen navigator: `MKMapView` map below everything; on top the guidance banner (with lanes and "затем"),
 /// the collapsible current-road card and a hazard chip; the live camera window (or a camera button) in the top-left
-/// corner; map buttons on the right (layers: Схема / Спутник / Гибрид, 3D, Apple traffic; recentre; report;
-/// settings); and a state-dependent bottom panel (search → planning → route options → trip info → arrival).
-/// Panels stay at the edges so the map centre (the car) is never covered.
+/// corner; map buttons on the right (layers: OpenStreetMap / CARTO Dark / Voyager / Спутник / Гибрид, 3D, Apple
+/// traffic for Гибрид; recentre; report; settings); and a state-dependent bottom panel (search → planning → route
+/// options → trip info → arrival). Panels stay at the edges so the map centre (the car) is never covered. The map
+/// attribution («© участники OpenStreetMap», «© CARTO») is always visible at the bottom right while OSM tiles are shown.
+///
+/// `RootView` keeps this view mounted behind the camera screen; `isActive` is false while it is hidden, so the map
+/// skips camera animations and the camera window disconnects its preview layer.
 struct NavigatorView: View {
     @Environment(AppState.self) private var app
+    /// True while the navigator is the visible screen.
+    var isActive: Bool = true
 
     @State private var isFollowing = true
     @State private var showSearch = false
@@ -17,7 +23,7 @@ struct NavigatorView: View {
     @State private var showLongPressDialog = false
     @State private var topInset: CGFloat = 0
     @State private var bottomInset: CGFloat = 0
-    @AppStorage(NavigatorSettingsKeys.mapStyle) private var mapStyleRaw = NavigatorMapStyle.standard.rawValue
+    @AppStorage(NavigatorSettingsKeys.mapStyle) private var mapStyleRaw = NavigatorMapStyle.default.rawValue
     @AppStorage(NavigatorSettingsKeys.map3D) private var is3D = true
 
     private static let fixTheMapURL = URL(string: "https://www.openstreetmap.org/fixthemap")!
@@ -97,13 +103,14 @@ struct NavigatorView: View {
             events: nav.state == .idle ? [] : nav.timeline,
             speedLimitSegments: nav.state == .idle ? [] : nav.speedLimitSegments,
             incidents: app.incidents.incidents,
-            mapStyle: NavigatorMapStyle(rawValue: mapStyleRaw) ?? .standard,
+            mapStyle: mapStyle,
             is3D: is3D,
             cameraMode: cameraMode(nav.state),
             showsTraffic: app.settings.showTrafficOnMap,
             trafficTileTemplate: app.settings.trafficTileTemplate,
             allowsRouteSelection: nav.state == .previewing,
             mapInsets: UIEdgeInsets(top: topInset, left: 0, bottom: bottomInset, right: 0),
+            isActive: isActive,
             isFollowing: $isFollowing,
             onSelectRoute: { id in
                 nav.selectedRouteID = id
@@ -114,6 +121,8 @@ struct NavigatorView: View {
             }
         )
     }
+
+    private var mapStyle: NavigatorMapStyle { NavigatorMapStyle.resolve(mapStyleRaw) }
 
     private func cameraMode(_ state: NavigationService.State) -> NavigationMapView.CameraMode {
         switch state {
@@ -215,10 +224,11 @@ struct NavigatorView: View {
         }
     }
 
-    /// Map layer switcher: Схема / Спутник / Гибрид, 3D, Apple traffic layer.
+    /// Map layer switcher: OSM tile layers / Спутник / Гибрид, 3D, Apple traffic layer (Гибрид only — Apple traffic
+    /// is not drawn over OSM tiles or plain imagery).
     private var layersMenu: some View {
         @Bindable var settings = app.settings
-        let style = NavigatorMapStyle(rawValue: mapStyleRaw) ?? .standard
+        let style = mapStyle
         return Menu {
             Picker(L("nav.mapLayer"), selection: $mapStyleRaw) {
                 ForEach(NavigatorMapStyle.allCases) { option in
@@ -228,8 +238,10 @@ struct NavigatorView: View {
             Toggle(isOn: $is3D) {
                 Label(L("nav.3d"), systemImage: "view.3d")
             }
-            Toggle(isOn: $settings.showTrafficOnMap) {
-                Label(L("nav.appleTraffic"), systemImage: "car.2.fill")
+            if style == .hybrid {
+                Toggle(isOn: $settings.showTrafficOnMap) {
+                    Label(L("nav.appleTraffic"), systemImage: "car.2.fill")
+                }
             }
         } label: {
             Image(systemName: style.symbolName)
@@ -250,7 +262,7 @@ struct NavigatorView: View {
     private var cameraCorner: some View {
         if app.settings.showCameraPiP {
             // Live camera with recognition boxes; it sizes and styles itself and returns to the camera on tap.
-            CameraPiPView(pipeline: app.recognition)
+            CameraPiPView(pipeline: app.recognition, isActive: isActive)
         } else {
             GlassIconButton(systemName: "camera.fill", label: L("common.camera"), size: RVTheme.HUD.button) {
                 app.switchTo(.camera)
@@ -319,10 +331,10 @@ struct NavigatorView: View {
         }
     }
 
-    /// Trip history and manual trip recording (the shell has no tabs; these are the entry points of the idle screen).
+    /// Trip history and «About» (the shell has no tabs; these are the entry points of the idle screen). Trip
+    /// recording has no on-screen control: it runs in the background and is controlled in Settings → Поездки.
     private var idleShortcuts: some View {
-        let recorder = app.tripRecorder
-        return HStack(spacing: 8) {
+        HStack(spacing: 8) {
             Button {
                 app.showTripHistory = true
             } label: {
@@ -333,32 +345,6 @@ struct NavigatorView: View {
                     .background(.regularMaterial, in: Capsule())
             }
             .buttonStyle(.plain)
-            Button {
-                if recorder.isRecording {
-                    app.stopTripRecording()
-                } else {
-                    app.startTripRecording()
-                }
-            } label: {
-                Group {
-                    if recorder.isRecording, let started = recorder.startedAt {
-                        HStack(spacing: 6) {
-                            Image(systemName: "stop.fill")
-                            Text(started, style: .timer).monospacedDigit()
-                        }
-                        .foregroundStyle(RVTheme.recording)
-                    } else {
-                        Label(L("trip.record"), systemImage: "record.circle")
-                    }
-                }
-                .font(.footnote.weight(.semibold))
-                .padding(.horizontal, 14)
-                .frame(minHeight: 44)
-                .background(.regularMaterial, in: Capsule())
-            }
-            .buttonStyle(.plain)
-            .disabled(recorder.isFinishing)
-            .accessibilityLabel(recorder.isRecording ? L("trip.record.stop") : L("trip.record.start"))
             Spacer(minLength: 0)
             Button {
                 app.showAbout = true
@@ -467,23 +453,37 @@ struct NavigatorView: View {
 
     @ViewBuilder
     private func attributionFooter(_ nav: NavigationService) -> some View {
+        let tiles = mapStyle.tileSource
         let showsOSM = nav.routeOptions.contains { $0.sources.contains(where: \.usesOpenStreetMap) }
             || !nav.routeEdges.isEmpty || app.roadInfo.currentRoad != nil || !app.roadInfo.routeFeatures.isEmpty
         let showsWeather = (nav.state == .navigating && app.weather.current != nil) || !nav.routeWeather.points.isEmpty
-        if showsOSM || showsWeather {
+        if tiles != nil || showsOSM || showsWeather {
             HStack(spacing: 12) {
                 if showsOSM {
-                    Link(L("nav.osmCredit"), destination: Self.fixTheMapURL)
+                    // With OSM tiles the copyright credit sits on the right; this link reports map errors.
+                    Link(tiles == nil ? L("nav.osmCredit") : L("nav.fixTheMap"), destination: Self.fixTheMapURL)
                 }
                 if showsWeather {
                     Text(l: "nav.weatherCredit")
                 }
                 Spacer(minLength: 0)
+                if let tiles {
+                    // Required by the OSM tile usage policy / CARTO terms: always visible while the tiles are shown.
+                    Link(L("nav.osmCredit"), destination: OSMTileSource.osmCopyrightURL)
+                    if tiles.isCARTO {
+                        Link(destination: OSMTileSource.cartoAttributionsURL) {
+                            Text(verbatim: "© CARTO")
+                        }
+                    }
+                }
             }
-            .font(.system(size: 10))
-            .foregroundStyle(.white.opacity(0.75))
-            .tint(Color.white.opacity(0.85))
-            .padding(.horizontal, 6)
+            .font(.system(size: 10, weight: .medium))
+            .foregroundStyle(.white.opacity(0.9))
+            .tint(Color.white)
+            .lineLimit(1)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 2)
+            .background(Color.black.opacity(0.45), in: Capsule())
         }
     }
 

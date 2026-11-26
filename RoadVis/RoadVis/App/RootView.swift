@@ -1,22 +1,35 @@
 import SwiftUI
 import UIKit
 
-/// Switches between the full-screen recognition view and the navigator.
+/// Hosts the full-screen recognition view and the navigator.
+///
+/// Both screens stay mounted in a `ZStack` (the hidden one has opacity 0, no hit testing and is hidden from
+/// accessibility), so switching never re-creates the `MKMapView`, the OSM tile overlay or the camera preview layers
+/// — it is a 0.2 s crossfade. Each screen gets `isActive` and skips its expensive per-frame work while hidden.
+/// The navigator is mounted shortly after launch (or on the first switch) so the first camera frame is not delayed.
 struct RootView: View {
     @Environment(AppState.self) private var app
+    @State private var navigatorMounted = false
 
     var body: some View {
         @Bindable var app = app
+        let cameraActive = app.mode == .camera
         ZStack {
             Color.black.ignoresSafeArea()
-            switch app.mode {
-            case .camera:
-                RecognitionView()
-                    .transition(.opacity.combined(with: .scale(scale: 1.02)))
-            case .navigator:
-                NavigatorView()
-                    .transition(.opacity.combined(with: .scale(scale: 0.98)))
+            if navigatorMounted || !cameraActive {
+                NavigatorView(isActive: !cameraActive)
+                    .screenVisibility(!cameraActive)
             }
+            RecognitionView(isActive: cameraActive)
+                .screenVisibility(cameraActive)
+        }
+        .task {
+            // Warm up the navigator (map view, tiles) in the background once the camera screen is up.
+            try? await Task.sleep(for: .seconds(1.5))
+            navigatorMounted = true
+        }
+        .onChange(of: app.mode) { _, _ in
+            navigatorMounted = true
         }
         .sheet(isPresented: $app.showSettings) {
             SettingsView()
@@ -51,5 +64,15 @@ struct RootView: View {
         .statusBarHidden(app.mode == .camera)
         .persistentSystemOverlays(.hidden)
         .appLocale()
+    }
+}
+
+private extension View {
+    /// Keeps a mounted screen alive while hidden: invisible, not tappable, hidden from VoiceOver, below the visible one.
+    func screenVisibility(_ isVisible: Bool) -> some View {
+        opacity(isVisible ? 1 : 0)
+            .allowsHitTesting(isVisible)
+            .accessibilityHidden(!isVisible)
+            .zIndex(isVisible ? 1 : 0)
     }
 }
