@@ -82,7 +82,7 @@ final class PersonRoleAndRoadwayTests: XCTestCase {
         let o = PersonRole.trafficOfficer, p = PersonRole.pedestrian
         XCTAssertNil(PersonRoleClassifier.majority([o, o, o, o]))                       // fewer than 5 observations
         XCTAssertEqual(PersonRoleClassifier.majority([o, o, p, o, o]), o)
-        XCTAssertEqual(PersonRoleClassifier.majority([o, p, o, p, .roadWorker, p]), p.self == p ? .pedestrian : nil)
+        XCTAssertEqual(PersonRoleClassifier.majority([o, p, o, p, .roadWorker, p]), .pedestrian)   // no majority, no previous
         // No strict majority: the previous role is kept.
         XCTAssertEqual(PersonRoleClassifier.majority([o, o, p, p, .roadWorker, .roadWorker], previous: o), o)
     }
@@ -155,7 +155,7 @@ final class PersonRoleAndRoadwayTests: XCTestCase {
         let d = PedestrianHazardDetector()
         d.roadway = RoadwayZone(leftBottom: 0.1, leftTop: 0.47, rightBottom: 0.9, rightTop: 0.53, horizonY: 0.42,
                                 source: .lanes)
-        // Zone at y = 0.65: x ≈ 0.243…0.757; a person standing at x = 0.08 (sidewalk), not moving.
+        // Zone at y = 0.65: x ≈ 0.323…0.677; a person standing at x = 0.08 (sidewalk), not moving.
         var r = PersonSceneResult()
         for i in 0..<6 {
             let t = Double(i) * 0.1
@@ -177,7 +177,7 @@ final class PersonRoleAndRoadwayTests: XCTestCase {
         let d = PedestrianHazardDetector()
         d.roadway = RoadwayZone(leftBottom: 0.1, leftTop: 0.47, rightBottom: 0.9, rightTop: 0.53, horizonY: 0.42,
                                 source: .lanes)
-        // Starts just outside the left boundary (≈ 0.243 at y = 0.65) and walks toward the road.
+        // Starts outside the left boundary (≈ 0.323 at y = 0.65) and walks toward the road.
         var r = PersonSceneResult()
         for i in 0..<8 {
             let t = Double(i) * 0.1

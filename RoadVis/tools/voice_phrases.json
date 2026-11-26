@@ -301,6 +301,18 @@
       "uz" : "Ehtiyot bo‘ling, yo‘lda piyoda"
     },
     {
+      "en" : "Attention, traffic police ahead",
+      "id" : "traffic_officer_ahead",
+      "ru" : "Внимание, впереди сотрудник ГАИ",
+      "uz" : "Diqqat, oldinda YHXX xodimi"
+    },
+    {
+      "en" : "Road works ahead, slow down",
+      "id" : "road_workers_ahead",
+      "ru" : "Впереди дорожные работы, осторожно, снизьте скорость",
+      "uz" : "Oldinda yo‘l ishlari, ehtiyot bo‘ling, tezlikni pasaytiring"
+    },
+    {
       "en" : "Red light ahead. Slow down",
       "id" : "red_light_ahead",
       "ru" : "Впереди красный, снижайте скорость",

@@ -508,7 +508,7 @@ private struct TrafficLightSlot: View {
     var body: some View {
         ZStack {
             if let color = pipeline.currentLightColor {
-                TrafficLightIndicatorView(color: color, lampSize: 12, showsCaption: false, housingOpacity: 0.32)
+                TrafficLightIndicatorView(color: color, lampSize: 18, showsCaption: false, housingOpacity: 0.45)
                     .frame(width: 22, height: 52)
                     .opacity(0.9)
                     .frame(width: RVTheme.HUD.hit)
