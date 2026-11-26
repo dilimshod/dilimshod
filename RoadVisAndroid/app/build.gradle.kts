@@ -57,5 +57,7 @@ dependencies {
     implementation(libs.maplibre.android)
     implementation(libs.coroutines.android)
     implementation(libs.play.services.location)
+    // Background upload of continuous-learning samples and the daily model check (Wi-Fi constraint, back-off).
+    implementation(libs.work.runtime.ktx)
     testImplementation(libs.junit)
 }

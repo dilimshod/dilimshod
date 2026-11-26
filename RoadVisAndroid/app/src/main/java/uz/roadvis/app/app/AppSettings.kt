@@ -146,9 +146,24 @@ class AppSettings(context: Context) {
     var tripHarshBrakingMps2 by Pref("rv.tripHarshBrakingMps2", 3.5)
     var tripHarshAccelerationMps2 by Pref("rv.tripHarshAccelerationMps2", 3.0)
 
+    // Continuous learning (RoadVis/docs/TRAINING_API.md): opt-in collection of hard frames for the RoadVis Trainer.
+    var learningEnabled by Pref("rv.learning.enabled", false)
+    var learningServerUrl by Pref("rv.learning.serverUrl", DEFAULT_LEARNING_SERVER)
+    /**
+     * Device token (`roadvis-trainer token create`). Stored in the app's private SharedPreferences: the project has no
+     * `androidx.security` (EncryptedSharedPreferences) dependency.
+     */
+    var learningToken by Pref("rv.learning.token", "")
+    var learningWifiOnly by Pref("rv.learning.wifiOnly", true)
+    var learningSendLocation by Pref("rv.learning.sendLocation", false)
+    /** 100 / 300 / 1000 MB (`LearningStorePolicy.STORAGE_LIMIT_CHOICES_MB`). */
+    var learningStorageLimitMb by Pref("rv.learning.storageLimitMb", 300)
+    var learningDownloadModels by Pref("rv.learning.downloadModels", true)
+
     companion object {
         const val DEFAULT_OVERPASS_ENDPOINT = "https://overpass-api.de/api/interpreter"
         const val DEFAULT_VALHALLA_ENDPOINT = "https://valhalla1.openstreetmap.de"
+        const val DEFAULT_LEARNING_SERVER = "https://trafficcounter.uz/roadvis"
         val OVERPASS_ENDPOINTS = listOf(
             "https://overpass-api.de/api/interpreter",
             "https://maps.mail.ru/osm/tools/overpass/api/interpreter",

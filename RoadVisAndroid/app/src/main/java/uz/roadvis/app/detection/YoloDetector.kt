@@ -12,8 +12,13 @@ import uz.roadvis.core.Detection
 import uz.roadvis.core.DetectionThresholds
 import uz.roadvis.core.DetectorInputGeometry
 import uz.roadvis.core.DetectorQualityGovernor
+import uz.roadvis.core.ModelHealthMonitor
+import uz.roadvis.core.ModelUpdatePolicy
 import uz.roadvis.core.VehicleKind
 import uz.roadvis.core.YOLODecoder
+import uz.roadvis.app.learning.LearningCollector
+import uz.roadvis.app.learning.ModelStore
+import java.io.File
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.nio.FloatBuffer
@@ -47,6 +52,12 @@ sealed class ModelStatus {
  * Fallbacks: XNNPACK → plain CPU provider; a FULL session that cannot be created → LITE; a model with a fixed input
  * shape (e.g. an old square 640×640 export) is used at that shape for every frame. Nothing here throws.
  *
+ * Model file: a valid model downloaded by the continuous-learning update ([ModelStore], `filesDir/models/<version>/
+ * yolo-roadvis.onnx`, same dynamic-axes export) is preferred over the bundled asset [MODEL_ASSET]. When the downloaded
+ * model cannot be opened, or produces no output for 30 s of driving while frames arrive ([noteFrame],
+ * [ModelHealthMonitor]), the detector reverts to the bundled asset and the version is remembered as bad. A switch or
+ * revert ([ModelStore.generation]) is picked up on the next frame.
+ *
  * Not thread-safe: load and use it on the recognition thread only. Input / output buffers are reused.
  */
 class YoloDetector(private val context: Context) {
@@ -60,7 +71,17 @@ class YoloDetector(private val context: Context) {
         val maxDetections: Int = 60,
     )
 
-    data class Output(val detections: List<Detection>, val inferenceMs: Double, val inputWidth: Int, val inputHeight: Int)
+    data class Output(
+        val detections: List<Detection>,
+        val inferenceMs: Double,
+        val inputWidth: Int,
+        val inputHeight: Int,
+        /** Boxes the decoder produced before the class / threshold filters (0 = the model gave no output). */
+        val rawCount: Int = detections.size,
+    )
+
+    /** Where the model comes from: the bundled asset ([file] null) or a downloaded version. */
+    private class Source(val name: String, val version: String?, val file: File?)
 
     /** One ONNX Runtime session with a fixed input size and its reusable input buffer. */
     private class Slot(val session: OrtSession, val inputName: String, val inputW: Int, val inputH: Int) {
@@ -85,6 +106,57 @@ class YoloDetector(private val context: Context) {
     /** Input size of a model exported with a fixed shape (null for the dynamic model). */
     private var fixedInput: Pair<Int, Int>? = null
     private var outputValues = FloatArray(0)
+    private var source = Source(MODEL_NAME, null, null)
+    private var loadedGeneration = Int.MIN_VALUE
+    private val health = ModelHealthMonitor()
+
+    /** True while a downloaded (continuous-learning) model is in use. */
+    val usesDownloadedModel: Boolean get() = source.version != null
+
+    /** Model name / version for the upload metadata of a frame processed at the given input size. */
+    fun modelTag(inputWidth: Int, inputHeight: Int): LearningCollector.ModelTag = LearningCollector.ModelTag(
+        source.name, source.version ?: ModelUpdatePolicy.bundledVersionLabel(MODEL_NAME, inputWidth, inputHeight))
+
+    private fun resolveSource() {
+        loadedGeneration = ModelStore.generation
+        val downloaded = try { ModelStore.effectiveModel(context) } catch (_: Throwable) { null }
+        source = if (downloaded != null) {
+            Source(ModelUpdatePolicy.DOWNLOADED_MODEL_NAME, downloaded.first, downloaded.second)
+        } else {
+            Source(MODEL_NAME, null, null)
+        }
+        health.reset()
+    }
+
+    private fun modelBytes(): ByteArray =
+        source.file?.readBytes() ?: context.assets.open(MODEL_ASSET).use { it.readBytes() }
+
+    /** Drops the sessions and reloads from the model [ModelStore] selects now (switch, revert or first use). */
+    private fun reloadSource() {
+        closeSlots()
+        failedSizes.clear()
+        resolveSource()
+    }
+
+    /** The downloaded model failed: remember it as bad and continue with the bundled asset. */
+    private fun revertDownloaded() {
+        val version = source.version ?: return
+        try { ModelStore.markBad(context, version) } catch (_: Throwable) {}
+        closeSlots()
+        failedSizes.clear()
+        source = Source(MODEL_NAME, null, null)
+        loadedGeneration = ModelStore.generation
+        health.reset()
+    }
+
+    /**
+     * Health of a downloaded model, once per processed frame: [hadOutput] = the model returned boxes. No output for
+     * 30 s of driving while frames arrive reverts to the bundled model.
+     */
+    fun noteFrame(timestamp: Double, speedKmh: Double?, hadOutput: Boolean) {
+        if (source.version == null) return
+        if (health.record(timestamp, speedKmh, hadOutput)) revertDownloaded()
+    }
 
     /**
      * Loads the model and creates the session for the given frame orientation at [preferredLevel]. The sessions for
@@ -92,25 +164,35 @@ class YoloDetector(private val context: Context) {
      */
     fun load(landscape: Boolean = false): ModelStatus {
         if (status.isReady) return status
-        try {
-            context.assets.open(MODEL_ASSET).use { it.read() }
-        } catch (_: Exception) {
-            status = ModelStatus.Missing
-            return status
-        }
+        resolveSource()
         var failure: String? = null
-        val slot = try {
+        var slot = try {
             env = OrtEnvironment.getEnvironment()
-            slot(landscape, preferredLevel)
+            if (source.file != null) slot(landscape, preferredLevel) else null
         } catch (t: Throwable) {
-            failure = t.message ?: t.javaClass.simpleName
             null
+        }
+        if (slot == null && source.file != null) revertDownloaded()
+        if (slot == null) {
+            try {
+                context.assets.open(MODEL_ASSET).use { it.read() }
+            } catch (_: Exception) {
+                status = ModelStatus.Missing
+                return status
+            }
+            slot = try {
+                if (env == null) env = OrtEnvironment.getEnvironment()
+                slot(landscape, preferredLevel)
+            } catch (t: Throwable) {
+                failure = t.message ?: t.javaClass.simpleName
+                null
+            }
         }
         status = if (slot != null) ModelStatus.Ready(displayName(slot)) else ModelStatus.Failed(failure ?: "session")
         return status
     }
 
-    private fun displayName(slot: Slot): String = "$MODEL_NAME ${slot.inputW}×${slot.inputH}"
+    private fun displayName(slot: Slot): String = "${source.name} ${slot.inputW}×${slot.inputH}"
 
     /** The session for a frame orientation and level (created on first use); falls back to LITE, then to any slot. */
     private fun slot(landscape: Boolean, level: DetectorQualityGovernor.Level): Slot? {
@@ -132,7 +214,7 @@ class YoloDetector(private val context: Context) {
         if (k in failedSizes) return null
         val e = env ?: return null
         val created = try {
-            val bytes = context.assets.open(MODEL_ASSET).use { it.readBytes() }
+            val bytes = modelBytes()
             val session = createSession(e, bytes, w, h)
             val name = session.inputNames.firstOrNull() ?: "images"
             // A model exported with a fixed input shape ignores the requested size: use its own shape for every frame.
@@ -180,8 +262,15 @@ class YoloDetector(private val context: Context) {
     /** Runs the detector on an upright RGBA_8888 frame. Returns null when the model is not loaded or inference failed. */
     fun detect(rgba: ByteArray, width: Int, height: Int, bytesPerRow: Int, options: Options): Output? {
         val e = env ?: return null
+        if (ModelStore.generation != loadedGeneration) reloadSource()
         val landscape = DetectorInputGeometry.isLandscape(width.toDouble(), height.toDouble())
-        val slot = slot(landscape, preferredLevel) ?: return null
+        var slot = slot(landscape, preferredLevel)
+        if (slot == null && source.file != null) {
+            // The downloaded model cannot be opened at this input: back to the bundled one.
+            revertDownloaded()
+            slot = slot(landscape, preferredLevel)
+        }
+        if (slot == null) return null
         val name = displayName(slot)
         if ((status as? ModelStatus.Ready)?.name != name) status = ModelStatus.Ready(name)
         val letterbox = Letterbox(slot.inputW, slot.inputH, width, height)
@@ -222,7 +311,7 @@ class YoloDetector(private val context: Context) {
         }
         // One object reported as car + truck (per-class NMS) would open two tracks.
         val unique = CrossClassDuplicates.suppress(detections)
-        return Output(unique.take(options.maxDetections), elapsedMs, slot.inputW, slot.inputH)
+        return Output(unique.take(options.maxDetections), elapsedMs, slot.inputW, slot.inputH, raw.size)
     }
 
     private fun closeSlots() {

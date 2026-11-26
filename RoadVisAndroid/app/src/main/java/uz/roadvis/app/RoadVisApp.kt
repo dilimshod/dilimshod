@@ -8,6 +8,9 @@ class RoadVisApp : Application() {
     lateinit var state: AppState
         private set
 
+    /** [state] once [onCreate] has run (background workers may start early). */
+    val stateOrNull: AppState? get() = if (::state.isInitialized) state else null
+
     override fun onCreate() {
         super.onCreate()
         LocalizationManager.init(this)

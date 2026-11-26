@@ -10,6 +10,8 @@ import androidx.camera.core.ImageProxy
 import uz.roadvis.app.detection.MakeClassifier
 import uz.roadvis.app.detection.ModelStatus
 import uz.roadvis.app.detection.YoloDetector
+import uz.roadvis.app.learning.LearningCollector
+import uz.roadvis.app.learning.LearningFeature
 import uz.roadvis.core.CameraGeometry
 import uz.roadvis.core.Detection
 import uz.roadvis.core.DetectionThresholds
@@ -73,6 +75,11 @@ class RecognitionWorker(context: Context) : ImageAnalysis.Analyzer {
         val cameraToBumperMeters: Double = 2.2,
         val laneDetectionEnabled: Boolean = true,
         val pedestrianWarningsEnabled: Boolean = true,
+        /**
+         * Continuous-learning collection (`docs/TRAINING_API.md`); null = off. The controller leaves it null while
+         * pedestrians are not detected, because the head blurring needs the person boxes.
+         */
+        val learning: LearningCollector.Options? = null,
     )
 
     /** Snapshot published after every processed frame. */
@@ -162,7 +169,14 @@ class RecognitionWorker(context: Context) : ImageAnalysis.Analyzer {
     private var inferenceEstimate = 0.0
     private var processedFrames = 0
     private var lastAcceptedUptime = 0.0
-    private var frameBytes = ByteArray(0)
+    /**
+     * Frame buffers. While learning collection is on they alternate, so the pixels of the previous frame stay intact
+     * for one more frame (the hard-example selector decides about the previous frame); otherwise only [0] is used.
+     */
+    private val frameBuffers = arrayOf(ByteArray(0), ByteArray(0))
+    private var bufferIndex = 0
+    /** Continuous-learning collector, created when collection is first switched on. */
+    private var collector: LearningCollector? = null
 
     /** Loads the detector and the make classifier on the processing thread and reports their status. */
     fun loadModels() {
@@ -183,6 +197,7 @@ class RecognitionWorker(context: Context) : ImageAnalysis.Analyzer {
     fun setActive(isActive: Boolean) {
         active = isActive
         executor.execute {
+            collector?.skipFrame()
             if (isActive) {
                 lastAcceptedUptime = 0.0
             } else {
@@ -210,6 +225,7 @@ class RecognitionWorker(context: Context) : ImageAnalysis.Analyzer {
     /** Clears tracks, unique counts and estimator history. */
     fun reset(newGeneration: Int) {
         executor.execute {
+            collector?.skipFrame()
             tracker.reset()
             estimator.reset()
             leadTracker.reset()
@@ -225,7 +241,10 @@ class RecognitionWorker(context: Context) : ImageAnalysis.Analyzer {
     }
 
     fun shutdown() {
-        executor.execute { detector.close() }
+        executor.execute {
+            detector.close()
+            collector?.shutdown()
+        }
         executor.shutdown()
     }
 
@@ -246,7 +265,13 @@ class RecognitionWorker(context: Context) : ImageAnalysis.Analyzer {
             val buffer = plane.buffer
             buffer.rewind()
             val needed = bytesPerRow * height
-            if (frameBytes.size < needed) frameBytes = ByteArray(needed)
+            bufferIndex = if (frameInputs.learning != null) bufferIndex xor 1 else 0
+            var frameBytes = frameBuffers[bufferIndex]
+            if (frameBytes.size < needed) {
+                frameBytes = ByteArray(needed)
+                frameBuffers[bufferIndex] = frameBytes
+            }
+            if (frameInputs.learning == null && frameBuffers[1].isNotEmpty()) frameBuffers[1] = ByteArray(0)
             val count = min(buffer.remaining(), needed)
             buffer.get(frameBytes, 0, count)
             // Sensor timestamp (ns, monotonic); falls back to the uptime when missing.
@@ -273,7 +298,10 @@ class RecognitionWorker(context: Context) : ImageAnalysis.Analyzer {
             reportedDetectorStatus = detectorStatus
             statusHandler?.invoke(ModelStatuses(detectorStatus, makeClassifierStatus))
         }
+        if (detectorReady) detector.noteFrame(timestamp, inputs.ownSpeedKmh, (result?.rawCount ?: 0) > 0)
+        LearningFeature.lastFrameElapsedMs = SystemClock.elapsedRealtime()
         if (result == null) {
+            collector?.skipFrame()
             // No detector: still publish the lane estimate so the lane overlay / departure warning work.
             if (inputs.laneDetectionEnabled && !detectorReady) {
                 outputHandler?.invoke(Output(generation, emptyList(), emptyMap(), tracker.uniqueCounts.toMap(), fpsEstimate,
@@ -296,6 +324,7 @@ class RecognitionWorker(context: Context) : ImageAnalysis.Analyzer {
         detections = classifyPersonRoles(detections, rgba, width, height, bytesPerRow)
 
         var tracks = tracker.update(detections, timestamp)
+        collectLearningSample(rgba, width, height, bytesPerRow, timestamp, inputs, tracks, detections, result)
         val geometry = CameraGeometry(fovDegrees, width.toDouble(), height.toDouble())
         tracks = estimator.update(tracks, inputs.ownSpeedKmh, geometry, timestamp)
         val leadVehicle = updateLeadVehicle(tracks, inputs, geometry, timestamp, horizon)
@@ -338,6 +367,29 @@ class RecognitionWorker(context: Context) : ImageAnalysis.Analyzer {
             corridor = leadTracker.corridor, horizonY = horizon, measuredHorizon = measuredHorizon,
             measuredHorizonIsLandscape = width >= height,
         ))
+    }
+
+    /**
+     * Hands the frame to the continuous-learning collector (cheap unless the frame becomes a sample; see
+     * [LearningCollector]). Uses the tracker output before the sidewalk filter, so a dropped person is not mistaken for
+     * a track that died.
+     */
+    private fun collectLearningSample(
+        rgba: ByteArray, width: Int, height: Int, bytesPerRow: Int, timestamp: Double, inputs: Inputs,
+        tracks: List<TrackedObject>, detections: List<Detection>, result: YoloDetector.Output,
+    ) {
+        val options = inputs.learning
+        if (options == null) {
+            collector?.skipFrame()
+            return
+        }
+        val c = collector ?: LearningCollector(appContext).also { collector = it }
+        try {
+            c.onFrame(rgba, width, height, bytesPerRow, timestamp, inputs.ownSpeedKmh, tracks, detections,
+                tracker.minConfidence, detector.modelTag(result.inputWidth, result.inputHeight), options)
+        } catch (_: Throwable) {
+            c.skipFrame()
+        }
     }
 
     /**

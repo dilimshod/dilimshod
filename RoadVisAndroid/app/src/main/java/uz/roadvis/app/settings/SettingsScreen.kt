@@ -74,6 +74,7 @@ fun SettingsScreen(app: AppState, nav: SheetNav) {
             NavigationSettingsSections(app)
             RoadDataSection(app)
             SignalSection(app)
+            uz.roadvis.app.learning.LearningSettingsSection(app)
             AboutSections(nav)
         }
     }
