@@ -9,6 +9,9 @@ import androidx.compose.runtime.setValue
 import uz.roadvis.app.l10n.AppLanguage
 import uz.roadvis.app.l10n.LocalizationManager
 import java.util.Locale
+import uz.roadvis.core.RVLang
+import uz.roadvis.core.VoiceComposer
+import uz.roadvis.core.VoicePhrase
 
 enum class SpeechPriority { LOW, NORMAL, HIGH }
 
@@ -111,6 +114,12 @@ class SpeechService(context: Context, private val settings: AppSettings) {
         if (t == null || !ttsReady) { pendingText = text; return }
         isSpeaking = true
         t.speak(text, TextToSpeech.QUEUE_FLUSH, null, "rv-${System.nanoTime()}")
+    }
+
+    /** Speaks a composed phrase: natural clips in the app language when installed, else TTS of its text. */
+    fun speak(phrase: VoicePhrase, priority: SpeechPriority = SpeechPriority.NORMAL) {
+        val lang = RVLang.fromRaw(language.raw)
+        speak(VoiceComposer.text(phrase, lang), priority, VoiceComposer.resourceNames(phrase, lang))
     }
 
     fun stop() {
