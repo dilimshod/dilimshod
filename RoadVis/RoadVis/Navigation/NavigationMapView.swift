@@ -5,8 +5,13 @@ import UIKit
 /// Full-screen `MKMapView` for the navigator (UIKit map instead of SwiftUI `Map` for tile overlays, custom renderers
 /// and precise camera control).
 ///
-/// - Layers: `mapStyle` (Схема / Спутник / Гибрид via `MKStandardMapConfiguration` / `MKImageryMapConfiguration` /
-///   `MKHybridMapConfiguration`) and `is3D` (realistic elevation + pitched guidance camera, else flat).
+/// - Layers: `mapStyle` — OpenStreetMap-based raster tiles (OpenStreetMap / CARTO Dark / CARTO Voyager, default
+///   OpenStreetMap) drawn by an `OSMTileOverlay` that replaces the Apple base map (Apple POIs, labels and traffic
+///   are off), or Apple Спутник / Гибрид (`MKImageryMapConfiguration` / `MKHybridMapConfiguration`); `is3D`
+///   (pitched guidance camera; realistic elevation for the Apple imagery only). The base tiles sit at index 0 of
+///   `.aboveRoads`, below the optional traffic tiles and the routes. Attribution is shown by `NavigatorView`.
+/// - `isActive`: false while the navigator is hidden behind the camera screen (both stay mounted for instant
+///   switching) — the follow camera is not animated then and is snapped back into place on activation.
 /// - Routes: the selected route is drawn over a white casing, coloured by speed-limit segments when known
 ///   (`MKGradientPolylineRenderer`, palette `NavigatorStyle.speedLimitUIColor`), else blue; alternatives are gray.
 ///   Tapping near an alternative (≤ 30 pt) calls `onSelectRoute` when `allowsRouteSelection` is true.
@@ -39,7 +44,7 @@ struct NavigationMapView: UIViewRepresentable {
     /// Speed-limit stretches of the selected route (route colouring); empty → plain blue.
     var speedLimitSegments: [SpeedLimitSegment] = []
     var incidents: [RoadIncident]
-    var mapStyle: NavigatorMapStyle = .standard
+    var mapStyle: NavigatorMapStyle = .default
     var is3D: Bool = true
     var cameraMode: CameraMode
     var showsTraffic: Bool
@@ -49,6 +54,8 @@ struct NavigationMapView: UIViewRepresentable {
     /// Applied as the map's layout margins (MapKit keeps its compass, scale and legal label inside them) and as
     /// padding when fitting the route overview.
     var mapInsets: UIEdgeInsets = .zero
+    /// False while the navigator screen is hidden (camera mode): no camera animations.
+    var isActive: Bool = true
     @Binding var isFollowing: Bool
     var onSelectRoute: (Int) -> Void
     var onLongPress: (CLLocationCoordinate2D) -> Void
@@ -65,10 +72,11 @@ struct NavigationMapView: UIViewRepresentable {
         map.showsScale = true
         map.isPitchEnabled = true
         map.isRotateEnabled = true
-        map.preferredConfiguration = Coordinator.configuration(style: mapStyle, is3D: is3D, showsTraffic: showsTraffic)
-        context.coordinator.appliedConfiguration = Coordinator.ConfigurationKey(style: mapStyle, is3D: is3D,
-                                                                                showsTraffic: showsTraffic)
+        let key = Coordinator.ConfigurationKey(style: mapStyle, is3D: is3D, showsTraffic: showsTraffic)
+        map.preferredConfiguration = Coordinator.configuration(for: key)
+        context.coordinator.appliedConfiguration = key
         context.coordinator.install(on: map)
+        context.coordinator.updateBaseTiles(on: map, style: mapStyle)
         return map
     }
 
@@ -86,14 +94,21 @@ struct NavigationMapView: UIViewRepresentable {
         let configurationKey = Coordinator.ConfigurationKey(style: mapStyle, is3D: is3D, showsTraffic: showsTraffic)
         if coordinator.appliedConfiguration != configurationKey {
             coordinator.appliedConfiguration = configurationKey
-            map.preferredConfiguration = Coordinator.configuration(style: mapStyle, is3D: is3D, showsTraffic: showsTraffic)
+            map.preferredConfiguration = Coordinator.configuration(for: configurationKey)
         }
         coordinator.is3D = is3D
+        coordinator.updateBaseTiles(on: map, style: mapStyle)
         coordinator.updateTileOverlay(on: map, template: trafficTileTemplate)
         coordinator.updateRoutes(on: map, routes: routes, selectedID: selectedRouteID, segments: speedLimitSegments)
         coordinator.updateAnnotations(on: map, destination: destination, destinationTitle: destinationTitle,
                                       events: events, incidents: incidents)
+        let becameActive = isActive && !coordinator.isActive
+        coordinator.isActive = isActive
+        guard isActive else { return }
         coordinator.updateCamera(on: map, mode: cameraMode, following: isFollowing, routes: routes)
+        if becameActive {
+            coordinator.snapCameraAfterActivation(on: map)
+        }
     }
 
     static func dismantleUIView(_ map: MKMapView, coordinator: Coordinator) {
@@ -167,17 +182,28 @@ struct NavigationMapView: UIViewRepresentable {
         var mapInsets: UIEdgeInsets = .zero
         var appliedConfiguration: ConfigurationKey?
         var is3D = true
+        /// Mirrors `NavigationMapView.isActive` (false while the navigator is hidden).
+        var isActive = true
 
+        /// Effective MapKit configuration: with OSM tiles the Apple base map is hidden, so 3D elevation and the Apple
+        /// traffic layer do not apply (normalized away so toggling them does not reload the map).
         struct ConfigurationKey: Equatable {
             let style: NavigatorMapStyle
             let is3D: Bool
             let showsTraffic: Bool
+
+            init(style: NavigatorMapStyle, is3D: Bool, showsTraffic: Bool) {
+                self.style = style
+                self.is3D = style.usesOSMTiles ? false : is3D
+                self.showsTraffic = style.usesOSMTiles || style == .satellite ? false : showsTraffic
+            }
         }
 
         private var routeOverlays: [String: RoutePolyline] = [:]
         private var routeSignature: [String] = []
         private var tileOverlay: MKTileOverlay?
         private var appliedTileTemplate = ""
+        private var baseTileOverlay: OSMTileOverlay?
         private var annotationsByKey: [String: MKAnnotation] = [:]
         private var lastMode: NavigationMapView.CameraMode?
         private var lastFollowing = false
@@ -193,23 +219,24 @@ struct NavigationMapView: UIViewRepresentable {
 
         // MARK: Setup
 
-        /// Map layer: Схема (standard), Спутник (imagery) or Гибрид; 3D = realistic elevation; Apple traffic layer on/off
-        /// (standard / hybrid); only fuel / parking / EV charging Apple POIs (OSM POIs come as timeline markers).
-        static func configuration(style: NavigatorMapStyle, is3D: Bool, showsTraffic: Bool) -> MKMapConfiguration {
-            let elevation: MKMapConfiguration.ElevationStyle = is3D ? .realistic : .flat
-            let filter = MKPointOfInterestFilter(including: [.gasStation, .parking, .evCharger])
-            switch style {
-            case .standard:
-                let configuration = MKStandardMapConfiguration(elevationStyle: elevation, emphasisStyle: .default)
-                configuration.showsTraffic = showsTraffic
-                configuration.pointOfInterestFilter = filter
+        /// MapKit configuration for the layer. OSM layers: a flat standard map with every Apple POI and the traffic
+        /// layer off (the `OSMTileOverlay` replaces its content). Спутник / Гибрид: Apple imagery, 3D = realistic
+        /// elevation; Гибрид shows the Apple traffic layer on request and only fuel / parking / EV charging Apple POIs
+        /// (OSM POIs come as timeline markers).
+        static func configuration(for key: ConfigurationKey) -> MKMapConfiguration {
+            let elevation: MKMapConfiguration.ElevationStyle = key.is3D ? .realistic : .flat
+            switch key.style {
+            case .osm, .cartoDark, .voyager:
+                let configuration = MKStandardMapConfiguration(elevationStyle: .flat, emphasisStyle: .muted)
+                configuration.showsTraffic = false
+                configuration.pointOfInterestFilter = .excludingAll
                 return configuration
             case .satellite:
                 return MKImageryMapConfiguration(elevationStyle: elevation)
             case .hybrid:
                 let configuration = MKHybridMapConfiguration(elevationStyle: elevation)
-                configuration.showsTraffic = showsTraffic
-                configuration.pointOfInterestFilter = filter
+                configuration.showsTraffic = key.showsTraffic
+                configuration.pointOfInterestFilter = MKPointOfInterestFilter(including: [.gasStation, .parking, .evCharger])
                 return configuration
             }
         }
@@ -236,6 +263,31 @@ struct NavigationMapView: UIViewRepresentable {
             map.addGestureRecognizer(rotate)
         }
 
+        // MARK: Base tiles (OpenStreetMap)
+
+        /// Installs / swaps / removes the OSM base-map overlay for `style` (index 0 of `.aboveRoads`, i.e. below the
+        /// traffic tiles and the routes). Also limits zooming to the tiles' maximum zoom and matches the interface
+        /// style to the tiles (dark CARTO → dark compass / scale / user-location styling).
+        func updateBaseTiles(on map: MKMapView, style: NavigatorMapStyle) {
+            let source = style.tileSource
+            guard baseTileOverlay?.source != source else { return }
+            if let baseTileOverlay {
+                map.removeOverlay(baseTileOverlay)
+                self.baseTileOverlay = nil
+            }
+            if let source {
+                let overlay = OSMTileOverlay(source: source)
+                baseTileOverlay = overlay
+                map.insertOverlay(overlay, at: 0, level: .aboveRoads)
+                // About z19 on a phone; closer would only upscale the z19 tiles.
+                map.setCameraZoomRange(MKMapView.CameraZoomRange(minCenterCoordinateDistance: 150), animated: false)
+                map.overrideUserInterfaceStyle = source.isDark ? .dark : .light
+            } else {
+                map.setCameraZoomRange(nil, animated: false)
+                map.overrideUserInterfaceStyle = .unspecified
+            }
+        }
+
         // MARK: Tile overlay
 
         func updateTileOverlay(on map: MKMapView, template rawTemplate: String) {
@@ -253,8 +305,8 @@ struct NavigationMapView: UIViewRepresentable {
             overlay.minimumZ = 3
             overlay.maximumZ = 19
             tileOverlay = overlay
-            // Index 0 of the level keeps the traffic tiles below the route lines.
-            map.insertOverlay(overlay, at: 0, level: .aboveRoads)
+            // Right above the OSM base tiles (if any) and below the route lines.
+            map.insertOverlay(overlay, at: baseTileOverlay == nil ? 0 : 1, level: .aboveRoads)
         }
 
         /// https URL template containing `{z}`, `{x}` and `{y}` (plain http is blocked by App Transport Security).
@@ -415,6 +467,13 @@ struct NavigationMapView: UIViewRepresentable {
             }
         }
 
+        /// The navigator became visible again: put the guidance camera behind the car at once (its updates were
+        /// skipped while hidden), so the map does not fly in from a stale position.
+        func snapCameraAfterActivation(on map: MKMapView) {
+            guard lastMode == .navigating, lastFollowing, let location = map.userLocation.location else { return }
+            followCamera(on: map, location: location, animated: false)
+        }
+
         private func fitRoutes(on map: MKMapView, routes: [RouteOption], animated: Bool) {
             var rect = MKMapRect.null
             for option in routes {
@@ -551,6 +610,9 @@ struct NavigationMapView: UIViewRepresentable {
         // MARK: MKMapViewDelegate
 
         func mapView(_ mapView: MKMapView, rendererFor overlay: MKOverlay) -> MKOverlayRenderer {
+            if let base = overlay as? OSMTileOverlay {
+                return MKTileOverlayRenderer(tileOverlay: base)
+            }
             if let tiles = overlay as? MKTileOverlay {
                 let renderer = MKTileOverlayRenderer(tileOverlay: tiles)
                 renderer.alpha = 0.85
@@ -660,7 +722,7 @@ struct NavigationMapView: UIViewRepresentable {
         }
 
         func mapView(_ mapView: MKMapView, didUpdate userLocation: MKUserLocation) {
-            guard lastMode == .navigating, lastFollowing, let location = userLocation.location else { return }
+            guard isActive, lastMode == .navigating, lastFollowing, let location = userLocation.location else { return }
             followCamera(on: mapView, location: location, animated: true)
         }
 
