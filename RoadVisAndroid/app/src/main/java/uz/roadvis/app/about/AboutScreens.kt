@@ -273,6 +273,8 @@ fun DataSourcesScreen(nav: SheetNav) {
                 LinkRow(L("sources.osm.copyright"), "https://www.openstreetmap.org/copyright")
                 LinkRow(L("sources.osm.fix"), "https://www.openstreetmap.org/fixthemap")
                 RowDivider()
+                SourceRow("OpenFreeMap", "© OpenFreeMap © OpenMapTiles © OpenStreetMap contributors")
+                RowDivider()
                 SourceRow("CARTO", "© OpenStreetMap contributors © CARTO")
                 RowDivider()
                 SourceRow(L("sources.weather.title"), L("sources.weather.detail"))

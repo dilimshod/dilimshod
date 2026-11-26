@@ -7,7 +7,7 @@ activityCompose = "1.9.3"
 composeBom = "2024.12.01"
 camerax = "1.4.1"
 onnxruntime = "1.20.0"
-osmdroid = "6.1.20"
+maplibre = "13.0.2"
 coroutines = "1.9.0"
 junit = "4.13.2"
 json = "20240303"
@@ -29,7 +29,7 @@ camerax-camera2 = { module = "androidx.camera:camera-camera2", version.ref = "ca
 camerax-lifecycle = { module = "androidx.camera:camera-lifecycle", version.ref = "camerax" }
 camerax-view = { module = "androidx.camera:camera-view", version.ref = "camerax" }
 onnxruntime-android = { module = "com.microsoft.onnxruntime:onnxruntime-android", version.ref = "onnxruntime" }
-osmdroid = { module = "org.osmdroid:osmdroid-android", version.ref = "osmdroid" }
+maplibre-android = { module = "org.maplibre.gl:android-sdk", version.ref = "maplibre" }
 coroutines-android = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-android", version.ref = "coroutines" }
 coroutines-core = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-core", version.ref = "coroutines" }
 play-services-location = { module = "com.google.android.gms:play-services-location", version.ref = "playServicesLocation" }

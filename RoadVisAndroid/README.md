@@ -4,7 +4,7 @@ Kotlin + Jetpack Compose port of the iOS app (`../RoadVis`). Same features and s
 
 - `core/` — pure Kotlin logic ported from `RoadVisCore` (tracking, YOLO decoding, distance, lanes, pedestrians,
   coach, trips, Valhalla/OSRM/Overpass/Open-Meteo parsing…), JUnit tests: `./gradlew :core:test`.
-- `app/` — CameraX + ONNX Runtime (`assets/yolo11n.onnx`), osmdroid (CARTO Dark), TextToSpeech + natural voice clips.
+- `app/` — CameraX + ONNX Runtime (`assets/yolo11n.onnx`), MapLibre Native with free OpenFreeMap vector tiles (no API key; CARTO Dark raster fallback), TextToSpeech + natural voice clips.
 
 ## Build
 JDK 17+ and the Android SDK (API 35). `./gradlew :app:assembleRelease` →

@@ -54,7 +54,7 @@ dependencies {
     implementation(libs.camerax.lifecycle)
     implementation(libs.camerax.view)
     implementation(libs.onnxruntime.android)
-    implementation(libs.osmdroid)
+    implementation(libs.maplibre.android)
     implementation(libs.coroutines.android)
     implementation(libs.play.services.location)
     testImplementation(libs.junit)

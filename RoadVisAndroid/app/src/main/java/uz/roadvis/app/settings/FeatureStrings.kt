@@ -13,7 +13,8 @@ private val featureStrings: Map<AppLanguage, Map<String, String>> = mapOf(
     AppLanguage.UZ to mapOf(
         "android.tripNotif.channel" to "Safar yozuvi",
         "android.tripNotif.text" to "Safar fonda yozilmoqda",
-        "android.mapStyle.osmStandard" to "OpenStreetMap (standart)",
+        "android.mapStyle.dark" to "OpenFreeMap (tungi)",
+        "android.mapStyle.osmStandard" to "OpenFreeMap (yorug‘)",
         "android.common.share" to "Ulashish",
         "android.common.back" to "Orqaga",
         "android.history.delete" to "O‘chirish",
@@ -25,7 +26,8 @@ private val featureStrings: Map<AppLanguage, Map<String, String>> = mapOf(
     AppLanguage.RU to mapOf(
         "android.tripNotif.channel" to "Запись поездки",
         "android.tripNotif.text" to "Поездка записывается в фоне",
-        "android.mapStyle.osmStandard" to "OpenStreetMap (стандарт)",
+        "android.mapStyle.dark" to "OpenFreeMap (тёмная)",
+        "android.mapStyle.osmStandard" to "OpenFreeMap (светлая)",
         "android.common.share" to "Поделиться",
         "android.common.back" to "Назад",
         "android.history.delete" to "Удалить",
@@ -37,7 +39,8 @@ private val featureStrings: Map<AppLanguage, Map<String, String>> = mapOf(
     AppLanguage.EN to mapOf(
         "android.tripNotif.channel" to "Trip recording",
         "android.tripNotif.text" to "Recording the trip in the background",
-        "android.mapStyle.osmStandard" to "OpenStreetMap (standard)",
+        "android.mapStyle.dark" to "OpenFreeMap (dark)",
+        "android.mapStyle.osmStandard" to "OpenFreeMap (light)",
         "android.common.share" to "Share",
         "android.common.back" to "Back",
         "android.history.delete" to "Delete",

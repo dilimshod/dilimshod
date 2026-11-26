@@ -4,20 +4,48 @@ import android.annotation.SuppressLint
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.Canvas
-import android.graphics.DashPathEffect
 import android.graphics.Paint
-import android.graphics.drawable.BitmapDrawable
+import android.view.View
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
-import org.osmdroid.tileprovider.tilesource.XYTileSource
-import org.osmdroid.util.BoundingBox
-import org.osmdroid.views.CustomZoomButtonsController
-import org.osmdroid.views.MapView
-import org.osmdroid.views.overlay.CopyrightOverlay
-import org.osmdroid.views.overlay.Marker
-import org.osmdroid.views.overlay.Polyline
+import org.maplibre.android.camera.CameraUpdateFactory
+import org.maplibre.android.geometry.LatLng
+import org.maplibre.android.geometry.LatLngBounds
+import org.maplibre.android.maps.MapLibreMap
+import org.maplibre.android.maps.MapLibreMapOptions
+import org.maplibre.android.maps.MapView
+import org.maplibre.android.maps.Style
+import org.maplibre.android.style.expressions.Expression
+import org.maplibre.android.style.layers.LineLayer
+import org.maplibre.android.style.layers.Property
+import org.maplibre.android.style.layers.PropertyFactory
+import org.maplibre.android.style.layers.SymbolLayer
+import org.maplibre.android.style.sources.GeoJsonSource
+import org.maplibre.geojson.Feature
+import org.maplibre.geojson.FeatureCollection
+import org.maplibre.geojson.LineString
+import org.maplibre.geojson.Point
+import uz.roadvis.app.navigation.MapSetup
+import uz.roadvis.app.navigation.MapStyleLoader
+import uz.roadvis.app.navigation.MapViewLifecycle
+import uz.roadvis.app.navigation.cssColor
 import uz.roadvis.app.ui.RV
 import uz.roadvis.core.DrivingEvent
 import uz.roadvis.core.GeoBounds
@@ -51,119 +79,150 @@ object TripMapGeometry {
     }
 }
 
-/** CARTO Dark Matter raster tiles (OpenStreetMap data). */
-private val cartoDark = XYTileSource(
-    "CartoDark", 0, 19, 256, ".png",
-    arrayOf(
-        "https://a.basemaps.cartocdn.com/dark_all/", "https://b.basemaps.cartocdn.com/dark_all/",
-        "https://c.basemaps.cartocdn.com/dark_all/", "https://d.basemaps.cartocdn.com/dark_all/",
-    ),
-    "© OpenStreetMap contributors © CARTO",
-)
-
-private fun org(g: GeoPoint) = org.osmdroid.util.GeoPoint(g.latitude, g.longitude)
-
 /**
- * A→B map of a trip (osmdroid, CARTO Dark): planned route (grey dashed), driven track (blue), A and B pins and event
- * markers filled with the kind colour and ringed by severity. [highlightedEventId] is drawn larger and centred.
+ * A→B map of a trip (MapLibre, OpenFreeMap dark vector tiles with the CARTO raster fallback): planned route (grey
+ * dashed), driven track (blue), A and B pins and event markers filled with the kind colour and ringed by severity.
+ * [highlightedEventId] is drawn larger and centred.
  */
 @Composable
 fun TripMap(trip: Trip, highlightedEventId: UUID?, modifier: Modifier = Modifier) {
-    AndroidView(
-        modifier = modifier,
-        factory = { ctx -> createMap(ctx, trip) },
-        update = { map -> updateEvents(map, trip, highlightedEventId) },
-        onRelease = { it.onDetach() },
+    val context = LocalContext.current
+    val holder = remember(trip.id) { TripMapHolder(context, trip) }
+    MapViewLifecycle(holder.view)
+    Box(modifier) {
+        AndroidView(
+            modifier = Modifier.fillMaxSize(),
+            factory = { holder.view },
+            update = { holder.setHighlight(highlightedEventId) },
+        )
+        Text(
+            holder.attribution, color = Color(0xCCFFFFFF), fontSize = 9.sp, maxLines = 1,
+            modifier = Modifier.align(Alignment.BottomStart).padding(4.dp)
+                .background(Color(0x66000000), RoundedCornerShape(4.dp)).padding(horizontal = 4.dp, vertical = 1.dp),
+        )
+    }
+}
+
+private class TripMapHolder(context: Context, private val trip: Trip) {
+    private val density = context.resources.displayMetrics.density
+    val view: MapView
+    var attribution by mutableStateOf(MapSetup.ATTRIBUTION_OPENFREEMAP)
+        private set
+    private var map: MapLibreMap? = null
+    private var loader: MapStyleLoader? = null
+    private var highlighted: UUID? = null
+    private var centeredOn: UUID? = null
+    private var fitted = false
+
+    init {
+        MapSetup.configure(context)
+        val options = MapLibreMapOptions.createFromAttributes(context)
+            .textureMode(true)   // inside a scrolling, clipped report: a TextureView clips and scrolls with it
+            .foregroundLoadColor(0xFF1C1F24.toInt())
+            .minZoomPreference(2.0)
+            .maxZoomPreference(19.0)
+            .attributionEnabled(false)
+            .logoEnabled(false)
+            .compassEnabled(false)
+            .rotateGesturesEnabled(false)
+            .tiltGesturesEnabled(false)
+        view = MapView(context, options)
+        view.setBackgroundColor(0xFF1C1F24.toInt())
+        view.onCreate(null)
+        // Pan / zoom the map without scrolling the report.
+        @SuppressLint("ClickableViewAccessibility")
+        view.setOnTouchListener { v, _ -> v.parent?.requestDisallowInterceptTouchEvent(true); false }
+        view.getMapAsync { m ->
+            map = m
+            loader = MapStyleLoader(view, m, { attribution = it }) { style -> install(style) }
+                .also { it.load(MapSetup.DARK_STYLE) }
+            if (view.width > 0 && view.height > 0) fit(m)
+            else view.addOnLayoutChangeListener(object : View.OnLayoutChangeListener {
+                override fun onLayoutChange(v: View, l: Int, t: Int, r: Int, b: Int, ol: Int, ot: Int, or: Int, ob: Int) {
+                    if (v.width > 0 && v.height > 0) { v.removeOnLayoutChangeListener(this); fit(m) }
+                }
+            })
+        }
+    }
+
+    private fun fit(m: MapLibreMap) {
+        if (fitted) return
+        fitted = true
+        val b = TripMapGeometry.paddedBounds(trip)
+        m.moveCamera(CameraUpdateFactory.newLatLngBounds(LatLngBounds.from(b.north, b.east, b.south, b.west), 0))
+        centerOnHighlight()
+    }
+
+    private fun install(style: Style) {
+        style.addImage("trip-a", pinBitmap("A", RV.safe.toArgb(), density))
+        style.addImage("trip-b", pinBitmap("B", RV.danger.toArgb(), density))
+        if (trip.routePolyline.size >= 2) {
+            style.addSource(GeoJsonSource("trip-route", LineString.fromLngLats(trip.routePolyline.map(::pt))))
+            style.addLayer(LineLayer("trip-route", "trip-route").withProperties(
+                PropertyFactory.lineColor(cssColor(TripStyle.route.toArgb())),
+                PropertyFactory.lineWidth(5f),
+                PropertyFactory.lineCap(Property.LINE_CAP_BUTT),
+                // Dash and gap of 6 dp, in line widths.
+                PropertyFactory.lineDasharray(arrayOf(1.2f, 1.2f)),
+            ))
+        }
+        if (trip.points.size >= 2) {
+            style.addSource(GeoJsonSource("trip-track", LineString.fromLngLats(trip.points.map { pt(it.coordinate) })))
+            style.addLayer(LineLayer("trip-track", "trip-track").withProperties(
+                PropertyFactory.lineColor(cssColor(RV.accent.toArgb())),
+                PropertyFactory.lineWidth(4f),
+                PropertyFactory.lineCap(Property.LINE_CAP_ROUND),
+                PropertyFactory.lineJoin(Property.LINE_JOIN_ROUND),
+            ))
+        }
+        val pins = listOfNotNull(
+            (trip.origin.coordinate ?: trip.points.firstOrNull()?.coordinate)?.let { pinFeature(it, "trip-a") },
+            (trip.destination?.coordinate ?: trip.points.lastOrNull()?.coordinate)?.let { pinFeature(it, "trip-b") },
+        )
+        style.addSource(GeoJsonSource("trip-events", eventFeatures(style)))
+        style.addLayer(symbolLayer("trip-events", "trip-events"))
+        style.addSource(GeoJsonSource("trip-pins", FeatureCollection.fromFeatures(pins)))
+        style.addLayer(symbolLayer("trip-pins", "trip-pins"))
+    }
+
+    private fun symbolLayer(id: String, source: String) = SymbolLayer(id, source).withProperties(
+        PropertyFactory.iconImage(Expression.get("icon")),
+        PropertyFactory.iconAllowOverlap(true),
+        PropertyFactory.iconIgnorePlacement(true),
+        PropertyFactory.symbolZOrder(Property.SYMBOL_Z_ORDER_SOURCE),
     )
+
+    private fun pinFeature(p: GeoPoint, icon: String) =
+        Feature.fromGeometry(pt(p)).apply { addStringProperty("icon", icon) }
+
+    /** Event features (highlighted one last, so on top); adds the marker bitmaps they use to [style]. */
+    private fun eventFeatures(style: Style): FeatureCollection {
+        val events = trip.events.filter { it.coordinate != null }.sortedBy { it.id == highlighted }
+        return FeatureCollection.fromFeatures(events.map { e ->
+            val big = e.id == highlighted
+            val icon = "trip-ev-${TripStyle.color(e.kind).toArgb()}-${TripStyle.severityColor(e.severity).toArgb()}-$big"
+            if (style.getImage(icon) == null) style.addImage(icon, eventBitmap(e, big, density))
+            Feature.fromGeometry(pt(e.coordinate!!)).apply { addStringProperty("icon", icon) }
+        })
+    }
+
+    fun setHighlight(id: UUID?) {
+        if (id == highlighted && centeredOn == id) return
+        highlighted = id
+        loader?.style?.let { style -> style.getSourceAs<GeoJsonSource>("trip-events")?.setGeoJson(eventFeatures(style)) }
+        if (fitted) centerOnHighlight()
+    }
+
+    private fun centerOnHighlight() {
+        val m = map ?: return
+        if (centeredOn == highlighted) return
+        centeredOn = highlighted
+        val target = trip.events.firstOrNull { it.id == highlighted }?.coordinate ?: return
+        m.animateCamera(CameraUpdateFactory.newLatLng(LatLng(target.latitude, target.longitude)))
+    }
 }
 
-@SuppressLint("ClickableViewAccessibility")
-private fun createMap(ctx: Context, trip: Trip): MapView {
-    // Same osmdroid configuration as the navigator (app cache dir, identifying user agent). Configuration.load()
-    // here would reset the tile cache to osmdroid's default storage path, which may be unwritable.
-    uz.roadvis.app.navigation.MapSetup.configure(ctx)
-    val map = MapView(ctx)
-    map.setTileSource(cartoDark)
-    map.setTilesScaledToDpi(true)
-    map.setMultiTouchControls(true)
-    map.zoomController.setVisibility(CustomZoomButtonsController.Visibility.NEVER)
-    map.minZoomLevel = 3.0
-    map.maxZoomLevel = 19.0
-    map.setBackgroundColor(0xFF1C1F24.toInt())
-    // Pan / zoom the map without scrolling the report.
-    map.setOnTouchListener { v, _ -> v.parent?.requestDisallowInterceptTouchEvent(true); false }
-
-    val density = ctx.resources.displayMetrics.density
-    if (trip.routePolyline.size >= 2) {
-        map.overlays += Polyline(map).apply {
-            setPoints(trip.routePolyline.map(::org))
-            outlinePaint.color = TripStyle.route.toArgb()
-            outlinePaint.strokeWidth = 5 * density
-            outlinePaint.strokeCap = Paint.Cap.ROUND
-            outlinePaint.pathEffect = DashPathEffect(floatArrayOf(6 * density, 6 * density), 0f)
-            infoWindow = null
-        }
-    }
-    if (trip.points.size >= 2) {
-        map.overlays += Polyline(map).apply {
-            setPoints(trip.points.map { org(it.coordinate) })
-            outlinePaint.color = RV.accent.toArgb()
-            outlinePaint.strokeWidth = 4 * density
-            outlinePaint.strokeCap = Paint.Cap.ROUND
-            outlinePaint.strokeJoin = Paint.Join.ROUND
-            infoWindow = null
-        }
-    }
-    fun pin(point: GeoPoint?, letter: String, color: Int, title: String?) {
-        point ?: return
-        map.overlays += Marker(map).apply {
-            position = org(point)
-            icon = BitmapDrawable(ctx.resources, pinBitmap(letter, color, density))
-            setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
-            this.title = title ?: letter
-            infoWindow = null
-            setOnMarkerClickListener { _, _ -> true }
-        }
-    }
-    pin(trip.origin.coordinate ?: trip.points.firstOrNull()?.coordinate, "A", RV.safe.toArgb(), trip.origin.name)
-    pin(trip.destination?.coordinate ?: trip.points.lastOrNull()?.coordinate, "B", RV.danger.toArgb(), trip.destination?.name)
-    map.overlays += CopyrightOverlay(ctx).apply { setTextColor(0xCCFFFFFF.toInt()); setTextSize(9) }
-
-    val b = TripMapGeometry.paddedBounds(trip)
-    val box = BoundingBox(b.north, b.east, b.south, b.west)
-    map.addOnFirstLayoutListener { _, _, _, _, _ -> map.zoomToBoundingBox(box, false) }
-    map.onResume()
-    return map
-}
-
-private class EventMarker(map: MapView, val event: DrivingEvent) : Marker(map)
-
-private fun updateEvents(map: MapView, trip: Trip, highlighted: UUID?) {
-    val ctx = map.context
-    val density = ctx.resources.displayMetrics.density
-    map.overlays.removeAll { it is EventMarker }
-    var target: GeoPoint? = null
-    // Insert below the copyright overlay (last) and above the track.
-    val insertAt = max(0, map.overlays.size - 1)
-    val markers = trip.events.filter { it.coordinate != null }.sortedBy { it.id == highlighted }.map { e ->
-        val big = e.id == highlighted
-        if (big) target = e.coordinate
-        EventMarker(map, e).apply {
-            position = org(e.coordinate!!)
-            icon = BitmapDrawable(ctx.resources, eventBitmap(e, big, density))
-            setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
-            title = e.kind.localizedTitle
-            infoWindow = null
-            setOnMarkerClickListener { _, _ -> true }
-        }
-    }
-    map.overlays.addAll(insertAt, markers)
-    if ((map.tag as? UUID) != highlighted) {
-        map.tag = highlighted
-        target?.let { map.controller.animateTo(org(it)) }
-    }
-    map.invalidate()
-}
+private fun pt(g: GeoPoint): Point = Point.fromLngLat(g.longitude, g.latitude)
 
 private fun pinBitmap(letter: String, color: Int, density: Float): Bitmap {
     val size = (26 * density).toInt()

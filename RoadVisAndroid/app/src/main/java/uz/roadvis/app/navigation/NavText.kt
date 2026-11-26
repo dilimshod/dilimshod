@@ -192,9 +192,9 @@ object NavText {
 
     private val fallback: Map<String, Map<AppLanguage, String>> = mapOf(
         "navx.map.cartoOnly" to mapOf(
-            AppLanguage.UZ to "Sun’iy yo‘ldosh xaritasi: kalitsiz bepul manba yo‘q, shuning uchun faqat OpenStreetMap (CARTO Dark) xaritasi mavjud. Plitkalar faqat ko‘rinadigan hudud uchun yuklanadi va qurilmada keshlanadi (100 MB gacha).",
-            AppLanguage.RU to "Спутниковая карта: бесплатного источника без ключа нет, поэтому доступна только карта OpenStreetMap (CARTO Dark). Плитки загружаются только для видимой области и кешируются на устройстве (до 100 МБ).",
-            AppLanguage.EN to "Satellite imagery: there is no free source without a key, so only the OpenStreetMap (CARTO Dark) map is available. Tiles are loaded only for the visible area and cached on the device (up to 100 MB).",
+            AppLanguage.UZ to "OpenFreeMap vektor xaritasi (OpenStreetMap ma’lumotlari) — bepul, kalitsiz. Sun’iy yo‘ldosh xaritasi uchun kalitsiz bepul manba yo‘q. Xarita faqat ko‘rinadigan hudud uchun yuklanadi va qurilmada keshlanadi (100 MB gacha); tarmoq bo‘lmasa, CARTO Dark xaritasi ishlatiladi.",
+            AppLanguage.RU to "Векторная карта OpenFreeMap (данные OpenStreetMap) — бесплатно, без ключа. Бесплатного источника спутниковых снимков без ключа нет. Карта загружается только для видимой области и кешируется на устройстве (до 100 МБ); если стиль недоступен, используется карта CARTO Dark.",
+            AppLanguage.EN to "OpenFreeMap vector map (OpenStreetMap data): free, no key. There is no free satellite imagery source without a key. The map is loaded only for the visible area and cached on the device (up to 100 MB); if the style cannot be loaded, the CARTO Dark map is used.",
         ),
         "navx.routing.footer" to mapOf(
             AppLanguage.UZ to "«Avto» Valhalla va OSRM’ni bir vaqtda so‘raydi, mos yo‘nalishlarni birlashtiradi (yo‘lning ≥ 85 % umumiy), variantlarni solishtiradi va eng tezini tanlaydi. FOSSGIS ommaviy serverlari bepul va yengil foydalanish uchun: ilova har biriga soniyasiga ko‘pi bilan bitta so‘rov yuboradi. © OpenStreetMap hissadorlari.",

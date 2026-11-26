@@ -71,7 +71,7 @@ import uz.roadvis.core.RouteTimelineKind
 private class IncidentTarget(val coordinate: GeoPoint?)
 
 /**
- * The navigator: osmdroid map with routes and road events, search, route options, guidance HUD (port of iOS
+ * The navigator: MapLibre map with routes and road events, search, route options, guidance HUD (port of iOS
  * `NavigatorView`). Stays mounted while hidden ([isActive] false): the map keeps its state but the camera is not
  * animated; guidance and road info run in the [NavigationController] regardless.
  */
@@ -129,6 +129,7 @@ fun NavigatorScreen(app: AppState, isActive: Boolean) {
             onLongPress = { longPress = it },
             onTapItem = { tapped = it },
             onTapEmpty = { tapped = null },
+            mapStyle = app.settings.mapStyle,
         )
 
         Column(Modifier.fillMaxWidth().windowInsetsPadding(WindowInsets.safeDrawing).padding(horizontal = 10.dp, vertical = 4.dp),
@@ -323,7 +324,7 @@ private fun ErrorBanner(message: String, onClose: () -> Unit) {
     }
 }
 
-/** Required tile / data credits (OSM tile usage policy, CARTO terms, Open-Meteo CC BY 4.0). */
+/** Required map / data credits (OpenFreeMap / OpenMapTiles / OSM, CARTO for the fallback, Open-Meteo CC BY 4.0). */
 @Composable
 private fun Attribution(showWeather: Boolean, onOpenCopyright: () -> Unit) {
     Row(Modifier.clip(CircleShape).background(Color.Black.copy(alpha = 0.45f)).padding(horizontal = 8.dp, vertical = 2.dp),

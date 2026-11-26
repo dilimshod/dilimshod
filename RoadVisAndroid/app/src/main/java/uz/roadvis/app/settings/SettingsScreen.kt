@@ -262,7 +262,7 @@ private fun NavigationSettingsSections(app: AppState) {
     val x = ExtraSettings.get(app.context)
     FormSection(header = L("navset.map"), footer = L("navset.map.footer")) {
         TextRow(L("nav.mapLayer"), secondary = true)
-        ChoiceRows(listOf("cartoDark" to "OpenStreetMap (CARTO Dark)", "osmStandard" to TL("android.mapStyle.osmStandard")),
+        ChoiceRows(listOf("cartoDark" to TL("android.mapStyle.dark"), "osmStandard" to TL("android.mapStyle.osmStandard")),
             if (s.mapStyle == "osmStandard") "osmStandard" else "cartoDark", { s.mapStyle = it })
     }
     FormSection(header = L("navset.routing"), footer = L("navset.routing.footer")) {

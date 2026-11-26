@@ -180,7 +180,7 @@ object NavStyle {
         else -> icon(turn.symbolName)
     }
 
-    /** Glyph drawn inside map markers (osmdroid canvas; emoji render with the system font). */
+    /** Glyph drawn inside map markers (drawn into MapLibre marker bitmaps; emoji render with the system font). */
     fun glyph(kind: RouteTimelineKind): String = when (kind) {
         is RouteTimelineKind.Maneuver -> when {
             kind.type.isLeftward -> "↰"

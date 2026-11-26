@@ -64,6 +64,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import uz.roadvis.app.settings.TL
 import uz.roadvis.app.app.AppSettings
 import uz.roadvis.app.app.AppState
 import uz.roadvis.app.l10n.L
@@ -214,7 +215,9 @@ fun NavigatorSettingsSheet(nav: NavigationController, app: AppState, onDismiss: 
             }
             // Map
             SectionTitle(L("navset.map"))
-            Choice("OpenStreetMap (CARTO Dark)", true) { s.mapStyle = "cartoDark" }
+            val light = s.mapStyle == "osmStandard"
+            Choice(TL("android.mapStyle.dark"), !light) { s.mapStyle = "cartoDark" }
+            Choice(TL("android.mapStyle.osmStandard"), light) { s.mapStyle = "osmStandard" }
             Footer(NavText.x("navx.map.cartoOnly"))
             // Guidance
             SectionTitle(L("settings.nav.title"))
