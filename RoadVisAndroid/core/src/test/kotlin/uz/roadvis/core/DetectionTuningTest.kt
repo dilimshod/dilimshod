@@ -17,7 +17,8 @@ class DetectionTuningTest {
         val t = DetectionThresholds.perClass()
         assertEquals(0.30, t[VehicleKind.CAR]!!, 1e-9)
         assertEquals(0.40, t[VehicleKind.PERSON]!!, 1e-9)
-        assertEquals(0.50, t[VehicleKind.TRAFFIC_LIGHT]!!, 1e-9)
+        assertEquals(0.30, t[VehicleKind.TRUCK]!!, 1e-9)
+        assertEquals(0.30, t[VehicleKind.TRAFFIC_LIGHT]!!, 1e-9)
         assertEquals(0.55, t[VehicleKind.STOP_SIGN]!!, 1e-9)
         assertEquals(VehicleKind.entries.size, t.size)
         assertEquals(t, ObjectTracker.Config().minConfidence)
@@ -31,11 +32,12 @@ class DetectionTuningTest {
         val low = DetectionThresholds.perClass(0.15)
         assertEquals(0.15, low[VehicleKind.CAR]!!, 1e-9)
         assertEquals(0.25, low[VehicleKind.PERSON]!!, 1e-9)
-        assertEquals(0.35, low[VehicleKind.TRAFFIC_LIGHT]!!, 1e-9)
+        assertEquals(0.15, low[VehicleKind.TRAFFIC_LIGHT]!!, 1e-9)
         assertEquals(0.40, low[VehicleKind.STOP_SIGN]!!, 1e-9)
         val high = DetectionThresholds.perClass(0.8)
         assertEquals(0.8, high[VehicleKind.CAR]!!, 1e-9)
-        assertEquals(DetectionThresholds.MAXIMUM, high[VehicleKind.TRAFFIC_LIGHT]!!, 1e-9)
+        assertEquals(0.8, high[VehicleKind.TRAFFIC_LIGHT]!!, 1e-9)
+        assertEquals(DetectionThresholds.MAXIMUM, high[VehicleKind.STOP_SIGN]!!, 1e-9)
         assertEquals(DetectionThresholds.MINIMUM, DetectionThresholds.threshold(VehicleKind.CAR, 0.0), 1e-9)
         assertEquals(0.30, DetectionThresholds.threshold(VehicleKind.CAR, Double.NaN), 1e-9)
     }
@@ -71,26 +73,30 @@ class DetectionTuningTest {
     @Test fun lowScoreDetectionContinuesConfirmedTrackOnly() {
         val tracker = ObjectTracker()
         var tracks: List<TrackedObject> = emptyList()
-        for (i in 0 until 3) tracks = tracker.update(listOf(det(VehicleKind.TRAFFIC_LIGHT, 0.6)), i * 0.1)
+        for (i in 0 until 3) tracks = tracker.update(listOf(det(VehicleKind.STOP_SIGN, 0.6)), i * 0.1)
         assertEquals(true, tracks.firstOrNull()?.isConfirmed)
         val id = tracks.first().id
-        // 0.40 is below the light threshold (0.50) but above 0.50 × 0.7: the confirmed track goes on.
-        tracks = tracker.update(listOf(det(VehicleKind.TRAFFIC_LIGHT, 0.40)), 0.3)
+        // 0.40 is below the stop-sign threshold (0.55) but above 0.55 × 0.7: the confirmed track goes on.
+        tracks = tracker.update(listOf(det(VehicleKind.STOP_SIGN, 0.40)), 0.3)
         assertEquals(id, tracks.firstOrNull()?.id)
-        assertEquals(4, tracks.first().hits)
+        assertEquals(0, tracks.first().missed)
+        // A low-score continuation is not a hit (it must not help confirm or re-vote a track).
+        assertEquals(3, tracks.first().hits)
         assertEquals(0.40, tracks.first().confidence, 1e-9)
         assertEquals(0.60, tracks.first().peakConfidence, 1e-9)
-        // Below the continuation floor: a miss.
-        assertTrue(tracker.update(listOf(det(VehicleKind.TRAFFIC_LIGHT, 0.30)), 0.4).isEmpty())
+        // Below the continuation floor: a miss (the confirmed track is only coasted, missed == 1).
+        tracks = tracker.update(listOf(det(VehicleKind.STOP_SIGN, 0.30)), 0.4)
+        assertTrue(tracks.none { it.missed == 0 })
+        assertEquals(1, tracks.firstOrNull()?.missed)
         // A low score never opens a track and never feeds a tentative one.
         val fresh = ObjectTracker()
-        assertTrue(fresh.update(listOf(det(VehicleKind.TRAFFIC_LIGHT, 0.40)), 0.0).isEmpty())
-        fresh.update(listOf(det(VehicleKind.TRAFFIC_LIGHT, 0.6)), 0.1)
-        assertTrue(fresh.update(listOf(det(VehicleKind.TRAFFIC_LIGHT, 0.40)), 0.2).isEmpty())
+        assertTrue(fresh.update(listOf(det(VehicleKind.STOP_SIGN, 0.40)), 0.0).isEmpty())
+        fresh.update(listOf(det(VehicleKind.STOP_SIGN, 0.6)), 0.1)
+        assertTrue(fresh.update(listOf(det(VehicleKind.STOP_SIGN, 0.40)), 0.2).isEmpty())
         // Hysteresis off: the old strict behaviour.
         val strict = ObjectTracker(ObjectTracker.Config(continuationFactor = 1.0))
-        for (i in 0 until 3) strict.update(listOf(det(VehicleKind.TRAFFIC_LIGHT, 0.6)), i * 0.1)
-        assertTrue(strict.update(listOf(det(VehicleKind.TRAFFIC_LIGHT, 0.45)), 0.3).isEmpty())
+        for (i in 0 until 3) strict.update(listOf(det(VehicleKind.STOP_SIGN, 0.6)), i * 0.1)
+        assertTrue(strict.update(listOf(det(VehicleKind.STOP_SIGN, 0.45)), 0.3).none { it.missed == 0 })
     }
 
     @Test fun dropTracksKeepsCountersAndIDs() {
@@ -175,7 +181,56 @@ class DetectionTuningTest {
         assertEquals(0.0, top.y, 1e-9); assertEquals(0.5, top.height, 1e-9)
     }
 
+    @Test fun decoderHandlesRectangularInput() {
+        // Raw [1, 6, 7] tensor (rows cx, cy, w, h, 2 classes; 7 anchors, 5 of them empty) in 960×544 input pixels.
+        fun row(a: Float, b: Float) = floatArrayOf(a, b, 0f, 0f, 0f, 0f, 0f)
+        val values = row(480f, 100f) + row(272f, 300f) + row(96f, 50f) + row(54.4f, 100f) + row(0.9f, 0.1f) + row(0.05f, 0.8f)
+        // Filled (aspect-matched) frame: plain division by the input size.
+        val filled = YOLODecoder.decode(values, listOf(1, 6, 7), 960.0, 544.0, confidenceThreshold = 0.25, iouThreshold = 0.45)
+        assertEquals(2, filled.size)
+        assertEquals(0.5, filled[0].box.midX, 1e-6)
+        assertEquals(0.5, filled[0].box.midY, 1e-6)
+        assertEquals(0.1, filled[0].box.width, 1e-6)
+        assertEquals(0.1, filled[0].box.height, 1e-6)
+        // Letterboxed 1280×720 frame in 960×544: gain 0.75, 2 px bars → y = (300 − 2) / 0.75 / 720.
+        val boxed = YOLODecoder.decode(values, listOf(1, 6, 7), 960.0, 544.0, confidenceThreshold = 0.25,
+            iouThreshold = 0.45, sourceWidth = 1280.0, sourceHeight = 720.0)
+        val second = boxed.firstOrNull { it.classIndex == 1 }
+        assertEquals((300.0 - 2) / 0.75 / 720, second?.box?.midY ?: 0.0, 1e-6)
+        assertEquals(100.0 / 960, second?.box?.midX ?: 0.0, 1e-6)
+        // The decoder and DetectorInputGeometry agree.
+        val g = DetectorInputGeometry(640.0, 384.0, 1280.0, 720.0)
+        val single = row(320f, 0f) + row(192f, 0f) + row(64f, 0f) + row(96f, 0f) + row(0.9f, 0f)
+        val viaDecoder = YOLODecoder.decode(single, listOf(1, 5, 7), 640.0, 384.0, confidenceThreshold = 0.25,
+            iouThreshold = 0.45, sourceWidth = 1280.0, sourceHeight = 720.0)
+        val viaGeometry = g.frameBox(BBox((320.0 - 32) / 640, (192.0 - 48) / 384, 64.0 / 640, 96.0 / 384))
+        assertEquals(viaGeometry.x, viaDecoder.firstOrNull()?.box?.x ?: 0.0, 1e-6)
+        assertEquals(viaGeometry.y, viaDecoder.firstOrNull()?.box?.y ?: 0.0, 1e-6)
+        assertEquals(viaGeometry.height, viaDecoder.firstOrNull()?.box?.height ?: 0.0, 1e-6)
+    }
+
     // Quality governor
+
+    @Test fun governorDropsToLiteWhenSlowAndComesBack() {
+        val g = DetectorQualityGovernor(DetectorQualityGovernor.Config.iOS)
+        assertEquals(DetectorQualityGovernor.Level.FULL, g.level)
+        var t = feed(g, 30.0, 100, 0.0)
+        assertEquals(DetectorQualityGovernor.Level.FULL, g.level)   // fast enough: stays
+        t = feed(g, 80.0, 10, t)
+        assertEquals(DetectorQualityGovernor.Level.FULL, g.level)   // a short hiccup inside one window: no change
+        t = feed(g, 80.0, 60, t)
+        assertEquals(DetectorQualityGovernor.Level.LITE, g.level)
+        // Lite is quick (10 ms < 15 ms) but the retry time (30 s) has not passed.
+        t = feed(g, 10.0, 100, t)
+        assertEquals(DetectorQualityGovernor.Level.LITE, g.level)
+        feed(g, 10.0, 250, t)
+        assertEquals(DetectorQualityGovernor.Level.FULL, g.level)
+        // Lite itself too slow for a retry: never upgrades.
+        val slow = DetectorQualityGovernor(DetectorQualityGovernor.Config.iOS)
+        val ts = feed(slow, 80.0, 40, 0.0)
+        feed(slow, 25.0, 2000, ts)
+        assertEquals(DetectorQualityGovernor.Level.LITE, slow.level)
+    }
 
     private fun feed(g: DetectorQualityGovernor, ms: Double, frames: Int, from: Double, constrained: Boolean = false): Double {
         var time = from

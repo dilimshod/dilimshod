@@ -26,6 +26,8 @@ internal object UzStrings {
         m["settings.fd.calib.done"] = "Kapot uzunligi: %s m saqlandi"
         m["settings.fd.calib.noLead"] = "Kalibrlash uchun boshqa mashina orqasida to‘xtang va kamera ekranini oching."
         m["settings.fd.calib.hint"] = "Oldingi mashina orqasida to‘xtab, bamperlar orasidagi haqiqiy masofani kiriting va «Hozir kalibrlash»ni bosing."
+        m["settings.fd.horizonAuto"] = "Ufq chizig‘ini avtomatik aniqlash"
+        m["settings.fd.horizonAuto.hint"] = "Tezlik 30 km/soatdan yuqori bo‘lib, ikkala yo‘l chizig‘i ko‘ringanda ufq ular kesishadigan nuqta bo‘yicha o‘lchanadi. Slayder — boshlang‘ich qiymat; avtomatik rejim o‘chirilganda ham shu qiymat ishlatiladi."
         m["common.done"] = "Tayyor"
         m["common.cancel"] = "Bekor qilish"
         m["common.close"] = "Yopish"

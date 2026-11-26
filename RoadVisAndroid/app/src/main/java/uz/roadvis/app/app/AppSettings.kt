@@ -65,6 +65,14 @@ class AppSettings(context: Context) {
     var distanceWarningsEnabled by Pref("rv.distanceWarningsEnabled", true)
     var showEgoCorridor by Pref("rv.showEgoCorridor", false)
     var corridorHorizon by Pref("rv.corridorHorizon", 0.42)
+    /**
+     * Measure the horizon from the lane vanishing point while driving (`LaneHorizonEstimator`); [corridorHorizon] is
+     * then the start value and the fallback.
+     */
+    var autoHorizonEnabled by Pref("rv.autoHorizonEnabled", true)
+    /** Last measured horizon for portrait / landscape frames (0 = nothing measured yet). */
+    var autoHorizonPortrait by Pref("rv.autoHorizonPortrait", 0.0)
+    var autoHorizonLandscape by Pref("rv.autoHorizonLandscape", 0.0)
 
     // Driver assist sounds
     var alertSoundsEnabled by Pref("rv.alertSounds", true)

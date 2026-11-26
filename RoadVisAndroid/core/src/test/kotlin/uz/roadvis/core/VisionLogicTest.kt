@@ -128,7 +128,7 @@ class VisionLogicTest {
 
     @Test fun perClassConfidenceFilter() {
         val tracker = ObjectTracker(ObjectTracker.Config(minHits = 1))
-        tracker.update(listOf(Detection(VehicleKind.TRAFFIC_LIGHT, "traffic light", 0.42, BBox(0.5, 0.1, 0.02, 0.05))), 0.0)
+        tracker.update(listOf(Detection(VehicleKind.TRAFFIC_LIGHT, "traffic light", 0.25, BBox(0.5, 0.1, 0.02, 0.05))), 0.0)
         assertNull(tracker.uniqueCounts[VehicleKind.TRAFFIC_LIGHT])
         tracker.update(listOf(Detection(VehicleKind.TRAFFIC_LIGHT, "traffic light", 0.6, BBox(0.5, 0.1, 0.02, 0.05))), 0.1)
         assertEquals(1, tracker.uniqueCounts[VehicleKind.TRAFFIC_LIGHT])

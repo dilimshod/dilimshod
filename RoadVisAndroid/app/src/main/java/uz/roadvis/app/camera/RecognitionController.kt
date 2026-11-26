@@ -18,6 +18,7 @@ import uz.roadvis.core.CameraEventInput
 import uz.roadvis.core.CameraDrivingEventMonitor
 import uz.roadvis.core.CameraGeometry
 import uz.roadvis.core.CoachFrameInput
+import uz.roadvis.core.DetectionThresholds
 import uz.roadvis.core.EgoCorridor
 import uz.roadvis.core.FollowingDistanceAssessment
 import uz.roadvis.core.FollowingDistanceCalculator
@@ -26,13 +27,13 @@ import uz.roadvis.core.LaneDepartureDetector
 import uz.roadvis.core.LaneEstimate
 import uz.roadvis.core.LaneSide
 import uz.roadvis.core.LeadVehicle
-import uz.roadvis.core.ObservedTrafficLight
 import uz.roadvis.core.PedestrianHazard
 import uz.roadvis.core.RoadStaffSighting
 import uz.roadvis.core.RoadSurfaceCondition
 import uz.roadvis.core.RoadwayZone
 import uz.roadvis.core.TrackedObject
 import uz.roadvis.core.TrafficLightColor
+import uz.roadvis.core.TrafficLightSelection
 import uz.roadvis.core.VehicleKind
 import kotlin.math.abs
 import kotlin.math.max
@@ -85,10 +86,16 @@ class RecognitionController(val app: AppState) {
     var roadStaff by mutableStateOf<List<RoadStaffSighting>>(emptyList()); private set
     var roadwayZone by mutableStateOf<RoadwayZone?>(null); private set
     var corridorCenterX by mutableStateOf(0.5); private set
+    /** Horizon row the worker used on the latest frame (the manual setting, or the measured one with auto horizon). */
+    var horizonInUse by mutableStateOf<Double?>(null); private set
 
     val topPedestrianHazard: PedestrianHazard? get() = pedestrianHazards.firstOrNull()
     val topRoadStaff: RoadStaffSighting? get() = roadStaff.firstOrNull()
-    val egoCorridor: EgoCorridor get() = EgoCorridor(centerX = corridorCenterX, horizonY = min(0.8, max(0.1, settings.corridorHorizon)))
+    /** Own-lane corridor used to pick the lead vehicle (for drawing): the same aspect-aware one as the worker's. */
+    val egoCorridor: EgoCorridor
+        get() = EgoCorridor.forFrame(centerX = corridorCenterX,
+            horizonY = min(0.8, max(0.1, horizonInUse ?: settings.corridorHorizon)),
+            imageWidth = frameWidth.toDouble(), imageHeight = frameHeight.toDouble())
     val totalUniqueVehicles: Int get() = uniqueCounts.entries.sumOf { if (it.key.isVehicle) it.value else 0 }
     val totalVisibleVehicles: Int get() = visibleCounts.entries.sumOf { if (it.key.isVehicle) it.value else 0 }
 
@@ -142,7 +149,7 @@ class RecognitionController(val app: AppState) {
             snapshotFlow {
                 listOf(settings.detectionConfidence, settings.nmsIoUThreshold, settings.trackPedestrians,
                     settings.detectTrafficLights, settings.makeRecognitionEnabled, settings.followingDistanceEnabled,
-                    settings.corridorHorizon, settings.hoodLengthMeters, settings.followingTimeGapDry,
+                    settings.corridorHorizon, settings.autoHorizonEnabled, settings.hoodLengthMeters, settings.followingTimeGapDry,
                     settings.stoppedGapMeters, settings.reactionTimeSeconds, settings.roadSurfaceMode,
                     assist.laneDepartureEnabled, assist.showLaneOverlay, assist.pedestrianWarningsEnabled)
             }.drop(1).collect {
@@ -201,6 +208,16 @@ class RecognitionController(val app: AppState) {
         if (frameWidth != output.frameWidth) frameWidth = output.frameWidth
         if (frameHeight != output.frameHeight) frameHeight = output.frameHeight
         if (abs(corridorCenterX - output.corridor.centerX) >= 0.003) corridorCenterX = output.corridor.centerX
+        if (horizonInUse != output.horizonY) horizonInUse = output.horizonY
+        // Remember the measured horizon for the next start (per frame orientation; 0 = none stored).
+        val measured = output.measuredHorizon
+        if (settings.autoHorizonEnabled && measured != null) {
+            if (output.measuredHorizonIsLandscape) {
+                if (abs(settings.autoHorizonLandscape - measured) > 0.005) settings.autoHorizonLandscape = measured
+            } else if (abs(settings.autoHorizonPortrait - measured) > 0.005) {
+                settings.autoHorizonPortrait = measured
+            }
+        }
         if (currentLightColor != output.lightColor) currentLightColor = output.lightColor
         processedFrames = output.processedFrames
         isRunning = true
@@ -259,7 +276,7 @@ class RecognitionController(val app: AppState) {
 
         val coachInput = CoachFrameInput(timestamp = now, speedKmh = speed, assessment = assessment,
             hasLead = leadVehicle != null, collisionWarning = isForwardCollisionWarning, laneDeparture = departure,
-            light = ObservedTrafficLight.largest(fresh))
+            light = output.observedLight)
         val stopIDs = fresh.filter { it.kind == VehicleKind.STOP_SIGN && it.isConfirmed }.map { it.id }
         coach.handle(DriverAssistFrame(coachInput, stopIDs, pedestrianHazards, roadStaff))
 
@@ -276,13 +293,20 @@ class RecognitionController(val app: AppState) {
         for (event in eventMonitor.update(input)) app.bus.emitEvent(event)
     }
 
-    /** Current tracks plus confirmed tracks missed for at most [TRACK_HOLD] seconds (marked `missed ≥ 1`). */
-    private fun displayTracks(fresh: List<TrackedObject>, now: Double): List<TrackedObject> {
+    /**
+     * Current tracks plus confirmed tracks missed for at most [TRACK_HOLD] seconds (marked `missed ≥ 1`).
+     * Low-score traffic lights without a readable colour are not drawn ([TrafficLightSelection.isDisplayable]).
+     */
+    private fun displayTracks(all: List<TrackedObject>, now: Double): List<TrackedObject> {
+        val lightThreshold = DetectionThresholds.threshold(VehicleKind.TRAFFIC_LIGHT, settings.detectionConfidence)
+        val fresh = all.filter { TrafficLightSelection.isDisplayable(it, lightThreshold) }
         val result = fresh.toMutableList()
         val freshIDs = HashSet<Int>()
         for (t in fresh) {
             freshIDs.add(t.id)
-            recentTracks[t.id] = t to now
+            // Tracks coasted by the tracker (`missed ≥ 1`, predicted box) are drawn as they come but do not restart
+            // the hold time: the hold runs from the last real detection.
+            if (t.missed == 0) recentTracks[t.id] = t to now
         }
         val it = recentTracks.entries.iterator()
         while (it.hasNext()) {
@@ -382,6 +406,9 @@ class RecognitionController(val app: AppState) {
             makeRecognitionEnabled = settings.makeRecognitionEnabled,
             followingDistanceEnabled = settings.followingDistanceEnabled,
             corridorHorizon = settings.corridorHorizon,
+            autoHorizonEnabled = settings.autoHorizonEnabled,
+            storedHorizonPortrait = settings.autoHorizonPortrait.takeIf { it > 0 },
+            storedHorizonLandscape = settings.autoHorizonLandscape.takeIf { it > 0 },
             cameraToBumperMeters = settings.hoodLengthMeters,
         )
     }

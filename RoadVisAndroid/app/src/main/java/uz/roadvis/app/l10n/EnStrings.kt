@@ -26,6 +26,8 @@ internal object EnStrings {
         m["settings.fd.calib.done"] = "Bonnet length saved: %s m"
         m["settings.fd.calib.noLead"] = "To calibrate, stop behind another car with the camera screen open."
         m["settings.fd.calib.hint"] = "While stopped behind a car, enter the real bumper-to-bumper gap and tap “Calibrate now”."
+        m["settings.fd.horizonAuto"] = "Measure the horizon automatically"
+        m["settings.fd.horizonAuto.hint"] = "Above 30 km/h with both lane lines visible, the horizon is measured from the point where they meet. The slider is the starting value and is used when automatic mode is off."
         m["common.done"] = "Done"
         m["common.cancel"] = "Cancel"
         m["common.close"] = "Close"

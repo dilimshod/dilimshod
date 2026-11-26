@@ -46,8 +46,16 @@ python tools/export_yolo_onnx.py --verify photo.jpg   # runs the asset at all fo
 ```
 
 Confidence: the settings slider (default 35 %) is the threshold of cars / trucks / buses; motorcycles and bicycles
-+5 points, pedestrians +10, traffic lights +20, stop signs +25 (`DetectionThresholds`). Ultralytics weights are
-AGPL-3.0.
++5 points, pedestrians +10, stop signs +25, traffic lights +0 (`DetectionThresholds`; a light drives the indicator /
+coach only with a stable known colour, `TrafficLightSelection`). Ultralytics weights are AGPL-3.0.
+
+Recognition pipeline (mirror of the iOS worker, same order and constants): one horizon per frame (manual setting or
+the lane vanishing-point estimate, `LaneHorizonEstimator`, toggle "auto horizon") → lanes (adaptive thresholds,
+3-frame accumulation) → detector → light colour (`TrafficLightColorClassifier` v2) / person role → tracker
+(two-stage low-score association, 3 coasted frames, timed colour vote) → distance / speed → lead vehicle
+(aspect-aware corridor) → pedestrians vs roadway → own-lane traffic light. The Kotlin core is covered by the same
+unit tests as the Swift core (including the 292-crop classifier parity fixture); nothing of this was run on a phone
+or on real video.
 
 ## Natural voice (optional)
 Generate the Microsoft Edge clips on a Mac (see `../RoadVis/tools/VOICE_CLIPS.md`), then copy them:

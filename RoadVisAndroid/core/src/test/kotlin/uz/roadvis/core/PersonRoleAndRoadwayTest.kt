@@ -152,9 +152,12 @@ class PersonRoleAndRoadwayTest {
 
     @Test fun officerOnRoadIsStaffNotHazard() {
         val d = PedestrianHazardDetector()
-        val r = d.evaluate(listOf(person(1, 0.5, 0.7, t = 0.0, role = PersonRole.TRAFFIC_OFFICER),
+        // Officer on the roadway but outside the own lane (corridor half width at y = 0.7 is ≈ 0.137).
+        val r = d.evaluate(listOf(person(1, 0.72, 0.7, t = 0.0, role = PersonRole.TRAFFIC_OFFICER),
             person(2, 0.02, 0.62, t = 0.0, role = PersonRole.ROAD_WORKER)), 40.0, g, 0.0)
         assertTrue(r.hazards.isEmpty())
+        assertEquals(true, r.staff.firstOrNull()?.onRoadway)
+        assertEquals(false, r.staff.firstOrNull()?.inOwnLane)
         assertEquals(listOf(1), r.staff.map { it.trackID })
         assertEquals(PersonRole.TRAFFIC_OFFICER, r.staff.firstOrNull()?.role)
         assertEquals(setOf(2), r.filteredIDs)
