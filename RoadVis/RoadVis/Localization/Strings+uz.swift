@@ -5,7 +5,7 @@ import Foundation
 enum UzStrings {
     static let table: [String: String] = [
         // MARK: Splash
-        "splash.tagline": "Yangi haydovchilar uchun yo‘l yordamchisi",
+        "splash.tagline": "Haydovchiga ko‘makchi",
 
         // MARK: Voice mute
         "assist.voicePrompts": "Ovozli maslahatlar",

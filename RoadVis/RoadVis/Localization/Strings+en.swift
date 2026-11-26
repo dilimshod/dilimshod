@@ -5,7 +5,7 @@ import Foundation
 enum EnStrings {
     static let table: [String: String] = [
         // MARK: Splash
-        "splash.tagline": "Road assistant for new drivers",
+        "splash.tagline": "Driver Assistant",
 
         // MARK: Voice mute
         "assist.voicePrompts": "Voice prompts",

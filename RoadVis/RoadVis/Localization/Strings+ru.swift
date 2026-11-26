@@ -4,7 +4,7 @@ import Foundation
 enum RuStrings {
     static let table: [String: String] = [
         // MARK: Splash
-        "splash.tagline": "Помощник начинающего водителя",
+        "splash.tagline": "Помощник водителю",
 
         // MARK: Voice mute
         "assist.voicePrompts": "Голосовые подсказки",
