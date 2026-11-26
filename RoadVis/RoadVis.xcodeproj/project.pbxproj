@@ -6,6 +6,10 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		8A5D3C1E2EC6000000000020 /* MapLibre in Frameworks */ = {isa = PBXBuildFile; productRef = 8A5D3C1E2EC6000000000022 /* MapLibre */; };
+/* End PBXBuildFile section */
+
 /* Begin PBXFileReference section */
 		8A5D3C1E2EC6000000000005 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		8A5D3C1E2EC6000000000006 /* README.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = README.md; sourceTree = "<group>"; };
@@ -45,6 +49,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				8A5D3C1E2EC6000000000020 /* MapLibre in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -100,6 +105,7 @@
 			);
 			name = RoadVis;
 			packageProductDependencies = (
+				8A5D3C1E2EC6000000000022 /* MapLibre */,
 			);
 			productName = RoadVis;
 			productReference = 8A5D3C1E2EC6000000000008 /* RoadVis.app */;
@@ -131,6 +137,9 @@
 			);
 			mainGroup = 8A5D3C1E2EC6000000000002;
 			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				8A5D3C1E2EC6000000000021 /* XCRemoteSwiftPackageReference "maplibre-gl-native-distribution" */,
+			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 8A5D3C1E2EC6000000000003 /* Products */;
 			projectDirPath = "";
@@ -385,6 +394,25 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		8A5D3C1E2EC6000000000021 /* XCRemoteSwiftPackageReference "maplibre-gl-native-distribution" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/maplibre/maplibre-gl-native-distribution";
+			requirement = {
+				kind = exactVersion;
+				version = 6.31.0;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		8A5D3C1E2EC6000000000022 /* MapLibre */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 8A5D3C1E2EC6000000000021 /* XCRemoteSwiftPackageReference "maplibre-gl-native-distribution" */;
+			productName = MapLibre;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = 8A5D3C1E2EC6000000000001 /* Project object */;
 }

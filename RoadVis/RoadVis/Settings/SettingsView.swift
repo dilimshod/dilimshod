@@ -520,6 +520,12 @@ private struct SettingsAboutSection: View {
             sourceRow(title: L("sources.maps.title"),
                       detail: L("sources.maps.detail"))
             VStack(alignment: .leading, spacing: 6) {
+                sourceRow(title: L("sources.basemap.title"),
+                          detail: L("sources.basemap.detail"))
+                Link("openfreemap.org", destination: MapLibreBaseMap.openFreeMapURL)
+                    .font(.footnote)
+            }
+            VStack(alignment: .leading, spacing: 6) {
                 sourceRow(title: L("sources.osm.title"),
                           detail: L("sources.osm.detail"))
                 if let copyright = URL(string: "https://www.openstreetmap.org/copyright") {

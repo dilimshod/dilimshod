@@ -20,6 +20,12 @@ options:
     iOS: "17.0"
   groupSortPosition: top
 
+packages:
+  # MapLibre Native (BSD-2) for the navigator / trip maps over free OpenFreeMap vector tiles (no API key).
+  MapLibre:
+    url: https://github.com/maplibre/maplibre-gl-native-distribution
+    exactVersion: 6.31.0
+
 settings:
   base:
     SWIFT_VERSION: "5.0"
@@ -97,6 +103,9 @@ targets:
         buildPhase: none
       - path: README.md
         buildPhase: none
+    dependencies:
+      - package: MapLibre
+        product: MapLibre
     info:
       path: Config/Info.plist
       properties:
