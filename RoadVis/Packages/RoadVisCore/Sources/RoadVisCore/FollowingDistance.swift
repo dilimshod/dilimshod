@@ -268,8 +268,11 @@ public struct LeadVehicle: Hashable, Sendable {
     public var trackID: Int
     public var kind: VehicleKind
     public var box: BBox
-    /// Smoothed distance estimate, metres (≈, single camera).
+    /// Smoothed gap from the own FRONT BUMPER to the lead's rear, metres (≈, single camera):
+    /// `cameraDistanceMeters − cameraToBumperMeters` (bonnet length).
     public var distanceMeters: Double
+    /// Smoothed distance from the camera (windscreen) to the lead's rear, metres (≈).
+    public var cameraDistanceMeters: Double = 0
     /// Rate of change of the gap, km/h (positive = pulling away), nil until enough samples.
     public var relativeSpeedKmh: Double?
     /// Which cues were used: "ширина+высота", "ширина", "высота".
@@ -305,6 +308,9 @@ public final class LeadVehicleTracker {
 
     public var corridor: EgoCorridor
     public var selection: SelectionConfig
+    /// Distance from the camera to the own front bumper (bonnet length + mount offset), metres. The camera on the
+    /// windscreen sees the lead from ~2 m behind the bumper, so the reported gap subtracts this.
+    public var cameraToBumperMeters: Double = 0
     private var currentID: Int?
     private var smoothed: Double?
     private var samples: [(t: TimeInterval, d: Double)] = []
@@ -383,8 +389,9 @@ public final class LeadVehicleTracker {
                 if abs(kmh) < 150 { rel = kmh }
             }
         }
-        return LeadVehicle(trackID: lead.id, kind: lead.kind, box: lead.box, distanceMeters: value,
-                           relativeSpeedKmh: rel, method: method)
+        let gap = max(0.2, value - max(0, cameraToBumperMeters))
+        return LeadVehicle(trackID: lead.id, kind: lead.kind, box: lead.box, distanceMeters: gap,
+                           cameraDistanceMeters: value, relativeSpeedKmh: rel, method: method)
     }
 }
 

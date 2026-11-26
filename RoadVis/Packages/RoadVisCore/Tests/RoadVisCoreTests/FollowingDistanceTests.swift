@@ -165,3 +165,23 @@ final class FollowingDistanceTests: XCTestCase {
         XCTAssertEqual(center, 0.5, accuracy: 0.01)
     }
 }
+
+final class BonnetOffsetTests: XCTestCase {
+    func testGapSubtractsCameraToBumper() {
+        let g = CameraGeometry(horizontalFOVDegrees: 65, imageWidth: 1080, imageHeight: 1920)
+        let tracker = LeadVehicleTracker()
+        tracker.cameraToBumperMeters = 2.5
+        var lead: LeadVehicle?
+        for i in 0..<5 {
+            let z = 5.0   // camera to the lead's rear
+            let w = g.focalLengthPixels * 1.8 / z / g.imageWidth
+            let h = g.focalLengthPixels * 1.5 / z / g.imageHeight
+            let car = TrackedObject(id: 1, kind: .car, label: "car", box: BBox(x: 0.5 - w / 2, y: 0.9 - h, width: w, height: h),
+                                    confidence: 0.9, hits: 5, firstSeen: 0, lastSeen: Double(i) * 0.1, isConfirmed: true)
+            lead = tracker.update(tracks: [car], geometry: g, timestamp: Double(i) * 0.1)
+        }
+        let l = try! XCTUnwrap(lead)
+        XCTAssertEqual(l.cameraDistanceMeters, 5.0, accuracy: 0.3)
+        XCTAssertEqual(l.distanceMeters, 2.5, accuracy: 0.3)
+    }
+}

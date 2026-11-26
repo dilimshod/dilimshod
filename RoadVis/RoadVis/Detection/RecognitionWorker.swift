@@ -27,6 +27,8 @@ final class RecognitionWorker: @unchecked Sendable {
         var followingDistanceEnabled = true
         /// Horizon of the own-lane corridor, fraction of the frame height (`settings.corridorHorizon`).
         var corridorHorizon = EgoCorridor.default.horizonY
+        /// Camera → front bumper distance subtracted from the lead distance (`settings.hoodLengthMeters`).
+        var cameraToBumperMeters = 2.2
         /// Run the classical lane-marking detector (~5 Hz, on a downsampled copy of the frame).
         var laneDetectionEnabled = true
         /// Run the pedestrian-on-the-roadway check (`DriverAssistSettings.pedestrianWarningsEnabled`).
@@ -360,6 +362,7 @@ final class RecognitionWorker: @unchecked Sendable {
         if leadTracker.corridor.horizonY != horizon || leadTracker.corridor.centerX != centerX {
             leadTracker.corridor = EgoCorridor(centerX: centerX, horizonY: horizon)
         }
+        leadTracker.cameraToBumperMeters = inputs.cameraToBumperMeters
         return leadTracker.update(tracks: tracks, geometry: geometry, timestamp: timestamp)
     }
 

@@ -13,6 +13,14 @@ enum EnStrings {
         "voice.mute": "Mute voice prompts",
         "voice.unmute": "Unmute voice prompts",
 
+        // MARK: Bonnet calibration
+        "settings.fd.hood": "Camera to front bumper (bonnet)",
+        "settings.fd.calib.real": "Real gap to the car ahead",
+        "settings.fd.calib.button": "Calibrate now",
+        "settings.fd.calib.done": "Bonnet length saved: %@ m",
+        "settings.fd.calib.noLead": "To calibrate, stop behind another car with the camera screen open.",
+        "settings.fd.calib.hint": "While stopped behind a car, enter the real bumper-to-bumper gap and tap “Calibrate now”.",
+
         // MARK: Common
         "common.done": "Done",
         "common.cancel": "Cancel",

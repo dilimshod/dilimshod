@@ -12,6 +12,14 @@ enum RuStrings {
         "voice.mute": "Выключить голосовые подсказки",
         "voice.unmute": "Включить голосовые подсказки",
 
+        // MARK: Bonnet calibration
+        "settings.fd.hood": "От камеры до переднего бампера (капот)",
+        "settings.fd.calib.real": "Реальное расстояние до переднего авто",
+        "settings.fd.calib.button": "Откалибровать сейчас",
+        "settings.fd.calib.done": "Длина капота сохранена: %@ м",
+        "settings.fd.calib.noLead": "Для калибровки остановитесь за другой машиной с открытым экраном камеры.",
+        "settings.fd.calib.hint": "Стоя за передним авто, введите реальное расстояние между бамперами и нажмите «Откалибровать сейчас».",
+
         // MARK: Common
         "common.done": "Готово",
         "common.cancel": "Отмена",

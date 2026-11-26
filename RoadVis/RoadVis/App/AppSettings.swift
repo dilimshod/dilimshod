@@ -27,6 +27,8 @@ final class AppSettings {
     var followingTimeGapDry: Double { didSet { defaults.set(followingTimeGapDry, forKey: Keys.followingTimeGapDry) } }
     /// Recommended gap when standing in a queue / at a light, metres.
     var stoppedGapMeters: Double { didSet { defaults.set(stoppedGapMeters, forKey: Keys.stoppedGapMeters) } }
+    /// Distance from the camera to the own front bumper (bonnet), metres; subtracted from the camera distance.
+    var hoodLengthMeters: Double { didSet { defaults.set(hoodLengthMeters, forKey: "rv.hoodLength") } }
     /// Driver reaction time for the stopping-distance estimate, seconds.
     var reactionTimeSeconds: Double { didSet { defaults.set(reactionTimeSeconds, forKey: Keys.reactionTimeSeconds) } }
     /// "auto" (from weather) or a RoadSurfaceCondition raw value.
@@ -110,6 +112,7 @@ final class AppSettings {
         followingTimeGapDry = double(Keys.followingTimeGapDry, 2)
         stoppedGapMeters = double(Keys.stoppedGapMeters, 2)
         reactionTimeSeconds = double(Keys.reactionTimeSeconds, 1)
+        hoodLengthMeters = double("rv.hoodLength", 2.2)
         roadSurfaceMode = string(Keys.roadSurfaceMode, "auto")
         distanceWarningsEnabled = bool(Keys.distanceWarningsEnabled, true)
         showEgoCorridor = bool(Keys.showEgoCorridor, false)

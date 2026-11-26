@@ -579,6 +579,7 @@ final class RecognitionPipeline {
         let makeEnabled = settings.makeRecognitionEnabled
         let followingEnabled = settings.followingDistanceEnabled
         let horizon = settings.corridorHorizon
+        let hood = settings.hoodLengthMeters
         let lanes = assist.laneDetectionNeeded
         let pedestrians = assist.pedestrianWarningsEnabled
         worker.update { inputs in
@@ -588,6 +589,7 @@ final class RecognitionPipeline {
             inputs.makeRecognitionEnabled = makeEnabled
             inputs.followingDistanceEnabled = followingEnabled
             inputs.corridorHorizon = horizon
+            inputs.cameraToBumperMeters = hood
         }
     }
 
@@ -603,6 +605,7 @@ final class RecognitionPipeline {
             _ = settings.makeRecognitionEnabled
             _ = settings.followingDistanceEnabled
             _ = settings.corridorHorizon
+            _ = settings.hoodLengthMeters
             _ = settings.followingTimeGapDry
             _ = settings.stoppedGapMeters
             _ = settings.reactionTimeSeconds

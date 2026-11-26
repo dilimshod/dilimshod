@@ -145,6 +145,16 @@ private struct SettingsFollowingDistanceSection: View {
                             .foregroundStyle(.secondary)
                     }
                 }
+                Stepper(value: $settings.hoodLengthMeters, in: 0...4, step: 0.1) {
+                    HStack {
+                        Text(l: "settings.fd.hood")
+                        Spacer()
+                        Text(verbatim: "\(RVFormat.appDecimal(settings.hoodLengthMeters, digits: 1)) \(RVFormat.appMeters)")
+                            .monospacedDigit()
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                HoodCalibrationRow()
                 Stepper(value: $settings.stoppedGapMeters, in: 1...10, step: 0.5) {
                     HStack {
                         Text(l: "settings.fd.stoppedGap")
@@ -559,6 +569,42 @@ private struct SettingsAboutSection: View {
                 .font(.footnote)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+}
+
+
+/// Calibrates the bonnet offset while standing behind another car: the user enters the real bumper-to-bumper gap,
+/// the app sets `hoodLengthMeters = camera distance − real gap`.
+private struct HoodCalibrationRow: View {
+    @Environment(AppState.self) private var app
+    @State private var realGap: Double = 1.5
+    @State private var resultText: String?
+
+    var body: some View {
+        let cameraDistance = app.recognition.leadVehicle?.cameraDistanceMeters
+        VStack(alignment: .leading, spacing: 6) {
+            Stepper(value: $realGap, in: 0.5...6, step: 0.1) {
+                HStack {
+                    Text(l: "settings.fd.calib.real")
+                    Spacer()
+                    Text(verbatim: "\(RVFormat.appDecimal(realGap, digits: 1)) \(RVFormat.appMeters)")
+                        .monospacedDigit()
+                        .foregroundStyle(.secondary)
+                }
+            }
+            Button {
+                guard let d = cameraDistance else { return }
+                let hood = min(4, max(0, d - realGap))
+                app.settings.hoodLengthMeters = (hood * 10).rounded() / 10
+                resultText = L("settings.fd.calib.done", RVFormat.appDecimal(app.settings.hoodLengthMeters, digits: 1))
+            } label: {
+                Label(L("settings.fd.calib.button"), systemImage: "ruler")
+            }
+            .disabled(cameraDistance == nil)
+            Text(resultText ?? (cameraDistance == nil ? L("settings.fd.calib.noLead") : L("settings.fd.calib.hint")))
+                .font(.footnote)
+                .foregroundStyle(.secondary)
         }
     }
 }

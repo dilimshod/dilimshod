@@ -13,6 +13,14 @@ enum UzStrings {
         "voice.mute": "Ovozli yordamchini o‘chirish",
         "voice.unmute": "Ovozli yordamchini yoqish",
 
+        // MARK: Bonnet calibration
+        "settings.fd.hood": "Kamera — old bamper masofasi (kapot)",
+        "settings.fd.calib.real": "Haqiqiy masofa oldingi mashinagacha",
+        "settings.fd.calib.button": "Hozir kalibrlash",
+        "settings.fd.calib.done": "Kapot uzunligi: %@ m saqlandi",
+        "settings.fd.calib.noLead": "Kalibrlash uchun boshqa mashina orqasida to‘xtang va kamera ekranini oching.",
+        "settings.fd.calib.hint": "Oldingi mashina orqasida to‘xtab, bamperlar orasidagi haqiqiy masofani kiriting va «Hozir kalibrlash»ni bosing.",
+
         // MARK: Common
         "common.done": "Tayyor",
         "common.cancel": "Bekor qilish",
