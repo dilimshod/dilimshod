@@ -210,7 +210,8 @@ private struct TrackBoxView: View {
         self.hazard = hazard
         self.isSelected = isSelected
         self.showLabel = showLabel
-        _appeared = State(initialValue: track.hits > 3)
+        // Confirmed tracks are visible at once (no dependence on onAppear while the layer re-renders at 15 Hz).
+        _appeared = State(initialValue: track.hits > 3 || track.isConfirmed)
     }
 
     /// Highlighted like the lead vehicle (thicker glowing bracket, stronger fill).
@@ -222,11 +223,11 @@ private struct TrackBoxView: View {
     }
 
     private var lineWidth: CGFloat {
-        if thin { return isEmphasized ? 2 : RVTheme.Stroke.tentative }
-        if hazard != nil { return RVTheme.Stroke.lead + 0.5 }
-        if isLead { return RVTheme.Stroke.lead }
-        if isSelected { return RVTheme.Stroke.selected }
-        return track.isConfirmed ? RVTheme.Stroke.box : RVTheme.Stroke.tentative
+        if thin { return isEmphasized ? 2.5 : 1.5 }
+        if hazard != nil { return RVTheme.Stroke.lead + 1 }
+        if isLead { return RVTheme.Stroke.lead + 0.5 }
+        if isSelected { return RVTheme.Stroke.selected + 0.5 }
+        return track.isConfirmed ? RVTheme.Stroke.box + 0.5 : RVTheme.Stroke.tentative
     }
 
     private var pulses: Bool {
@@ -248,8 +249,11 @@ private struct TrackBoxView: View {
 
         ZStack {
             if confirmed && !thin {
-                shape.fill(color.opacity(hazard == .danger ? 0.12 : (isEmphasized ? 0.07 : 0.03)))
-                shape.stroke(color.opacity(isEmphasized ? 0.3 : 0.12), lineWidth: 0.5)
+                // Lead / hazard: clearly visible full outline in the status colour; others: subtle but visible.
+                shape.fill(color.opacity(hazard == .danger ? 0.14 : (isEmphasized ? 0.1 : 0.04)))
+                shape.stroke(color.opacity(isEmphasized ? 0.75 : 0.35), lineWidth: isEmphasized ? 1.5 : 1)
+            } else if confirmed && isEmphasized {
+                shape.stroke(color.opacity(0.7), lineWidth: 1)
             }
             CornerBracketShape(armFraction: confirmed ? 0.22 : 0.16, cornerRadius: radius)
                 .stroke(color.opacity(confirmed ? 0.95 : 0.4),

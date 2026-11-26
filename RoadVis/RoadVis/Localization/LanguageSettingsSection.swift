@@ -24,6 +24,7 @@ struct LanguageSettingsSection: View {
             }
             voiceRow
             naturalVoiceRow
+            voiceSpeedRow
             Button {
                 app.speech.speak(VoicePhrase.sample(text: L("language.voice.sample")), priority: .high)
             } label: {
@@ -99,6 +100,29 @@ struct LanguageSettingsSection: View {
                                  set: { app.speech.useNaturalVoice = $0 })) {
                 Text(l: "language.natural.toggle")
             }
+        }
+    }
+
+    /// Voice speed 0.9…1.4× (clips and the system voice).
+    private var voiceSpeedRow: some View {
+        let rate = app.speech.voiceRate
+        let value = String(format: "%.2f×", rate)
+        return VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                Label {
+                    Text(l: "language.voice.speed")
+                } icon: {
+                    Image(systemName: "gauge.with.dots.needle.67percent")
+                }
+                Spacer()
+                Text(verbatim: value)
+                    .monospacedDigit()
+                    .foregroundStyle(.secondary)
+            }
+            Slider(value: Binding(get: { app.speech.voiceRate }, set: { app.speech.voiceRate = $0 }),
+                   in: 0.9...1.4, step: 0.05)
+                .accessibilityLabel(L("language.voice.speed"))
+                .accessibilityValue(Text(verbatim: value))
         }
     }
 

@@ -175,7 +175,7 @@ final class ClipVoicePlayer {
     private nonisolated static func completion(for player: ClipVoicePlayer,
                                                generation: Int) -> AVAudioPlayerNodeCompletionHandler {
         { [weak player] _ in
-            DispatchQueue.main.async {
+            DispatchQueue.main.async { [weak player] in
                 MainActor.assumeIsolated { player?.bufferPlayed(generation: generation) }
             }
         }
@@ -225,16 +225,15 @@ final class ClipVoicePlayer {
         let ratio = format.sampleRate / buffer.format.sampleRate
         let capacity = AVAudioFrameCount(Double(buffer.frameLength) * ratio) + 1024
         guard let output = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: capacity) else { return nil }
-        var supplied = false
+        let feed = ConverterFeed(buffer)
         var error: NSError?
         let status = converter.convert(to: output, error: &error) { _, inputStatus in
-            if supplied {
+            guard let next = feed.take() else {
                 inputStatus.pointee = .endOfStream
                 return nil
             }
-            supplied = true
             inputStatus.pointee = .haveData
-            return buffer
+            return next
         }
         guard status != .error, error == nil, output.frameLength > 0 else { return nil }
         return output
@@ -268,6 +267,20 @@ final class ClipVoicePlayer {
                 data[channel].update(repeating: 0, count: Int(frames))
             }
         }
+        return buffer
+    }
+}
+
+/// Hands the one input buffer to `AVAudioConverter` exactly once (a class, so the input block captures no var).
+private final class ConverterFeed: @unchecked Sendable {
+    private var buffer: AVAudioPCMBuffer?
+
+    init(_ buffer: AVAudioPCMBuffer) {
+        self.buffer = buffer
+    }
+
+    func take() -> AVAudioPCMBuffer? {
+        defer { buffer = nil }
         return buffer
     }
 }

@@ -53,8 +53,13 @@ public struct LaneImage: Sendable {
     }
 
     /// Downsamples a locked 32BGRA buffer to `targetWidth` (aspect kept) and converts it to marking brightness.
-    /// Rows above `roiTop` (fraction of the height) are left black to save time. Each output pixel averages a 2×2
-    /// block of source pixels at its sampling position (cheap anti-aliasing).
+    /// Rows above `roiTop` (fraction of the height) are left black to save time.
+    ///
+    /// Each output pixel covers a `scale × scale` cell of the source. Horizontally the cell is scanned in steps of
+    /// 2 source pixels and the BRIGHTEST 2×2-averaged sample is kept (max-pooling): a marking that is thinner than the
+    /// cell (far markings, landscape 1920-px frames with a 12× reduction) is not lost between sparse sample points,
+    /// as it was with plain point sampling. Max-pooling lifts the road level a little too, which the relative
+    /// (ridge / local-contrast) tests ignore.
     public static func fromBGRA(base: UnsafeRawPointer, width: Int, height: Int, bytesPerRow: Int,
                                 targetWidth: Int = 160, roiTop: Double = 0) -> LaneImage {
         guard width > 1, height > 1, targetWidth > 1 else { return LaneImage(width: 0, height: 0) }
@@ -70,12 +75,19 @@ public struct LaneImage: Sendable {
                 let row0 = bytes + sy * bytesPerRow
                 let row1 = row0 + bytesPerRow
                 for ox in 0..<outW {
-                    let sx = min(width - 2, Int((Double(ox) + 0.5) * scale))
-                    let p = sx * 4
-                    let b = (Int(row0[p]) + Int(row0[p + 4]) + Int(row1[p]) + Int(row1[p + 4])) >> 2
-                    let g = (Int(row0[p + 1]) + Int(row0[p + 5]) + Int(row1[p + 1]) + Int(row1[p + 5])) >> 2
-                    let r = (Int(row0[p + 2]) + Int(row0[p + 6]) + Int(row1[p + 2]) + Int(row1[p + 6])) >> 2
-                    out[oy * outW + ox] = markingValue(r: r, g: g, b: b)
+                    let x0 = min(width - 2, Int(Double(ox) * scale))
+                    let x1 = max(x0 + 1, min(width - 1, Int(Double(ox + 1) * scale)))
+                    var best: UInt8 = 0
+                    var sx = x0
+                    while sx < x1 {
+                        let p = min(sx, width - 2) * 4
+                        let b = (Int(row0[p]) + Int(row0[p + 4]) + Int(row1[p]) + Int(row1[p + 4])) >> 2
+                        let g = (Int(row0[p + 1]) + Int(row0[p + 5]) + Int(row1[p + 1]) + Int(row1[p + 5])) >> 2
+                        let r = (Int(row0[p + 2]) + Int(row0[p + 6]) + Int(row1[p + 2]) + Int(row1[p + 6])) >> 2
+                        best = max(best, markingValue(r: r, g: g, b: b))
+                        sx += 2
+                    }
+                    out[oy * outW + ox] = best
                 }
             }
         }

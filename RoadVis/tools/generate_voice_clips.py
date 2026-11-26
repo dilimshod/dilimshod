@@ -3,13 +3,18 @@
 
     pip3 install edge-tts
     python3 RoadVis/tools/generate_voice_clips.py                       # all languages, default voices
-    python3 RoadVis/tools/generate_voice_clips.py --uz-voice uz-UZ-SardorNeural --rate +5%
+    python3 RoadVis/tools/generate_voice_clips.py --uz-voice uz-UZ-SardorNeural --rate +20% --force
 
 Reads tools/voice_phrases.json (exported from VoiceClipCatalog.swift), synthesizes every clip with edge-tts and writes
 RoadVis/RoadVis/VoiceClips/<lang>_<id>.m4a (AAC, mono, 24 kHz, converted with macOS `afconvert`; without afconvert
 `ffmpeg` is tried, otherwise the .mp3 from edge-tts is kept — AVFoundation plays it too). Xcode bundles the folder
 automatically (synchronized group); the app composes phrases from the clips and falls back to the system voice for
 anything missing.
+
+Default speaking rate is +15 % (the app additionally plays clips at the "Voice speed" setting, 1.1× by default).
+When `ffmpeg` is available the leading / trailing silence of every clip (edge-tts adds several hundred ms) is removed
+with `silenceremove` (−40 dB, 30 ms kept); the app trims silence on its own too, so clips without ffmpeg still join
+without pauses.
 
 Existing clips are skipped unless --force; when the voice or rate of a language changed since the last run, that
 language is regenerated automatically (state in RoadVis/build/voice_clips_state.json).
@@ -44,10 +49,11 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--uz-voice", default="uz-UZ-MadinaNeural", help="uz-UZ-MadinaNeural (female) | uz-UZ-SardorNeural (male)")
     p.add_argument("--ru-voice", default="ru-RU-SvetlanaNeural", help="ru-RU-SvetlanaNeural | ru-RU-DmitryNeural")
     p.add_argument("--en-voice", default="en-US-JennyNeural", help="en-US-JennyNeural | en-US-GuyNeural")
-    p.add_argument("--rate", default="+0%", help="speaking rate, e.g. +5%% or --rate=-10%% (use = for negative values)")
+    p.add_argument("--rate", default="+15%", help="speaking rate, e.g. +5%% or --rate=-10%% (use = for negative values)")
     p.add_argument("--languages", default="uz,ru,en", help="comma-separated subset of uz,ru,en")
     p.add_argument("--only", default="", help="comma-separated clip ids to (re)generate")
     p.add_argument("--force", action="store_true", help="regenerate clips that already exist")
+    p.add_argument("--no-trim", action="store_true", help="keep the leading / trailing silence (no ffmpeg trimming)")
     p.add_argument("--keep-mp3", action="store_true", help="do not convert to .m4a")
     p.add_argument("--jobs", type=int, default=4, help="parallel requests (default 4)")
     p.add_argument("--retries", type=int, default=4, help="attempts per clip (default 4)")
@@ -94,6 +100,20 @@ def convert_to_m4a(src: Path, dst: Path) -> bool:
         return False
     result = subprocess.run(cmd, capture_output=True, text=True)
     return result.returncode == 0 and dst.exists() and dst.stat().st_size > 0
+
+
+SILENCE_FILTER = ("silenceremove=start_periods=1:start_threshold=-40dB:start_silence=0.03,areverse,"
+                  "silenceremove=start_periods=1:start_threshold=-40dB:start_silence=0.03,areverse")
+
+
+def trim_silence(src: Path, dst: Path) -> bool:
+    """Removes leading / trailing silence with ffmpeg (mono 24 kHz WAV). True on success."""
+    if not shutil.which("ffmpeg"):
+        return False
+    cmd = ["ffmpeg", "-loglevel", "error", "-y", "-i", str(src), "-af", SILENCE_FILTER, "-ac", "1", "-ar", "24000",
+           str(dst)]
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    return result.returncode == 0 and dst.exists() and dst.stat().st_size > 1000
 
 
 async def synthesize(edge_tts, text: str, voice: str, rate: str, mp3_path: Path, retries: int) -> None:
@@ -188,8 +208,13 @@ async def main() -> int:
                     old = out_dir / f"{name}{ext}"
                     if old.exists():
                         old.unlink()
-                if can_convert and await asyncio.to_thread(convert_to_m4a, mp3, out_dir / f"{name}.m4a"):
+                source = mp3
+                wav = tmp_dir / f"{name}.wav"
+                if can_convert and not args.no_trim and await asyncio.to_thread(trim_silence, mp3, wav):
+                    source = wav
+                if can_convert and await asyncio.to_thread(convert_to_m4a, source, out_dir / f"{name}.m4a"):
                     mp3.unlink(missing_ok=True)
+                    wav.unlink(missing_ok=True)
                 else:
                     shutil.move(str(mp3), out_dir / f"{name}.mp3")
             except Exception as error:

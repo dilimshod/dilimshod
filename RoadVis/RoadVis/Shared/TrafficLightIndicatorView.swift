@@ -9,11 +9,14 @@ struct TrafficLightIndicatorView: View {
     /// Height of one lamp; the housing scales with it.
     let lampSize: CGFloat
     let showsCaption: Bool
+    /// Opacity of the dark housing (lower = more of the camera picture shows through).
+    let housingOpacity: Double
 
-    init(color: TrafficLightColor, lampSize: CGFloat = 16, showsCaption: Bool = true) {
+    init(color: TrafficLightColor, lampSize: CGFloat = 16, showsCaption: Bool = true, housingOpacity: Double = 0.6) {
         self.color = color
         self.lampSize = lampSize
         self.showsCaption = showsCaption
+        self.housingOpacity = housingOpacity
     }
 
     /// Visible caption: the colour marked as an estimate, e.g. "≈ Красный" (unknown → "Не определён").
@@ -48,7 +51,7 @@ struct TrafficLightIndicatorView: View {
             .padding(lampSize * 0.3)
             .background(
                 RoundedRectangle(cornerRadius: lampSize * 0.6, style: .continuous)
-                    .fill(Color.black.opacity(0.6))
+                    .fill(Color.black.opacity(housingOpacity))
             )
             .overlay(
                 RoundedRectangle(cornerRadius: lampSize * 0.6, style: .continuous)

@@ -8,15 +8,21 @@
 ## Одна команда на Mac (из корня репозитория)
 
 ```bash
-python3 -m pip install --user edge-tts && python3 RoadVis/tools/generate_voice_clips.py --uz-voice uz-UZ-MadinaNeural --ru-voice ru-RU-SvetlanaNeural --en-voice en-US-JennyNeural --rate +5%
+python3 -m pip install --user edge-tts && python3 RoadVis/tools/generate_voice_clips.py --uz-voice uz-UZ-MadinaNeural --ru-voice ru-RU-SvetlanaNeural --en-voice en-US-JennyNeural --force
 ```
+
+Темп по умолчанию `--rate +15%`. Если клипы уже были сгенерированы со старым темпом (+0 % / +5 %), перегенерируйте их
+с `--force` (при смене темпа язык перегенерируется и сам). При наличии `ffmpeg` тишина в начале и конце каждого клипа
+обрезается (`silenceremove`, −40 dB; `--no-trim` — отключить); приложение и само обрезает тишину и склеивает клипы
+без пауз (AVAudioEngine), а скорость воспроизведения задаётся в Настройки → Язык → «Скорость голоса» (0.9–1.4×,
+по умолчанию 1.1×).
 
 Затем пересоберите приложение (`bash RoadVis/tools/install_on_iphone.sh`). Или всё сразу:
 `bash RoadVis/tools/install_on_iphone.sh --voices` — если клипов ещё нет, скрипт сам поставит edge-tts и
 сгенерирует их (свои голоса: `VOICE_ARGS="--uz-voice uz-UZ-SardorNeural" bash … --voices`).
 
 - Голоса: `uz-UZ-MadinaNeural` (жен.) / `uz-UZ-SardorNeural` (муж.), `ru-RU-SvetlanaNeural` / `ru-RU-DmitryNeural`,
-  `en-US-JennyNeural` / `en-US-GuyNeural`. Темп: `--rate +5%` или `--rate=-10%` (отрицательное — через `=`).
+  `en-US-JennyNeural` / `en-US-GuyNeural`. Темп: по умолчанию `--rate +15%`; иначе `--rate +20%` или `--rate=-10%` (отрицательное — через `=`).
 - Результат: `RoadVis/RoadVis/VoiceClips/<язык>_<id>.m4a` (AAC, моно, 24 кГц, через `afconvert`; без него —
   `.mp3`, iOS тоже играет). ≈ 360 файлов, несколько МБ, 2–4 минуты.
 - Готовые файлы пропускаются; `--force` — перезаписать всё, `--only turn_right,n_300` — отдельные фразы,

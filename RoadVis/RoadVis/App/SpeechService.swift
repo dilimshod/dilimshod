@@ -75,6 +75,22 @@ final class SpeechService: NSObject {
         didSet { ClipVoicePlayer.isEnabled = useNaturalVoice }
     }
 
+    /// Voice speed factor 0.9…1.4 (Settings → Language, persisted "rv.voiceRate", default 1.1): time-stretch of the
+    /// natural-voice clips and a multiplier of the system voice's default rate.
+    var voiceRate: Double = ClipVoicePlayer.voiceRate {
+        didSet {
+            let clamped = AudioSilenceTrimmer.clampedVoiceRate(voiceRate)
+            ClipVoicePlayer.voiceRate = clamped
+            clips.rate = clamped
+        }
+    }
+
+    /// System-voice utterance rate for `factor` × the default rate, clamped to the API range.
+    nonisolated static func utteranceRate(factor: Double) -> Float {
+        let rate = AVSpeechUtteranceDefaultSpeechRate * Float(AudioSilenceTrimmer.clampedVoiceRate(factor))
+        return min(AVSpeechUtteranceMaximumSpeechRate, max(AVSpeechUtteranceMinimumSpeechRate, rate))
+    }
+
     private struct VoiceChoice {
         let voice: AVSpeechSynthesisVoice?
         let kind: SpeechVoiceKind
@@ -84,6 +100,7 @@ final class SpeechService: NSObject {
         super.init()
         synthesizer.delegate = self
         clips.onFinish = { [weak self] in self?.didFinishClips() }
+        clips.rate = voiceRate
         // Voices can be downloaded while the app runs (Settings → Accessibility → Spoken Content → Voices).
         NotificationCenter.default.addObserver(forName: AVSpeechSynthesizer.availableVoicesDidChangeNotification,
                                                object: nil, queue: .main) { [weak self] _ in
@@ -157,9 +174,10 @@ final class SpeechService: NSObject {
         activatePlaybackSession()
         let utterance = AVSpeechUtterance(string: spokenText)
         utterance.voice = voice
-        utterance.rate = AVSpeechUtteranceDefaultSpeechRate
+        utterance.rate = Self.utteranceRate(factor: voiceRate)
         utterance.pitchMultiplier = 1.0
-        utterance.postUtteranceDelay = 0.05
+        utterance.preUtteranceDelay = 0
+        utterance.postUtteranceDelay = 0
         currentPriority = priority
         synthesizer.speak(utterance)
     }

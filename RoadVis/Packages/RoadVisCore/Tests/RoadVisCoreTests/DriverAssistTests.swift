@@ -216,6 +216,56 @@ extension LaneDetectorTests {
     }
 }
 
+extension LaneDetectorTests {
+    /// Landscape 1920×1080 highway frame: yellow solid line on the left, white DASHED centre line on the right, a white
+    /// solid edge line further right (next lane), lighter asphalt with noise.
+    /// Thin markings (≈ 2–12 px in the 1920-px source, 12× reduction) must survive the downsampling.
+    func testLandscapeYellowSolidAndWhiteDashedLines() {
+        let w = 1920, h = 1080, bpr = w * 4
+        var buffer = [UInt8](repeating: 255, count: bpr * h)
+        var rng: UInt64 = 3
+        let hy = Double(h) * 0.42
+        for y in 0..<h {
+            for x in 0..<w {
+                rng = rng &* 6364136223846793005 &+ 1442695040888963407
+                let noise = Int((rng >> 33) % 21) - 10
+                let base = Double(y) < hy ? 200 : 118
+                let v = UInt8(clamping: base + noise)
+                let i = y * bpr + x * 4
+                buffer[i] = v; buffer[i + 1] = v; buffer[i + 2] = v
+            }
+            guard Double(y) > hy else { continue }
+            let t = (Double(y) - hy) / (Double(h - 1) - hy)
+            // (x at the bottom as a fraction of the width, colour, dashed)
+            for (bottom, yellow, dashed) in [(0.16, true, false), (0.84, false, true), (1.6, false, false)] {
+                if dashed && Int(t * 14) % 2 == 1 { continue }
+                let x = 0.5 * Double(w) + (bottom - 0.5) * Double(w) * t
+                let half = max(1.0, 6 * t)
+                for xx in Int(x - half)...Int(x + half) where xx >= 0 && xx < w {
+                    let i = y * bpr + xx * 4
+                    if yellow { buffer[i] = 60; buffer[i + 1] = 175; buffer[i + 2] = 210 }   // B G R
+                    else { buffer[i] = 225; buffer[i + 1] = 225; buffer[i + 2] = 225 }
+                }
+            }
+        }
+        let detector = LaneDetector()
+        var estimate = LaneEstimate.empty()
+        for frame in 0..<8 {
+            let image = buffer.withUnsafeBytes { raw in
+                LaneImage.fromBGRA(base: raw.baseAddress!, width: w, height: h, bytesPerRow: bpr,
+                                   targetWidth: 160, roiTop: 0.40)
+            }
+            estimate = detector.process(image, timestamp: Double(frame) * 0.2)
+        }
+        let left = try! XCTUnwrap(estimate.left, "yellow solid line")
+        let right = try! XCTUnwrap(estimate.right, "white dashed line")
+        XCTAssertGreaterThanOrEqual(estimate.leftConfidence, 0.5)
+        XCTAssertGreaterThanOrEqual(estimate.rightConfidence, 0.3)
+        XCTAssertLessThan(left.x(atY: 0.96), 0.35)
+        XCTAssertGreaterThan(right.x(atY: 0.96), 0.65)
+    }
+}
+
 final class LaneDepartureTests: XCTestCase {
     private func estimate(offset: Double, t: TimeInterval, confidence: Double = 0.8) -> LaneEstimate {
         let line = LaneLine(bottomX: 0.1, bottomY: 0.96, topX: 0.45, topY: 0.44)

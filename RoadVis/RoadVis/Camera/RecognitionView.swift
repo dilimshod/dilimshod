@@ -124,10 +124,10 @@ struct RecognitionView: View {
                     StatusDotButton(pipeline: pipeline) {
                         showStatus = true
                     }
+                    TrafficLightSlot(pipeline: pipeline)
                     CountersButton(total: pipeline.totalUniqueVehicles, isExpanded: countersExpanded) {
                         withAnimation(RVTheme.snappy) { countersExpanded.toggle() }
                     }
-                    TrafficLightSlot(pipeline: pipeline)
                 }
                 // The road line truncates first; the edge buttons keep their size.
                 .layoutPriority(1)
@@ -500,18 +500,23 @@ private struct StatusDotButton: View {
     }
 }
 
-/// Traffic-light colour estimated from the camera (shown only while a light is tracked).
+/// Traffic-light colour estimated from the camera: a small translucent housing (≈ 22 × 52 pt) in the right column
+/// under the status dot, shown only while a confirmed light (≥ 5 hits, confidence ≥ 0.5) is currently visible.
 private struct TrafficLightSlot: View {
     let pipeline: RecognitionPipeline
 
     var body: some View {
-        if let color = pipeline.currentLightColor {
-            TrafficLightIndicatorView(color: color, lampSize: 9, showsCaption: false)
-                .frame(width: RVTheme.HUD.hit)
-                .padding(.top, 4)
-                .transition(.scale.combined(with: .opacity))
-                .animation(RVTheme.snappy, value: color)
+        ZStack {
+            if let color = pipeline.currentLightColor {
+                TrafficLightIndicatorView(color: color, lampSize: 12, showsCaption: false, housingOpacity: 0.32)
+                    .frame(width: 22, height: 52)
+                    .opacity(0.9)
+                    .frame(width: RVTheme.HUD.hit)
+                    .padding(.vertical, 2)
+                    .transition(.scale(scale: 0.8).combined(with: .opacity))
+            }
         }
+        .animation(RVTheme.snappy, value: pipeline.currentLightColor)
     }
 }
 

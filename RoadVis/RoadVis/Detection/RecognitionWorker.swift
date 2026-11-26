@@ -45,7 +45,8 @@ final class RecognitionWorker: @unchecked Sendable {
         var uniqueCounts: [VehicleKind: Int]
         var fps: Double
         var inferenceMs: Double
-        /// Colour of the largest visible confirmed traffic light (`.unknown` when not determined); nil when none.
+        /// Colour of the largest currently visible confirmed traffic light with ≥ 5 hits and confidence ≥ 0.5
+        /// (`.unknown` when not determined); nil when none.
         var lightColor: TrafficLightColor?
         /// Size of the processed (upright) buffer, pixels.
         var frameSize: CGSize
@@ -86,6 +87,9 @@ final class RecognitionWorker: @unchecked Sendable {
 
     /// Upper bound of the processing rate (the camera delivers 30 fps).
     static let maxFramesPerSecond: Double = 15
+    /// A traffic light drives the colour indicator only with this many hits and this detector confidence.
+    static let lightMinHits = 5
+    static let lightMinConfidence = 0.5
     /// Lane detection interval, seconds (≈ 5 Hz).
     static let laneInterval: TimeInterval = 0.2
     /// Width of the downsampled image analysed by the lane detector, pixels.
@@ -323,7 +327,9 @@ final class RecognitionWorker: @unchecked Sendable {
         var largestLight: TrackedObject?
         for track in tracks where track.isConfirmed {
             visibleCounts[track.kind, default: 0] += 1
-            if track.kind == .trafficLight, track.box.area > (largestLight?.box.area ?? 0) {
+            // Indicator only for a solid, currently visible light (no flicker from one-off false positives).
+            if track.kind == .trafficLight, track.missed == 0, track.hits >= Self.lightMinHits,
+               track.confidence >= Self.lightMinConfidence, track.box.area > (largestLight?.box.area ?? 0) {
                 largestLight = track
             }
         }

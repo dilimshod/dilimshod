@@ -2,8 +2,9 @@ import SwiftUI
 
 /// Gap to the vehicle ahead and the distance requirements — compact by default.
 ///
-/// Collapsed (both styles): one slim pill at a screen edge (≤ 44 pt incl. tap area): status dot, "≈ 18 м", the
-/// headway "1,4 с" while moving, a timer when a collision is possible and a small chevron. Tap expands it (the state
+/// Collapsed (both styles): one slim pill at a screen edge (≤ 44 pt incl. tap area): status dot, the recommended gap
+/// for the current speed ("норма ≥ 52 м" — the measured gap and headway are on the distance line to the lead, so the
+/// pill adds information instead of repeating it), a timer when a collision is possible and a small chevron. Tap expands it (the state
 /// is remembered).
 /// Expanded `.full` (portrait): status line with the road-surface chip and an info button (→ norms sheet), the gap and
 /// the recommended gap, a progress bar of distance vs recommended (0…1.5×, tick at 1.0) and the rows
@@ -44,6 +45,7 @@ struct FollowingDistanceHUD: View {
             }
         }
         .animation(RVTheme.snappy, value: gapText)
+        .animation(RVTheme.snappy, value: assessment.recommendedDistanceMeters)
         .animation(RVTheme.snappy, value: status)
         .sensoryFeedback(.selection, trigger: expanded)
         .accessibilityElement(children: .ignore)
@@ -67,19 +69,10 @@ struct FollowingDistanceHUD: View {
                 .frame(width: 8, height: 8)
                 .shadow(color: color.opacity(hasLead ? 0.8 : 0), radius: 3)
                 .rvPulse(status == .danger || isForwardCollisionWarning, minOpacity: 0.3, period: 0.7)
-            Image(systemName: "car.rear.fill")
-                .font(.system(size: 10, weight: .bold))
-                .foregroundStyle(.white.opacity(0.7))
-            Text(gapText)
-                .rvNumeric(15, weight: .bold)
-                .foregroundStyle(hasLead ? Color.white : .white.opacity(0.55))
+            Text(L("fd.norm", "≥ " + RVFormat.gapMeters(assessment.recommendedDistanceMeters)))
+                .rvNumeric(14, weight: .bold)
+                .foregroundStyle(.white.opacity(hasLead ? 1 : 0.8))
                 .contentTransition(.numericText())
-            if hasLead, !assessment.isStopped, let headway = assessment.timeHeadwaySeconds {
-                Text(RVFormat.gapSeconds(headway))
-                    .rvNumeric(12, weight: .semibold)
-                    .foregroundStyle(.white.opacity(0.72))
-                    .contentTransition(.numericText())
-            }
             if hasLead, let ttc = FollowingDistanceText.timeToCollision(assessment) {
                 Label(ttc, systemImage: "timer")
                     .rvNumeric(12, weight: .bold)
