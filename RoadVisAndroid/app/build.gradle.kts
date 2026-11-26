@@ -38,6 +38,8 @@ android {
 dependencies {
     implementation(project(":core"))
     implementation(libs.androidx.core.ktx)
+    // Newer Fragment than the one pulled in transitively (ActivityResult API, lint InvalidFragmentVersionForActivityResult).
+    implementation("androidx.fragment:fragment-ktx:1.8.5")
     implementation(libs.androidx.lifecycle.runtime)
     implementation(libs.androidx.lifecycle.viewmodel.compose)
     implementation(libs.androidx.activity.compose)
