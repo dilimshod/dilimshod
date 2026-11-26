@@ -90,7 +90,7 @@ final class AppSettings {
         func string(_ key: String, _ fallback: String) -> String {
             defaults.string(forKey: key) ?? fallback
         }
-        detectionConfidence = double(Keys.detectionConfidence, 0.35)
+        detectionConfidence = double(Keys.detectionConfidence, 0.45)
         nmsIoUThreshold = double(Keys.nmsIoUThreshold, 0.45)
         makeRecognitionEnabled = bool(Keys.makeRecognitionEnabled, true)
         showDistanceEstimates = bool(Keys.showDistanceEstimates, true)

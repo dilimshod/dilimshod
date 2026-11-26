@@ -6,7 +6,7 @@ final class PedestrianHazardTests: XCTestCase {
 
     func person(_ id: Int, x: Double, bottom: Double, h: Double = 0.12, t: Double) -> TrackedObject {
         TrackedObject(id: id, kind: .person, label: "person", box: BBox(x: x - 0.02, y: bottom - h, width: 0.04, height: h),
-                      confidence: 0.8, hits: 5, firstSeen: 0, lastSeen: t, isConfirmed: true)
+                      confidence: 0.8, hits: 6, firstSeen: 0, lastSeen: t, isConfirmed: true)
     }
 
     func testPedestrianInOwnLaneIsDanger() {
@@ -48,5 +48,28 @@ final class PedestrianHazardTests: XCTestCase {
         let d = PedestrianHazardDetector(maxDistance: 20)
         let r = d.update(tracks: [person(1, x: 0.5, bottom: 0.5, h: 0.03, t: 0)], ownSpeedKmh: 40, geometry: g, timestamp: 0)
         XCTAssertTrue(r.isEmpty)
+    }
+
+    func testHandAtBottomEdgeIgnored() {
+        // A hand: wide box touching the bottom edge, in the middle of the frame.
+        let hand = TrackedObject(id: 9, kind: .person, label: "person", box: BBox(x: 0.35, y: 0.7, width: 0.3, height: 0.3),
+                                 confidence: 0.7, hits: 10, firstSeen: 0, lastSeen: 0, isConfirmed: true)
+        XCTAssertTrue(PedestrianHazardDetector().update(tracks: [hand], ownSpeedKmh: 40, geometry: g, timestamp: 0).isEmpty)
+    }
+
+    func testLowConfidenceOrShortTrackIgnored() {
+        let d = PedestrianHazardDetector()
+        var p = person(1, x: 0.5, bottom: 0.7, t: 0)
+        p.confidence = 0.45
+        XCTAssertTrue(d.update(tracks: [p], ownSpeedKmh: 40, geometry: g, timestamp: 0).isEmpty)
+        var q = person(2, x: 0.5, bottom: 0.7, t: 0)
+        q.hits = 2
+        XCTAssertTrue(d.update(tracks: [q], ownSpeedKmh: 40, geometry: g, timestamp: 0).isEmpty)
+    }
+
+    func testWideBoxNotAPedestrian() {
+        let wide = TrackedObject(id: 3, kind: .person, label: "person", box: BBox(x: 0.4, y: 0.55, width: 0.15, height: 0.12),
+                                 confidence: 0.9, hits: 10, firstSeen: 0, lastSeen: 0, isConfirmed: true)
+        XCTAssertTrue(PedestrianHazardDetector().update(tracks: [wide], ownSpeedKmh: 40, geometry: g, timestamp: 0).isEmpty)
     }
 }

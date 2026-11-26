@@ -226,7 +226,7 @@ struct NavigationMapView: UIViewRepresentable {
         static func configuration(for key: ConfigurationKey) -> MKMapConfiguration {
             let elevation: MKMapConfiguration.ElevationStyle = key.is3D ? .realistic : .flat
             switch key.style {
-            case .osm, .cartoDark, .voyager:
+            case .cartoDark:
                 let configuration = MKStandardMapConfiguration(elevationStyle: .flat, emphasisStyle: .muted)
                 configuration.showsTraffic = false
                 configuration.pointOfInterestFilter = .excludingAll

@@ -78,7 +78,7 @@ public final class ObjectTracker {
         /// Per-class minimum detector confidence applied before tracking (classes not listed: no extra filter).
         public var minConfidence: [VehicleKind: Double]
 
-        public static let defaultMinConfidence: [VehicleKind: Double] = [.trafficLight: 0.5, .stopSign: 0.5, .person: 0.4]
+        public static let defaultMinConfidence: [VehicleKind: Double] = [.trafficLight: 0.5, .stopSign: 0.55, .person: 0.5]
 
         public init(iouThreshold: Double = 0.3, maxMissed: Int = 8, minHits: Int = 3, boxSmoothing: Double = 0.6,
                     centerGate: Double = 1.0, maxAreaRatio: Double = 2.5, maxMissedTentative: Int = 2,

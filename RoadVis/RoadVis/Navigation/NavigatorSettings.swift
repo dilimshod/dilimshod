@@ -33,18 +33,15 @@ extension AppSettings {
 /// hybrid layers use Apple's `MKImageryMapConfiguration` / `MKHybridMapConfiguration`. Unknown stored values (e.g.
 /// the former Apple "standard" scheme) fall back to `.default` (OpenStreetMap).
 enum NavigatorMapStyle: String, CaseIterable, Identifiable {
-    /// OpenStreetMap Carto standard tiles (tile.openstreetmap.org).
-    case osm
-    /// CARTO "Dark Matter" raster tiles (OSM data).
+    /// CARTO "Dark Matter" raster tiles (OpenStreetMap data). The standard OSM and CARTO Voyager layers were
+    /// removed after on-device testing (tiles did not load reliably).
     case cartoDark
-    /// CARTO "Voyager" raster tiles (OSM data).
-    case voyager
     /// Apple satellite imagery.
     case satellite
     /// Apple satellite imagery with Apple roads and labels.
     case hybrid
 
-    static let `default`: NavigatorMapStyle = .osm
+    static let `default`: NavigatorMapStyle = .cartoDark
 
     var id: String { rawValue }
 
@@ -55,9 +52,7 @@ enum NavigatorMapStyle: String, CaseIterable, Identifiable {
 
     var displayName: String {
         switch self {
-        case .osm: return "OpenStreetMap"
-        case .cartoDark: return "OSM Carto Dark (CARTO)"
-        case .voyager: return "Voyager (CARTO)"
+        case .cartoDark: return "OpenStreetMap (CARTO Dark)"
         case .satellite: return L("mapStyle.satellite")
         case .hybrid: return L("mapStyle.hybrid")
         }
@@ -65,9 +60,7 @@ enum NavigatorMapStyle: String, CaseIterable, Identifiable {
 
     var symbolName: String {
         switch self {
-        case .osm: return "map"
         case .cartoDark: return "map.fill"
-        case .voyager: return "map.circle"
         case .satellite: return "globe.asia.australia"
         case .hybrid: return "square.2.layers.3d"
         }
@@ -76,9 +69,7 @@ enum NavigatorMapStyle: String, CaseIterable, Identifiable {
     /// Raster tile source when the layer is drawn from OpenStreetMap-based tiles; nil for the Apple imagery layers.
     var tileSource: OSMTileSource? {
         switch self {
-        case .osm: return .openStreetMap
         case .cartoDark: return .cartoDark
-        case .voyager: return .cartoVoyager
         case .satellite, .hybrid: return nil
         }
     }

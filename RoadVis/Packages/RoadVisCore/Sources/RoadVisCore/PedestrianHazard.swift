@@ -55,7 +55,32 @@ public final class PedestrianHazardDetector {
     /// Pedestrians farther than this are ignored, metres.
     public var maxDistance: Double
 
+    /// Plausibility filter against false positives (a hand, the dashboard, a passenger, a sign or a poster
+    /// recognised as "person"): the box must look like a standing person seen in the scene.
+    public var minConfidence: Double = 0.55
+    /// Frames the track must have been matched before it can raise a warning (≈ 0.35 s at 15 fps).
+    public var minHits: Int = 5
+    /// Minimum height / width ratio of a standing person's box.
+    public var minAspectRatio: Double = 1.5
+    /// Boxes taller than this share of the frame are ignored (objects right in front of the lens).
+    public var maxBoxHeight: Double = 0.6
+    /// Boxes reaching the bottom edge are ignored (hands / dashboard; a pedestrian's feet are visible on the road).
+    public var bottomEdgeMargin: Double = 0.03
+    /// Pedestrians estimated closer than this are ignored (≈ inside the car / under the bonnet).
+    public var minDistance: Double = 2.0
+
     private var history: [Int: [(t: TimeInterval, x: Double)]] = [:]
+
+    /// True when the track looks like a real pedestrian in the road scene.
+    public func isPlausible(_ t: TrackedObject) -> Bool {
+        let b = t.box
+        guard t.confidence >= minConfidence, t.hits >= minHits else { return false }
+        guard b.width > 0, b.height / b.width >= minAspectRatio, b.height <= maxBoxHeight else { return false }
+        guard b.maxY <= 1 - bottomEdgeMargin else { return false }
+        // Large boxes cut by the left/right frame edge are almost always parts of the car or the driver's hand.
+        if (b.minX <= 0.01 || b.maxX >= 0.99) && b.height > 0.3 { return false }
+        return true
+    }
 
     public init(corridor: EgoCorridor = .default, roadWidthFactor: Double = 2.2, approachMarginFactor: Double = 1.0,
                 minApproachSpeed: Double = 0.04, maxDistance: Double = 60) {
@@ -83,12 +108,13 @@ public final class PedestrianHazardDetector {
             h.removeAll { timestamp - $0.t > 1.0 }
             history[t.id] = h
 
-            guard footY > corridor.horizonY else { continue }
+            guard isPlausible(t), footY > corridor.horizonY else { continue }
             let laneHalf = corridor.halfWidth(atY: footY)
             guard laneHalf > 0 else { continue }
             let dx = abs(footX - corridor.centerX)
             let roadHalf = laneHalf * roadWidthFactor
-            let inLane = dx <= laneHalf || (t.box.minX < corridor.centerX + laneHalf && t.box.maxX > corridor.centerX - laneHalf)
+            // The feet (bottom centre) decide — a box merely overlapping the corridor does not.
+            let inLane = dx <= laneHalf
             let onRoad = inLane || dx <= roadHalf
 
             var approaching = false
@@ -101,7 +127,7 @@ public final class PedestrianHazardDetector {
 
             let distance = MonocularDistance.distance(realHeight: VehicleKind.person.typicalHeightMeters ?? 1.7,
                                                       normalizedBoxHeight: t.box.height, geometry: geometry)
-            if let d = distance, d > maxDistance { continue }
+            if let d = distance, d > maxDistance || d < minDistance { continue }
 
             var level: PedestrianHazardLevel?
             if inLane {
