@@ -22,7 +22,7 @@ struct NavigationMiniBanner: View {
                 guidance(nav)
             }
         }
-        .frame(width: 72, alignment: .leading)
+        .frame(width: 96, alignment: .leading)
         .animation(RVTheme.snappy, value: nav.state)
     }
 
@@ -40,6 +40,15 @@ struct NavigationMiniBanner: View {
                 primaryText(nav)
                     .lineLimit(1)
                     .minimumScaleFactor(0.7)
+                if let street = streetText(nav) {
+                    // Street / road after the maneuver — small and quiet, up to two lines.
+                    Text(street)
+                        .font(RVTheme.font(11, weight: .semibold))
+                        .multilineTextAlignment(.center)
+                        .lineLimit(2)
+                        .minimumScaleFactor(0.8)
+                        .opacity(0.85)
+                }
                 if let fraction = countdownFraction(nav) {
                     GeometryReader { proxy in
                         ZStack(alignment: .leading) {
@@ -54,7 +63,7 @@ struct NavigationMiniBanner: View {
             }
             .foregroundStyle(.white)
             .opacity(0.85)
-            .frame(width: 72)
+            .frame(width: 96)
             .padding(.vertical, 6)
             .shadow(color: .black.opacity(0.55), radius: 4, x: 0, y: 1)
             .contentShape(Rectangle())
@@ -86,6 +95,20 @@ struct NavigationMiniBanner: View {
             Text(l: "nav.waitingGPS")
                 .font(RVTheme.font(11, weight: .bold))
         }
+    }
+
+    /// Name of the street / road the next maneuver leads onto (engine street names), else the instruction text;
+    /// before any maneuver is known, the current road from OpenStreetMap.
+    private func streetText(_ nav: NavigationService) -> String? {
+        if nav.state == .arrived { return nav.destinationName }
+        guard let progress = nav.progress, !progress.isOffRoute, !nav.isRecalculating else { return nil }
+        if let index = progress.nextStepIndex, let steps = nav.selectedRouteOption?.route.steps,
+           steps.indices.contains(index) {
+            let names = steps[index].streetNames.filter { !$0.isEmpty }
+            if let first = names.first { return first }
+        }
+        if let road = app.roadInfo.currentRoad?.displayName, !road.isEmpty { return road }
+        return nil
     }
 
     /// Small second line: the instruction (usually contains the street name).
