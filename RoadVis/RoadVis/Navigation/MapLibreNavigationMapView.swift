@@ -6,9 +6,10 @@ import UIKit
 /// `MapLibreBaseMap`). Used for the default map layer; Apple «Спутник / Гибрид» use `AppleNavigationMapView`.
 ///
 /// - Routes: GeoJSON shape sources + line layers. Alternatives are gray; the selected route is drawn over a white
-///   casing, coloured by speed-limit segments (`line-gradient` over `line-progress`, palette
-///   `NavigatorStyle.speedLimitUIColor`) when known, else blue. Tapping near an alternative calls `onSelectRoute`
-///   when `allowsRouteSelection` is true.
+///   casing, coloured by speed-limit segments (the route is cut into one line feature per segment, each with its
+///   own `color` property — exact at any route length; palette `NavigatorStyle.speedLimitUIColor`) when known,
+///   else blue. Tapping an alternative where it runs apart from the selected route (and not on a marker) calls
+///   `onSelectRoute` when `allowsRouteSelection` is true.
 /// - Markers: timeline events (maneuvers, limit changes, signals, cameras, schools, POIs …) as a symbol layer with
 ///   collision detection and a placement priority (cameras / schools / incidents first), so dense stretches
 ///   declutter like the clustered MapKit markers did; destination and user incidents always shown. Tapping a marker
@@ -18,7 +19,11 @@ import UIKit
 ///   course, smoothly animated between fixes; `.overview` → fits all routes; `.idle` + following → MapLibre's
 ///   follow mode (north up). Any user pan / pinch / rotate / tilt stops following (`isFollowing = false`).
 /// - `isActive`: false while the navigator is hidden behind the camera screen — the map stays mounted (no re-creation
-///   on mode switch) and camera updates are skipped; on activation the guidance camera snaps back at once.
+///   on mode switch), camera updates are skipped and MapLibre's own follow mode is switched off; on activation
+///   the camera snaps back at once.
+/// - Base map: if the OpenFreeMap style cannot be loaded the CARTO raster fallback is shown and the primary style
+///   is probed in the background (15 s … 2 min apart) and restored when reachable; every loaded style is reported
+///   through `onBaseMapChange` (attribution).
 /// - Long press → `onLongPress` with the coordinate.
 ///
 /// Sources and layers are created once per loaded style and only their data is replaced, diffed by signature, so
@@ -82,14 +87,24 @@ struct MapLibreNavigationMapView: UIViewRepresentable {
                                incidents: incidents, trafficTemplate: trafficTileTemplate, on: map)
         let becameActive = isActive && !coordinator.isActive
         coordinator.isActive = isActive
-        guard isActive else { return }
-        coordinator.updateCamera(on: map, mode: cameraMode, following: isFollowing, routes: routes)
+        guard isActive else {
+            // Hidden behind the camera screen: stop MapLibre's own follow mode, which would otherwise animate the
+            // camera (and redraw the map) on every GPS fix. The `.idle` branch of `updateCamera` turns it back on.
+            if map.userTrackingMode != MLNUserTrackingMode.none {
+                map.setUserTrackingMode(MLNUserTrackingMode.none, animated: false, completionHandler: nil)
+            }
+            return
+        }
+        coordinator.updateCamera(on: map, mode: cameraMode, following: isFollowing, routes: routes,
+                                 snap: becameActive)
         if becameActive {
             coordinator.snapCameraAfterActivation(on: map)
+            coordinator.retryPrimaryStyleSoon(on: map)
         }
     }
 
     static func dismantleUIView(_ map: MLNMapView, coordinator: Coordinator) {
+        coordinator.cancelPrimaryRetry()
         map.delegate = nil
     }
 
@@ -134,7 +149,6 @@ struct MapLibreNavigationMapView: UIViewRepresentable {
         private var selectedSource: MLNShapeSource?
         private var eventsSource: MLNShapeSource?
         private var pinsSource: MLNShapeSource?
-        private var selectedLayer: MLNLineStyleLayer?
         private var trafficLayer: MLNRasterStyleLayer?
         private var trafficCounter = 0
         private var registeredImages: Set<String> = []
@@ -151,6 +165,13 @@ struct MapLibreNavigationMapView: UIViewRepresentable {
         private var fittedInsets: UIEdgeInsets = .zero
         private var mapInsets: UIEdgeInsets = .zero
         private var lastCameraHeading: CLLocationDirection = 0
+        /// The overview fit could not be done yet (view without a size); the next fit is not animated.
+        private var fitPending = false
+        private var fitRetryScheduled = false
+        /// Timestamp of the GPS fix the guidance camera last animated to (see `mapView(_:didUpdate:)`).
+        private var lastFollowedFixTime: Date?
+        /// Background probe that restores the OpenFreeMap style after a fallback to CARTO.
+        private var primaryRetryTask: Task<Void, Never>?
 
         private var callout: MapCalloutBubble?
 
@@ -159,6 +180,16 @@ struct MapLibreNavigationMapView: UIViewRepresentable {
         func install(on map: MLNMapView) {
             let tap = UITapGestureRecognizer(target: self, action: #selector(handleTap(_:)))
             tap.delegate = self
+            // Like MapLibre's own single tap: wait for the built-in double-tap zoom and one-finger quick zoom
+            // (tap, then drag) to fail, so the first tap of those gestures neither selects a route nor opens a
+            // callout. (The map's recognizers exist already: MLNMapView creates them in its initializer.)
+            for other in map.gestureRecognizers ?? [] {
+                if let doubleTap = other as? UITapGestureRecognizer, doubleTap.numberOfTapsRequired == 2 {
+                    tap.require(toFail: doubleTap)
+                } else if let quickZoom = other as? UILongPressGestureRecognizer, quickZoom.numberOfTapsRequired == 1 {
+                    tap.require(toFail: quickZoom)
+                }
+            }
             map.addGestureRecognizer(tap)
 
             let longPress = UILongPressGestureRecognizer(target: self, action: #selector(handleLongPress(_:)))
@@ -209,8 +240,7 @@ struct MapLibreNavigationMapView: UIViewRepresentable {
             trafficLayer = nil
 
             let alternatives = MLNShapeSource(identifier: ID.alternativesSource, shape: nil, options: nil)
-            let selected = MLNShapeSource(identifier: ID.selectedSource, shape: nil,
-                                          options: [MLNShapeSourceOption.lineDistanceMetrics: true])
+            let selected = MLNShapeSource(identifier: ID.selectedSource, shape: nil, options: nil)
             let events = MLNShapeSource(identifier: ID.eventsSource, shape: nil, options: nil)
             let pins = MLNShapeSource(identifier: ID.pinsSource, shape: nil, options: nil)
             style.addSource(alternatives)
@@ -236,15 +266,18 @@ struct MapLibreNavigationMapView: UIViewRepresentable {
             casing.lineWidth = NSExpression(forConstantValue: 11)
             casing.lineCap = round
             casing.lineJoin = round
+            // The selected source holds the whole route once ("casing") and cut into coloured pieces ("limit").
+            casing.predicate = NSPredicate(format: "part == 'casing'")
             style.addLayer(casing)
 
             let selectedLine = MLNLineStyleLayer(identifier: ID.selectedLayer, source: selected)
-            selectedLine.lineColor = NSExpression(forConstantValue: UIColor.systemBlue)
+            // Colour per feature (`color` = "rgba(…)" string set in `applyRoutes`).
+            selectedLine.lineColor = NSExpression(mglJSONObject: ["to-color", ["get", "color"]])
+            selectedLine.predicate = NSPredicate(format: "part == 'limit'")
             selectedLine.lineWidth = NSExpression(forConstantValue: 8)
             selectedLine.lineCap = round
             selectedLine.lineJoin = round
             style.addLayer(selectedLine)
-            selectedLayer = selectedLine
 
             // Timeline events: collision-checked, placed in `sortKey` order (lower first).
             let eventsLayer = MLNSymbolStyleLayer(identifier: ID.eventsLayer, source: events)
@@ -261,9 +294,20 @@ struct MapLibreNavigationMapView: UIViewRepresentable {
             style.addLayer(pinsLayer)
 
             applyContent()
+
+            // Report the base map that actually loaded (a new view may load OpenFreeMap while the navigator still
+            // remembers the fallback of an earlier view). Async: never mutate SwiftUI state inside a view update.
+            let source = baseMap
+            let callback = onBaseMapChange
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    callback?(source)
+                }
+            }
         }
 
-        /// The OpenFreeMap style could not be loaded: switch to the inline CARTO raster style (once).
+        /// The OpenFreeMap style could not be loaded: switch to the inline CARTO raster style and keep probing the
+        /// primary style in the background.
         private func styleDidFail(on map: MLNMapView) {
             guard baseMap == .openFreeMap else { return }
             baseMap = .cartoFallback
@@ -275,6 +319,44 @@ struct MapLibreNavigationMapView: UIViewRepresentable {
                     callback?(.cartoFallback)
                 }
             }
+            schedulePrimaryRetry(on: map, firstDelay: 15)
+        }
+
+        /// While the fallback is shown: probes the OpenFreeMap style URL (first after `firstDelay` seconds, then
+        /// with a doubling delay up to 2 min) and reloads it once it answers. Probing first keeps an offline map
+        /// from flickering between the two styles.
+        private func schedulePrimaryRetry(on map: MLNMapView, firstDelay: UInt64) {
+            primaryRetryTask?.cancel()
+            primaryRetryTask = Task { @MainActor [weak self, weak map] in
+                var delay: UInt64 = firstDelay
+                while !Task.isCancelled {
+                    try? await Task.sleep(nanoseconds: delay * 1_000_000_000)
+                    if Task.isCancelled { return }
+                    let reachable: Bool = await MapLibreBaseMap.isPrimaryStyleReachable()
+                    if Task.isCancelled { return }
+                    guard let self, let map, self.baseMap == .cartoFallback else { return }
+                    if reachable {
+                        self.baseMap = .openFreeMap
+                        self.style = nil
+                        // `didFinishLoading` → `styleDidLoad` re-adds the sources / layers and reports the source;
+                        // a new failure goes through `styleDidFail` again.
+                        map.styleURL = MapLibreBaseMap.styleURL
+                        return
+                    }
+                    delay = min(delay * 2, 120)
+                }
+            }
+        }
+
+        /// The navigator became visible while the fallback is shown: probe the primary style promptly.
+        func retryPrimaryStyleSoon(on map: MLNMapView) {
+            guard baseMap == .cartoFallback else { return }
+            schedulePrimaryRetry(on: map, firstDelay: 2)
+        }
+
+        func cancelPrimaryRetry() {
+            primaryRetryTask?.cancel()
+            primaryRetryTask = nil
         }
 
         // MARK: Routes
@@ -308,58 +390,37 @@ struct MapLibreNavigationMapView: UIViewRepresentable {
             alternativesSource?.shape = MapLibreBaseMap.shape(features: alternativeFeatures)
 
             var selectedFeatures: [[String: Any]] = []
-            var gradient: NSExpression?
-            if let selected,
-               let feature = MapLibreBaseMap.lineFeature(selected.route.polyline, properties: ["routeID": selected.id]) {
-                selectedFeatures.append(feature)
-                gradient = Self.speedLimitGradient(segments, length: Geo.polylineLength(selected.route.polyline))
+            if let selected {
+                let polyline = selected.route.polyline
+                if let casing = MapLibreBaseMap.lineFeature(polyline, properties: ["routeID": selected.id,
+                                                                                   "part": "casing"]) {
+                    selectedFeatures.append(casing)
+                }
+                // One line feature per speed-limit stretch (blue where no segment is known). `line-gradient` is
+                // not used: MapLibre samples it into a 256-texel ramp over the whole route, which blurs and
+                // misplaces limit changes on long routes.
+                let cumulative = Geo.cumulativeDistances(polyline)
+                let blue = MapLibreBaseMap.rgba(UIColor.systemBlue)
+                var pieceCount = 0
+                for piece in RouteLimitPieces.pieces(segments: segments, totalDistance: cumulative.last ?? 0) {
+                    let color = piece.isGap ? blue : MapLibreBaseMap.rgba(NavigatorStyle.speedLimitUIColor(piece.limitKmh))
+                    let slice = Geo.slice(polyline, from: piece.start, to: piece.end, cumulative: cumulative)
+                    if let feature = MapLibreBaseMap.lineFeature(slice, properties: ["routeID": selected.id,
+                                                                                     "part": "limit",
+                                                                                     "color": color]) {
+                        selectedFeatures.append(feature)
+                        pieceCount += 1
+                    }
+                }
+                if pieceCount == 0,
+                   let feature = MapLibreBaseMap.lineFeature(polyline, properties: ["routeID": selected.id,
+                                                                                    "part": "limit",
+                                                                                    "color": blue]) {
+                    // Degenerate route (no measurable length): still draw it.
+                    selectedFeatures.append(feature)
+                }
             }
             selectedSource?.shape = MapLibreBaseMap.shape(features: selectedFeatures)
-            selectedLayer?.lineGradient = gradient
-        }
-
-        /// `line-gradient` with sharp colour changes at the speed-limit segment boundaries (blue between segments).
-        private static func speedLimitGradient(_ segments: [SpeedLimitSegment], length: Double) -> NSExpression? {
-            guard length > 0, !segments.isEmpty else { return nil }
-            let blue = MapLibreBaseMap.rgba(UIColor.systemBlue)
-            var stops: [(Double, String)] = []
-            func add(_ position: Double, _ color: String) {
-                let clamped = max(0, min(1, position))
-                if let last = stops.last, clamped <= last.0 + 0.000_01 {
-                    // Interpolation stops must strictly increase; nudge the boundary forward.
-                    let nudged = min(1, last.0 + 0.000_02)
-                    guard nudged > last.0 else { return }
-                    stops.append((nudged, color))
-                } else {
-                    stops.append((clamped, color))
-                }
-            }
-            var cursor = 0.0
-            for segment in segments.sorted(by: { $0.start < $1.start }) {
-                let start = max(0, min(1, segment.start / length))
-                let end = max(0, min(1, segment.end / length))
-                guard end > start else { continue }
-                let color = MapLibreBaseMap.rgba(NavigatorStyle.speedLimitUIColor(segment.limitKmh))
-                if start > cursor + 0.000_05 {
-                    // Gap without a known segment: blue.
-                    add(cursor, blue)
-                    add(start - 0.000_02, blue)
-                }
-                add(start, color)
-                add(end - 0.000_02, color)
-                cursor = end
-            }
-            if cursor < 1 - 0.000_05 {
-                add(cursor, blue)
-                add(1, blue)
-            }
-            guard stops.count >= 2 else { return nil }
-            var json: [Any] = ["interpolate", ["linear"], ["line-progress"]]
-            for (position, color) in stops {
-                json.append(position)
-                json.append(["to-color", color])
-            }
-            return NSExpression(mglJSONObject: json)
         }
 
         // MARK: Markers
@@ -486,7 +547,9 @@ struct MapLibreNavigationMapView: UIViewRepresentable {
 
         // MARK: Camera
 
-        func updateCamera(on map: MLNMapView, mode: NavigationMapView.CameraMode, following: Bool, routes: [RouteOption]) {
+        /// `snap`: the navigator has just become visible again — follow without the fly-in animation.
+        func updateCamera(on map: MLNMapView, mode: NavigationMapView.CameraMode, following: Bool, routes: [RouteOption],
+                          snap: Bool = false) {
             let modeChanged = mode != lastMode
             let followingChanged = following != lastFollowing
             lastMode = mode
@@ -497,12 +560,26 @@ struct MapLibreNavigationMapView: UIViewRepresentable {
                 if following {
                     if map.userTrackingMode != MLNUserTrackingMode.follow {
                         flattenCamera(map)
-                        map.setUserTrackingMode(MLNUserTrackingMode.follow, animated: !modeChanged, completionHandler: nil)
+                        // MapLibre zooms in only on its animated ("significant") follow path; a non-animated
+                        // follow keeps the current zoom, which is 0 (whole world) on a fresh map or the overview
+                        // zoom after a route preview.
+                        let needsZoom: Bool = map.zoomLevel < 13
+                        if needsZoom, let coordinate = map.userLocation?.location?.coordinate,
+                           CLLocationCoordinate2DIsValid(coordinate) {
+                            map.setCenter(coordinate, zoomLevel: 15, animated: false)
+                        }
+                        // No fix yet: `animated: true` makes the first fix fly to MapLibre's street zoom.
+                        map.setUserTrackingMode(MLNUserTrackingMode.follow,
+                                                animated: needsZoom || !(modeChanged || snap),
+                                                completionHandler: nil)
                     }
                 } else if map.userTrackingMode != MLNUserTrackingMode.none {
                     map.setUserTrackingMode(MLNUserTrackingMode.none, animated: false, completionHandler: nil)
                 }
-                if modeChanged { fittedRouteSignature = [] }
+                if modeChanged {
+                    fittedRouteSignature = []
+                    fitPending = false
+                }
 
             case .overview:
                 if map.userTrackingMode != MLNUserTrackingMode.none {
@@ -516,9 +593,20 @@ struct MapLibreNavigationMapView: UIViewRepresentable {
                 let needsFit = modeChanged || signature != fittedRouteSignature
                     || (followingChanged && following) || (following && insetsChanged)
                 if needsFit, !routes.isEmpty {
-                    fittedRouteSignature = signature
-                    fittedInsets = mapInsets
-                    fitRoutes(on: map, routes: routes, animated: true)
+                    if map.bounds.width > 0, map.bounds.height > 0 {
+                        fittedRouteSignature = signature
+                        fittedInsets = mapInsets
+                        fitRoutes(on: map, routes: routes, animated: !fitPending)
+                        fitPending = false
+                    } else {
+                        // A freshly created view has no frame yet (SwiftUI lays it out after the first update)
+                        // and MapLibre cannot compute a zoom for a 0×0 view: leave the fit pending (signature not
+                        // recorded, so any later update refits) and retry after layout.
+                        fittedRouteSignature = []
+                        fitPending = true
+                        lastMode = nil   // keeps `modeChanged` true for the retry
+                        scheduleFitRetry(on: map, attempt: 0)
+                    }
                 }
 
             case .navigating:
@@ -528,7 +616,30 @@ struct MapLibreNavigationMapView: UIViewRepresentable {
                 if following, modeChanged || followingChanged, let location = map.userLocation?.location {
                     followCamera(on: map, location: location, animated: true)
                 }
-                if modeChanged { fittedRouteSignature = [] }
+                if modeChanged {
+                    fittedRouteSignature = []
+                    fitPending = false
+                }
+            }
+        }
+
+        /// Retries a pending overview fit on the next main-loop turns (covers the case where no further SwiftUI
+        /// update arrives after the first layout).
+        private func scheduleFitRetry(on map: MLNMapView, attempt: Int) {
+            guard !fitRetryScheduled else { return }
+            fitRetryScheduled = true
+            DispatchQueue.main.async { [weak self, weak map] in
+                MainActor.assumeIsolated {
+                    guard let self, let map else { return }
+                    self.fitRetryScheduled = false
+                    // `lastMode` is nil while the fit is pending; a mode change in between sets it and wins.
+                    guard self.fitPending, self.isActive, self.lastMode == nil else { return }
+                    if map.bounds.width > 0, map.bounds.height > 0 {
+                        self.updateCamera(on: map, mode: .overview, following: self.lastFollowing, routes: self.routes)
+                    } else if attempt < 5 {
+                        self.scheduleFitRetry(on: map, attempt: attempt + 1)
+                    }
+                }
             }
         }
 
@@ -611,34 +722,39 @@ struct MapLibreNavigationMapView: UIViewRepresentable {
             guard recognizer.state == .ended, let map = recognizer.view as? MLNMapView, style != nil else { return }
             let point = recognizer.location(in: map)
 
-            if allowsRouteSelection {
-                let rect = CGRect(x: point.x - 30, y: point.y - 30, width: 60, height: 60)
-                let features = map.visibleFeatures(in: rect, styleLayerIdentifiers: Set([ID.alternativesLayer]))
-                for feature in features {
-                    if let number = feature.attributes["routeID"] as? NSNumber {
-                        hideCallout()
-                        onSelectRoute?(number.intValue)
-                        return
-                    }
-                }
-            }
-
+            // Markers first: a tap on a marker always shows its callout, even where routes run underneath.
             let rect = CGRect(x: point.x - 22, y: point.y - 22, width: 44, height: 44)
-            let features = map.visibleFeatures(in: rect, styleLayerIdentifiers: Set([ID.pinsLayer, ID.eventsLayer]))
+            let markers = map.visibleFeatures(in: rect, styleLayerIdentifiers: Set([ID.pinsLayer, ID.eventsLayer]))
             var best: (feature: MLNFeature, distance: CGFloat)?
-            for feature in features {
+            for feature in markers {
                 let screen = map.convert(feature.coordinate, toPointTo: map)
                 let distance = hypot(screen.x - point.x, screen.y - point.y)
                 if best == nil || distance < best!.distance {
                     best = (feature, distance)
                 }
             }
-            guard let found = best?.feature, let title = found.attributes["title"] as? String else {
-                hideCallout()
+            if let found = best?.feature, let title = found.attributes["title"] as? String {
+                showCallout(on: map, coordinate: found.coordinate, title: title,
+                            subtitle: found.attributes["subtitle"] as? String)
                 return
             }
-            showCallout(on: map, coordinate: found.coordinate, title: title,
-                        subtitle: found.attributes["subtitle"] as? String)
+
+            // Route selection only where the alternative runs apart from the selected route: on shared stretches
+            // (start, destination, common roads) the tap belongs to the selected route and changes nothing.
+            if allowsRouteSelection {
+                let onSelected = !map.visibleFeatures(in: rect, styleLayerIdentifiers: Set([ID.selectedLayer])).isEmpty
+                if !onSelected {
+                    let alternatives = map.visibleFeatures(in: rect, styleLayerIdentifiers: Set([ID.alternativesLayer]))
+                    for feature in alternatives {
+                        if let number = feature.attributes["routeID"] as? NSNumber {
+                            hideCallout()
+                            onSelectRoute?(number.intValue)
+                            return
+                        }
+                    }
+                }
+            }
+            hideCallout()
         }
 
         @objc private func handleLongPress(_ recognizer: UILongPressGestureRecognizer) {
@@ -699,6 +815,10 @@ struct MapLibreNavigationMapView: UIViewRepresentable {
             MainActor.assumeIsolated {
                 guard self.isActive, self.lastMode == .navigating, self.lastFollowing,
                       let location = userLocation?.location else { return }
+                // MLNMapView also calls this for every compass heading update (with the same CLLocation). Only a
+                // new GPS fix may start a camera animation, otherwise the 1 s ease is restarted over and over.
+                guard location.timestamp != self.lastFollowedFixTime else { return }
+                self.lastFollowedFixTime = location.timestamp
                 self.followCamera(on: mapView, location: location, animated: true)
             }
         }

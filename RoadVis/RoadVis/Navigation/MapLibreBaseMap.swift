@@ -16,7 +16,8 @@ enum BaseMapSource: Equatable, Sendable {
 /// - Default: the OpenFreeMap "dark" vector style (https://openfreemap.org — free, no registration, no usage limits
 ///   for reasonable use). Attribution: "© OpenFreeMap © OpenMapTiles © OpenStreetMap contributors".
 /// - Fallback (style download failed, `mapViewDidFailLoadingMap`): an inline raster style with CARTO dark tiles
-///   (free for light use). Attribution: "© OpenStreetMap contributors © CARTO".
+///   (free for light use). Attribution: "© OpenStreetMap contributors © CARTO". The map views keep probing the
+///   primary style (`isPrimaryStyleReachable()`) and switch back when it answers.
 ///
 /// Tiles, glyphs, sprites and the style are cached by MapLibre in its ambient cache (limited to about 100 MB, see
 /// `configureAmbientCache()`); only the visible area is requested, nothing is bulk-downloaded.
@@ -67,6 +68,15 @@ enum MapLibreBaseMap {
         guard !ambientCacheConfigured else { return }
         ambientCacheConfigured = true
         MLNOfflineStorage.shared.setMaximumAmbientCacheSize(ambientCacheBytes) { _ in }
+    }
+
+    /// Whether the primary (OpenFreeMap) style answers right now. Used while the fallback is shown, before
+    /// switching back. Bypasses the URL cache.
+    static func isPrimaryStyleReachable() async -> Bool {
+        let request = URLRequest(url: styleURL, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 10)
+        guard let result = try? await URLSession.shared.data(for: request),
+              let http = result.1 as? HTTPURLResponse else { return false }
+        return http.statusCode == 200
     }
 
     /// "rgba(r, g, b, a)" for style expressions.

@@ -119,6 +119,7 @@ struct TripMapLibreView: UIViewRepresentable {
     }
 
     static func dismantleUIView(_ map: MLNMapView, coordinator: Coordinator) {
+        coordinator.cancelPrimaryRetry()
         map.delegate = nil
     }
 
@@ -144,6 +145,8 @@ struct TripMapLibreView: UIViewRepresentable {
         private var appliedHighlight: UUID??
         private var fittedTripID: UUID?
         private var baseMap: BaseMapSource = .openFreeMap
+        /// Background probe that restores the OpenFreeMap style after a fallback to CARTO.
+        private var primaryRetryTask: Task<Void, Never>?
 
         func update(trip: Trip, highlightedEventID: UUID?, on map: MLNMapView) {
             if self.trip?.id != trip.id {
@@ -234,6 +237,15 @@ struct TripMapLibreView: UIViewRepresentable {
 
             apply()
             fitIfNeeded(on: map)
+
+            // Report the base map that actually loaded (attribution). Async: not inside a SwiftUI view update.
+            let source = baseMap
+            let callback = onBaseMapChange
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    callback?(source)
+                }
+            }
         }
 
         private func styleDidFail(on map: MLNMapView) {
@@ -247,6 +259,35 @@ struct TripMapLibreView: UIViewRepresentable {
                     callback?(.cartoFallback)
                 }
             }
+            schedulePrimaryRetry(on: map)
+        }
+
+        /// While the fallback is shown: probes the OpenFreeMap style URL (after 15 s, then with a doubling delay up
+        /// to 2 min) and reloads it once it answers (same logic as the navigator map).
+        private func schedulePrimaryRetry(on map: MLNMapView) {
+            primaryRetryTask?.cancel()
+            primaryRetryTask = Task { @MainActor [weak self, weak map] in
+                var delay: UInt64 = 15
+                while !Task.isCancelled {
+                    try? await Task.sleep(nanoseconds: delay * 1_000_000_000)
+                    if Task.isCancelled { return }
+                    let reachable: Bool = await MapLibreBaseMap.isPrimaryStyleReachable()
+                    if Task.isCancelled { return }
+                    guard let self, let map, self.baseMap == .cartoFallback else { return }
+                    if reachable {
+                        self.baseMap = .openFreeMap
+                        self.style = nil
+                        map.styleURL = MapLibreBaseMap.styleURL
+                        return
+                    }
+                    delay = min(delay * 2, 120)
+                }
+            }
+        }
+
+        func cancelPrimaryRetry() {
+            primaryRetryTask?.cancel()
+            primaryRetryTask = nil
         }
 
         private func registerImage(_ name: String, in style: MLNStyle, make: () -> UIImage) {
