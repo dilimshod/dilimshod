@@ -44,7 +44,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--uz-voice", default="uz-UZ-MadinaNeural", help="uz-UZ-MadinaNeural (female) | uz-UZ-SardorNeural (male)")
     p.add_argument("--ru-voice", default="ru-RU-SvetlanaNeural", help="ru-RU-SvetlanaNeural | ru-RU-DmitryNeural")
     p.add_argument("--en-voice", default="en-US-JennyNeural", help="en-US-JennyNeural | en-US-GuyNeural")
-    p.add_argument("--rate", default="+0%", help="speaking rate, e.g. +5%% or -10%%")
+    p.add_argument("--rate", default="+0%", help="speaking rate, e.g. +5%% or --rate=-10%% (use = for negative values)")
     p.add_argument("--languages", default="uz,ru,en", help="comma-separated subset of uz,ru,en")
     p.add_argument("--only", default="", help="comma-separated clip ids to (re)generate")
     p.add_argument("--force", action="store_true", help="regenerate clips that already exist")
@@ -115,12 +115,6 @@ async def synthesize(edge_tts, text: str, voice: str, rate: str, mp3_path: Path,
 
 async def main() -> int:
     args = parse_args()
-    try:
-        import edge_tts  # noqa: F401
-    except ImportError:
-        print("edge-tts is not installed. Run:  pip3 install edge-tts", file=sys.stderr)
-        return 2
-
     manifest = json.loads(args.manifest.read_text(encoding="utf-8"))
     voices = {"uz": args.uz_voice, "ru": args.ru_voice, "en": args.en_voice}
     languages = [code.strip() for code in args.languages.split(",") if code.strip()]
@@ -170,6 +164,13 @@ async def main() -> int:
         for lang, _, name, text in jobs:
             print(f"  {name}: {text}")
         return 0
+    if not jobs:
+        print("Nothing to do (use --force to regenerate).")
+    try:
+        import edge_tts
+    except ImportError:
+        print("edge-tts is not installed. Run:  python3 -m pip install --user edge-tts", file=sys.stderr)
+        return 2
 
     semaphore = asyncio.Semaphore(max(1, args.jobs))
     failures: list[tuple[str, str]] = []

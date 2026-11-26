@@ -16,7 +16,7 @@ python3 -m pip install --user edge-tts && python3 RoadVis/tools/generate_voice_c
 сгенерирует их (свои голоса: `VOICE_ARGS="--uz-voice uz-UZ-SardorNeural" bash … --voices`).
 
 - Голоса: `uz-UZ-MadinaNeural` (жен.) / `uz-UZ-SardorNeural` (муж.), `ru-RU-SvetlanaNeural` / `ru-RU-DmitryNeural`,
-  `en-US-JennyNeural` / `en-US-GuyNeural`. Темп: `--rate +5%` / `-10%`.
+  `en-US-JennyNeural` / `en-US-GuyNeural`. Темп: `--rate +5%` или `--rate=-10%` (отрицательное — через `=`).
 - Результат: `RoadVis/RoadVis/VoiceClips/<язык>_<id>.m4a` (AAC, моно, 24 кГц, через `afconvert`; без него —
   `.mp3`, iOS тоже играет). ≈ 360 файлов, несколько МБ, 2–4 минуты.
 - Готовые файлы пропускаются; `--force` — перезаписать всё, `--only turn_right,n_300` — отдельные фразы,
