@@ -6,3 +6,4 @@ local.properties
 captures/
 .cxx/
 app/src/main/assets/voice/
+.kotlin/
