@@ -36,6 +36,8 @@ final class AppState {
     let tripRecorder: TripRecorder
     /// Voice coach for beginner drivers (distance, lights, signs, lane departure).
     let coach: DriverCoach
+    /// Continuous learning: hard-frame collection, uploads to the RoadVis Trainer, improved-model downloads.
+    let learning: LearningCoordinator
 
     @ObservationIgnored private var started = false
     /// Stops the warm camera after `cameraStandbyTimeout` in the navigator without the camera window.
@@ -86,6 +88,11 @@ final class AppState {
         self.tripRecorder = tripRecorder
         self.coach = DriverCoach(recognition: recognition, location: location, speech: speech,
                                  roadInfo: roadInfo, navigation: navigation, settings: settings)
+        let learning = LearningCoordinator(recognition: recognition, location: location)
+        self.learning = learning
+        tripRecorder.onStarted = { [weak learning] in
+            learning?.tripStarted()
+        }
 
         recognition.weatherProvider = { [weak weather] in weather?.current }
         recognition.speech = speech
@@ -94,6 +101,11 @@ final class AppState {
         }
         navigation.onStateChange = { [weak self] old, new in
             self?.navigationStateChanged(from: old, to: new)
+        }
+        // Uploads never run while the camera screen is on screen in the foreground.
+        learning.isCameraActive = { [weak self] in
+            guard let self else { return false }
+            return self.mode == .camera && UIApplication.shared.applicationState != .background
         }
     }
 
@@ -109,6 +121,7 @@ final class AppState {
         trips.load()
         updateCameraForMode()
         startAutoTripMonitor()
+        learning.start()
         // The first didBecomeActive notification can fire before the root view subscribes.
         if UIApplication.shared.applicationState != .background {
             handleScenePhase(.active)
@@ -123,6 +136,11 @@ final class AppState {
             mode = newMode
         }
         updateCameraForMode()
+        if newMode == .navigator {
+            learning.enteredNavigator()
+        } else {
+            learning.enteredCamera()
+        }
     }
 
     func toggleMode() {
@@ -160,13 +178,17 @@ final class AppState {
         case .active:
             UIApplication.shared.isIdleTimerDisabled = true
             location.start()
-            if started { updateCameraForMode() }
+            if started {
+                updateCameraForMode()
+                learning.appBecameActive()
+            }
         case .background:
             UIApplication.shared.isIdleTimerDisabled = false
             cameraStandbyTask?.cancel()
             cameraStandbyTask = nil
             recognition.stop()
             signals.persistNow()
+            learning.appEnteredBackground()
             movingSince = nil
             standstill.reset()
             // A trip the driving detector started ends when the app leaves the screen (unless guidance runs).

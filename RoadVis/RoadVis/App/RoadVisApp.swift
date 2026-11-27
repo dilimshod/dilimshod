@@ -5,6 +5,11 @@ struct RoadVisApp: App {
     @State private var appState = AppState()
     @State private var showSplash = true
 
+    init() {
+        // Background-task launch handlers must be registered before the app finishes launching.
+        LearningBackgroundTasks.register()
+    }
+
     var body: some Scene {
         WindowGroup {
             ZStack {

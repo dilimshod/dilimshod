@@ -16,6 +16,8 @@ import Vision
 /// - Inputs coming from the main actor (GPS, settings), the activity flags and the handlers are lock-protected.
 /// - The experiment recording has its own lock so the main actor can stop it without waiting for inference.
 /// - Results are delivered through `outputHandler` (called on `queue`, at most `maxFramesPerSecond` times per second).
+/// - Continuous learning: `learning` (hard-frame collector) and `modelHealth` (downloaded-model watchdog) are
+///   confined to `queue` as well; the collector encodes kept frames on its own utility queue.
 final class RecognitionWorker: @unchecked Sendable {
     /// Values pushed from the main actor before/while processing.
     struct Inputs: Sendable {
@@ -40,6 +42,12 @@ final class RecognitionWorker: @unchecked Sendable {
         var laneDetectionEnabled = true
         /// Run the pedestrian-on-the-roadway check (`DriverAssistSettings.pedestrianWarningsEnabled`).
         var pedestrianWarningsEnabled = true
+        /// Continuous learning: collect hard frames (`LearningCollector`, setting «Обучение модели», off by default).
+        var learningEnabled = false
+        /// Put the GPS position into the sample metadata (setting «send location», off by default).
+        var learningSendLocation = false
+        /// Local sample storage cap, MB.
+        var learningStorageLimitMB = LearningStorePolicy.defaultLimitMB
     }
 
     /// Snapshot published after every processed frame.
@@ -155,6 +163,10 @@ final class RecognitionWorker: @unchecked Sendable {
     private var fpsEstimate: Double = 0
     private var inferenceEstimate: Double = 0
     private var processedFrames = 0
+    /// Hard-frame collector for the RoadVis Trainer (runs only while `Inputs.learningEnabled`).
+    private let learning = LearningCollector()
+    /// "No detector output for 30 s of driving" watchdog of a downloaded model.
+    private var modelHealth = ModelHealthMonitor()
 
     // MARK: Lock-protected
     private let lock = NSLock()
@@ -165,6 +177,7 @@ final class RecognitionWorker: @unchecked Sendable {
     private var lastAcceptedUptime: TimeInterval = 0
     private var storedOutputHandler: (@Sendable (Output) -> Void)?
     private var storedStatusHandler: (@Sendable (ModelStatuses) -> Void)?
+    private var storedModelFailureHandler: (@Sendable (String, String?) -> Void)?
 
     private let recordingLock = NSLock()
     private var recording: RecordingState?
@@ -186,6 +199,34 @@ final class RecognitionWorker: @unchecked Sendable {
     var statusHandler: (@Sendable (ModelStatuses) -> Void)? {
         get { locked { storedStatusHandler } }
         set { locked { storedStatusHandler = newValue } }
+    }
+
+    /// Receives the learning collector's events (on its utility queue).
+    var learningEventHandler: (@Sendable (LearningCollector.Event) -> Void)? {
+        get { learning.eventHandler }
+        set { learning.eventHandler = newValue }
+    }
+
+    /// Called (on the processing queue) when the downloaded model was dropped: (version, load error message), the
+    /// message is nil for "no detector output for 30 s of driving". The detector is already back on the bundled models.
+    var modelFailureHandler: (@Sendable (String, String?) -> Void)? {
+        get { locked { storedModelFailureHandler } }
+        set { locked { storedModelFailureHandler = newValue } }
+    }
+
+    /// Prefers a downloaded detector model (nil = bundled models only) from the next frame on.
+    func setDownloadedModel(_ model: DownloadedDetectorModel?) {
+        queue.async { [self] in
+            detector.downloadedModel = model
+            modelHealth.reset()
+        }
+    }
+
+    /// A trip started: the collector's per-trip counter restarts.
+    func resetLearningTrip() {
+        queue.async { [self] in
+            learning.resetTrip()
+        }
     }
 
     /// Installs the frame handler on the camera. The closure is created here, outside any actor, so it is a plain
@@ -239,6 +280,8 @@ final class RecognitionWorker: @unchecked Sendable {
                 roadwayEstimator.reset()
                 laneEstimate = nil
                 corridorCenterX = 0.5
+                learning.resetMemory()
+                modelHealth.reset()
             }
         }
     }
@@ -268,6 +311,8 @@ final class RecognitionWorker: @unchecked Sendable {
             laneEstimate = nil
             corridorCenterX = 0.5
             makeClassifier.reset()
+            learning.resetMemory()
+            modelHealth.reset()
             generation = newGeneration
             lastFrameTimestamp = nil
         }
@@ -342,7 +387,9 @@ final class RecognitionWorker: @unchecked Sendable {
                                              options: frameInputs.detection)
         // The model in use changes with the frame orientation and the quality level (or fails to load lazily).
         publishDetectorStatusIfChanged()
+        watchDownloadedModel(output: detectorOutput, timestamp: timestamp, ownSpeedKmh: frameInputs.ownSpeedKmh)
         guard let result = detectorOutput else {
+            learning.disable()
             // No detector: still publish the lane estimate so the lane overlay / departure warning work.
             if frameInputs.laneDetectionEnabled, !detector.status.isReady {
                 outputHandler?(Output(generation: generation, tracks: [], visibleCounts: [:],
@@ -375,6 +422,9 @@ final class RecognitionWorker: @unchecked Sendable {
 
         let countsBeforeUpdate = tracker.uniqueCounts
         var tracks = tracker.update(detections: detections, timestamp: timestamp)
+        // The hard-frame selector sees the tracker's own output (before the sidewalk filter below removes persons):
+        // a person dropped there must not look like a dead, short-lived track.
+        let trackerTracks = tracks
         let geometry = CameraGeometry(horizontalFOVDegrees: camera.horizontalFieldOfView,
                                       imageWidth: Double(width), imageHeight: Double(height))
         tracks = estimator.update(tracks: tracks, ownSpeedKmh: frameInputs.ownSpeedKmh,
@@ -430,6 +480,46 @@ final class RecognitionWorker: @unchecked Sendable {
                             corridor: leadTracker.corridor, horizonY: horizon, measuredHorizon: measuredHorizon,
                             measuredHorizonIsLandscape: width >= height)
         outputHandler?(output)
+
+        // Continuous learning, after the snapshot went out (does not delay the UI). Cheap per frame; the quality
+        // metrics and the JPEG are made only for kept frames (see `LearningCollector`).
+        if frameInputs.learningEnabled {
+            let learningFrame = HardExampleFrame(timestamp: timestamp, frameIndex: processedFrames,
+                                                 ownSpeedKmh: frameInputs.ownSpeedKmh, tracks: trackerTracks,
+                                                 detections: detections, classThresholds: tracker.minConfidence)
+            let context = LearningCollector.Context(sendLocation: frameInputs.learningSendLocation,
+                                                    latitude: frameInputs.latitude, longitude: frameInputs.longitude,
+                                                    modelName: result.modelName,
+                                                    storageLimitMB: frameInputs.learningStorageLimitMB)
+            learning.process(pixelBuffer: pixelBuffer, frame: learningFrame, context: context)
+        } else {
+            learning.disable()
+        }
+    }
+
+    /// Drops a downloaded model that failed to load, or that produced no detection for
+    /// `ModelUpdatePolicy.noOutputRevertSeconds` of driving frames (`ModelHealthMonitor`), and reports it.
+    private func watchDownloadedModel(output: VehicleDetector.Output?, timestamp: TimeInterval, ownSpeedKmh: Double?) {
+        if let failure = detector.takeDownloadedModelFailure() {
+            modelHealth.reset()
+            detector.downloadedModel = nil
+            modelFailureHandler?(failure.version, failure.message)
+            return
+        }
+        guard detector.isUsingDownloadedModel, let version = detector.downloadedModel?.version else {
+            if modelHealth.silentSeconds > 0 { modelHealth.reset() }
+            return
+        }
+        let hadOutput: Bool = !(output?.detections.isEmpty ?? true)
+        var driving = true
+        if let speed = ownSpeedKmh, speed.isFinite {
+            driving = speed >= HardExampleSelector.Config().minSpeedKmh
+        }
+        if modelHealth.record(timestamp: timestamp, hadOutput: hadOutput, driving: driving) {
+            modelHealth.reset()
+            detector.downloadedModel = nil
+            modelFailureHandler?(version, nil)
+        }
     }
 
     /// Picks the lead vehicle (the vehicle strictly ahead in the own-lane corridor, see `LeadVehicleTracker`) and fuses

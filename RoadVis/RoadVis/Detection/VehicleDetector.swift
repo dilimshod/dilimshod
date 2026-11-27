@@ -35,6 +35,21 @@ enum ModelStatus: Equatable, Sendable {
     }
 }
 
+/// A detector model downloaded from the RoadVis Trainer (`ModelUpdateService`): compiled `.mlmodelc` directories
+/// of the landscape and portrait packages of one accepted version.
+struct DownloadedDetectorModel: Equatable, Sendable {
+    let version: String
+    let landscapeName: String
+    let landscapeURL: URL
+    let portraitName: String
+    let portraitURL: URL
+
+    /// Key of the loaded model (`ModelStatus.ready` name, `Output.modelName`): "<package>@<version>".
+    func loadedName(landscape: Bool) -> String {
+        "\(landscape ? landscapeName : portraitName)@\(version)"
+    }
+}
+
 /// YOLO object detector (Core ML + Vision).
 ///
 /// Models. The app bundles four packages with a rectangular 16:9 input, so an upright camera frame fills the whole
@@ -65,6 +80,8 @@ final class VehicleDetector {
     static let portraitModelName = "RoadVisDetectorPortrait"
     static let liteLandscapeModelName = "RoadVisDetectorLite"
     static let litePortraitModelName = "RoadVisDetectorLitePortrait"
+    /// Separator between the package name and the version in the name of a downloaded model.
+    static let downloadedNameSeparator: Character = "@"
     /// Single-model bundles of earlier versions / user-supplied exports (any input size), tried last.
     static let legacyModelNames = ["yolo26n", "yolo11n", "yolov8n"]
 
@@ -79,6 +96,23 @@ final class VehicleDetector {
         names.append(contentsOf: level == .lite ? [otherLite, otherFull] : [otherFull, otherLite])
         names.append(contentsOf: legacyModelNames)
         return names
+    }
+
+    /// Model name and version as reported in the training-sample metadata (`LearningSampleMeta.model`): a downloaded
+    /// model "<package>@<version>" → (package, version); a bundled one → (name, "bundled-<arch>-<input>").
+    static func modelIdentity(loadedName: String) -> (name: String, version: String) {
+        if let separator = loadedName.firstIndex(of: downloadedNameSeparator) {
+            let name = String(loadedName[..<separator])
+            let version = String(loadedName[loadedName.index(after: separator)...])
+            return (name, version)
+        }
+        switch loadedName {
+        case landscapeModelName: return (loadedName, "bundled-yolo11s-960x544")
+        case portraitModelName: return (loadedName, "bundled-yolo11s-544x960")
+        case liteLandscapeModelName: return (loadedName, "bundled-yolo11n-960x544")
+        case litePortraitModelName: return (loadedName, "bundled-yolo11n-544x960")
+        default: return (loadedName, "bundled-\(loadedName)")
+        }
     }
 
     /// Per-frame detection options (taken from the user settings).
@@ -134,6 +168,23 @@ final class VehicleDetector {
     private(set) var status: ModelStatus = .loading
     /// Quality level requested for the next frames (the worker's `DetectorQualityGovernor` decides).
     var preferredLevel: DetectorQualityGovernor.Level = .full
+    /// Downloaded model preferred for the `.full` level (nil = bundled models only). Setting it drops the loaded
+    /// models of the previous downloaded version; the new one is loaded with the next frame.
+    var downloadedModel: DownloadedDetectorModel? {
+        didSet {
+            guard downloadedModel != oldValue else { return }
+            for name in loadedModels.keys where name.contains(Self.downloadedNameSeparator) {
+                loadedModels[name] = nil
+            }
+            unavailableNames = unavailableNames.filter { !$0.contains(Self.downloadedNameSeparator) }
+            pendingDownloadedFailure = nil
+            isUsingDownloadedModel = false
+        }
+    }
+    /// True when the model of the latest frame is the downloaded one.
+    private(set) var isUsingDownloadedModel = false
+    /// (version, error) of a downloaded model that failed to load, until `takeDownloadedModelFailure()` reads it.
+    private var pendingDownloadedFailure: (version: String, message: String)?
 
     private var bundle: Bundle = .main
     /// Loaded models by bundle name. Only models used for the current frame orientation are kept.
@@ -180,6 +231,11 @@ final class VehicleDetector {
     /// First candidate for the orientation and level that is in the bundle and loads (already loaded ones are
     /// reused). Updates `status`.
     private func resolveModel(landscape: Bool, level: DetectorQualityGovernor.Level) -> LoadedModel? {
+        if level == .full, let downloaded = resolveDownloadedModel(landscape: landscape) {
+            isUsingDownloadedModel = true
+            return downloaded
+        }
+        isUsingDownloadedModel = false
         for name in Self.candidateModelNames(landscape: landscape, level: level) {
             if let loaded = loadedModels[name] {
                 setStatus(.ready(name))
@@ -205,13 +261,46 @@ final class VehicleDetector {
         return nil
     }
 
+    /// The downloaded model for the orientation (loaded on first use); nil without one or when it failed to load
+    /// (the failure is remembered for `takeDownloadedModelFailure()` and not retried for this version).
+    private func resolveDownloadedModel(landscape: Bool) -> LoadedModel? {
+        guard let downloaded = downloadedModel else { return nil }
+        let name = downloaded.loadedName(landscape: landscape)
+        if let loaded = loadedModels[name] {
+            setStatus(.ready(name))
+            return loaded
+        }
+        if unavailableNames.contains(name) { return nil }
+        let url = landscape ? downloaded.landscapeURL : downloaded.portraitURL
+        do {
+            let loaded = try Self.loadModel(name: name, url: url,
+                                            fallbackClassNames: ModelUpdatePolicy.publishedClassNames)
+            loadedModels[name] = loaded
+            setStatus(.ready(name))
+            return loaded
+        } catch {
+            unavailableNames.insert(name)
+            pendingDownloadedFailure = (downloaded.version, error.localizedDescription)
+            return nil
+        }
+    }
+
+    /// A downloaded model that failed to load since the last call: (version, error message). Read once.
+    func takeDownloadedModelFailure() -> (version: String, message: String)? {
+        defer { pendingDownloadedFailure = nil }
+        return pendingDownloadedFailure
+    }
+
     private func setStatus(_ newStatus: ModelStatus) {
         if status != newStatus { status = newStatus }
     }
 
     /// Loads one compiled model. CPU + Neural Engine is requested first (what the Ultralytics iOS SDK uses; keeps the
     /// GPU free for the camera preview and the map); all compute units are the fallback when that fails.
-    private static func loadModel(name: String, url: URL) throws -> LoadedModel {
+    /// `fallbackClassNames`: class names used when the model carries none (COCO for the bundled models, the 8
+    /// published classes `ModelUpdatePolicy.publishedClassNames` for a downloaded one).
+    private static func loadModel(name: String, url: URL,
+                                  fallbackClassNames: [String] = COCOLabels.names) throws -> LoadedModel {
         let model: MLModel
         do {
             let configuration = MLModelConfiguration()
@@ -238,7 +327,7 @@ final class VehicleDetector {
         let isPipeline = outputs["coordinates"] != nil && outputs["confidence"] != nil
         let thresholdInputNames = Set(description.inputDescriptionsByName.keys)
             .intersection(["iouThreshold", "confidenceThreshold"])
-        let classNames = Self.classNames(from: description) ?? COCOLabels.names
+        let classNames = Self.classNames(from: description) ?? fallbackClassNames
         return LoadedModel(name: name, visionModel: vnModel, request: request, inputWidth: inputWidth,
                            inputHeight: inputHeight, isPipeline: isPipeline, classNames: classNames,
                            thresholdInputNames: thresholdInputNames)

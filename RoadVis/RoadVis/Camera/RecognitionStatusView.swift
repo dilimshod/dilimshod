@@ -17,6 +17,14 @@ struct RecognitionStatusView: View {
                 Section(L("recStatus.models")) {
                     detectorRow
                     makeRow
+                    if app.learning.settings.enabled {
+                        LabeledContent {
+                            Text(LearningModelText.describe(app.learning.models.active))
+                                .multilineTextAlignment(.trailing)
+                        } label: {
+                            Label(L("learning.status.model"), systemImage: "graduationcap")
+                        }
+                    }
                 }
 
                 Section(L("recStatus.performance")) {

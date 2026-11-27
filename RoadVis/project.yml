@@ -109,7 +109,9 @@ targets:
     info:
       path: Config/Info.plist
       properties:
-        UIBackgroundModes: [location, audio]
+        UIBackgroundModes: [location, audio, processing]
+        # Continuous learning: background upload of collected frames (LearningBackgroundTasks.identifier).
+        BGTaskSchedulerPermittedIdentifiers: [uz.roadvis.RoadVis.learning.upload]
         UIFileSharingEnabled: true
         LSSupportsOpeningDocumentsInPlace: true
         # Keep in sync with the hand-written Config/Info.plist: XcodeGen rewrites the file from these properties.
