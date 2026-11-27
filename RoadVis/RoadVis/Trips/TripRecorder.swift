@@ -64,6 +64,9 @@ final class TripRecorder {
         self.store = store
     }
 
+    /// Called on the main actor right after a recording started (e.g. the continuous-learning per-trip counter).
+    @ObservationIgnored var onStarted: (() -> Void)?
+
     /// Id of the trip being recorded.
     var currentTripID: UUID? { trip?.id }
 
@@ -95,6 +98,7 @@ final class TripRecorder {
         isRecording = true
         startedWithNavigation = withNavigation
         startedAt = now
+        onStarted?()
         liveDistanceMeters = 0
         liveEventCount = 0
         lastEvent = nil

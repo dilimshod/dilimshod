@@ -109,6 +109,11 @@ final class RecognitionPipeline {
     @ObservationIgnored var onDrivingEvent: ((DrivingEvent) -> Void)?
     /// Per-frame cues for `DriverCoach` (called on the main actor after every processed frame).
     @ObservationIgnored var onAssistFrame: ((DriverAssistFrame) -> Void)?
+    /// Continuous-learning collector events (saved sample, quality reject, error), on the main actor.
+    @ObservationIgnored var onLearningEvent: ((LearningCollector.Event) -> Void)?
+    /// The downloaded detector model was dropped (version, localized reason); the detector already uses the
+    /// bundled models again. On the main actor.
+    @ObservationIgnored var onDownloadedModelFailure: ((String, String) -> Void)?
 
     /// Centre X of the own-lane corridor the worker picked the lead from (follows a confident lane estimate).
     private(set) var corridorCenterX = 0.5
@@ -190,6 +195,22 @@ final class RecognitionPipeline {
             DispatchQueue.main.async { [weak self] in
                 MainActor.assumeIsolated {
                     self?.applyModelStatuses(statuses)
+                }
+            }
+        }
+        worker.learningEventHandler = { [weak self] event in
+            DispatchQueue.main.async { [weak self] in
+                MainActor.assumeIsolated {
+                    self?.onLearningEvent?(event)
+                }
+            }
+        }
+        worker.modelFailureHandler = { [weak self] version, message in
+            DispatchQueue.main.async { [weak self] in
+                MainActor.assumeIsolated {
+                    let reason = message.map { L("learning.model.reason.loadFailed", $0) }
+                        ?? L("learning.model.reason.noOutput")
+                    self?.onDownloadedModelFailure?(version, reason)
                 }
             }
         }
@@ -299,6 +320,27 @@ final class RecognitionPipeline {
             // stop() was called while the session was starting.
             camera.stop()
         }
+    }
+
+    // MARK: - Continuous learning
+
+    /// Switches the hard-frame collector on / off and updates its options (from `LearningCoordinator`).
+    func setLearningOptions(enabled: Bool, sendLocation: Bool, storageLimitMB: Int) {
+        worker.update { inputs in
+            inputs.learningEnabled = enabled
+            inputs.learningSendLocation = sendLocation
+            inputs.learningStorageLimitMB = storageLimitMB
+        }
+    }
+
+    /// A trip started: the collector's per-trip counter restarts.
+    func resetLearningTrip() {
+        worker.resetLearningTrip()
+    }
+
+    /// Prefers a downloaded detector model (nil = bundled models only).
+    func setDownloadedModel(_ model: DownloadedDetectorModel?) {
+        worker.setDownloadedModel(model)
     }
 
     // MARK: - Counters
