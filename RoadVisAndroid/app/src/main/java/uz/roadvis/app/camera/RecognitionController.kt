@@ -14,6 +14,8 @@ import kotlinx.coroutines.launch
 import uz.roadvis.app.app.AppState
 import uz.roadvis.app.detection.ModelStatus
 import uz.roadvis.app.detection.YoloDetector
+import uz.roadvis.app.learning.LearningCollector
+import uz.roadvis.app.learning.LearningFeature
 import uz.roadvis.core.CameraEventInput
 import uz.roadvis.core.CameraDrivingEventMonitor
 import uz.roadvis.core.CameraGeometry
@@ -152,7 +154,8 @@ class RecognitionController(val app: AppState) {
                     settings.detectTrafficLights, settings.makeRecognitionEnabled, settings.followingDistanceEnabled,
                     settings.corridorHorizon, settings.autoHorizonEnabled, settings.hoodLengthMeters, settings.followingTimeGapDry,
                     settings.stoppedGapMeters, settings.reactionTimeSeconds, settings.roadSurfaceMode,
-                    assist.laneDepartureEnabled, assist.showLaneOverlay, assist.pedestrianWarningsEnabled)
+                    assist.laneDepartureEnabled, assist.showLaneOverlay, assist.pedestrianWarningsEnabled,
+                    settings.learningEnabled, settings.learningSendLocation, settings.learningStorageLimitMb)
             }.drop(1).collect {
                 pushSettings()
                 refreshFollowingDistance(fromFrame = false)
@@ -169,6 +172,7 @@ class RecognitionController(val app: AppState) {
     fun setProcessing(processing: Boolean) {
         if (processing == wantsProcessing) return
         wantsProcessing = processing
+        LearningFeature.cameraProcessing = processing
         pushSettings()
         pushLocation()
         worker.setActive(processing)
@@ -390,7 +394,18 @@ class RecognitionController(val app: AppState) {
     // Inputs to the worker
 
     private fun pushLocation() {
-        worker.inputs = worker.inputs.copy(ownSpeedKmh = app.location.speedKmh)
+        worker.inputs = worker.inputs.copy(ownSpeedKmh = app.location.speedKmh, learning = learningOptions())
+    }
+
+    /**
+     * Collection options for the worker, null while collection is off. Also off while pedestrians are not detected:
+     * the head blurring of saved frames needs the person boxes.
+     */
+    private fun learningOptions(): LearningCollector.Options? {
+        if (!settings.learningEnabled || !settings.trackPedestrians) return null
+        val c = if (settings.learningSendLocation) app.location.coordinate else null
+        return LearningCollector.Options(sendLocation = settings.learningSendLocation, latitude = c?.latitude,
+            longitude = c?.longitude, storageLimitMb = settings.learningStorageLimitMb)
     }
 
     private fun pushSettings() {
@@ -411,6 +426,7 @@ class RecognitionController(val app: AppState) {
             storedHorizonPortrait = settings.autoHorizonPortrait.takeIf { it > 0 },
             storedHorizonLandscape = settings.autoHorizonLandscape.takeIf { it > 0 },
             cameraToBumperMeters = settings.hoodLengthMeters,
+            learning = learningOptions(),
         )
     }
 

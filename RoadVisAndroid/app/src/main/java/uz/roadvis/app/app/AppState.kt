@@ -37,6 +37,7 @@ class AppState(val context: Context) {
         uz.roadvis.app.camera.installCamera(this)
         uz.roadvis.app.navigation.installNavigation(this)
         uz.roadvis.app.trips.installTrips(this)
+        uz.roadvis.app.learning.installLearning(this)
     }
 
     /** «Поехали»: collapse the navigator to the camera and start the drive (trip recording if enabled). */

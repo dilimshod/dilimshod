@@ -57,6 +57,41 @@ the lane vanishing-point estimate, `LaneHorizonEstimator`, toggle "auto horizon"
 unit tests as the Swift core (including the 292-crop classifier parity fixture); nothing of this was run on a phone
 or on real video.
 
+## Continuous learning (opt-in)
+Settings → “Improve recognition” implements the client side of `../RoadVis/docs/TRAINING_API.md` (same contract as
+iOS and the RoadVis Trainer server). Off by default; nothing is collected or sent until the switch is on.
+
+- **Collection** (`core`: `HardExampleSelector`, `FrameQuality`; app: `learning/LearningCollector`): per processed
+  frame the selector looks for `missedDetection`, `shortLived`, `lowConfidence`, `classFlip` and the 1 % `random`
+  sample, gated by 2 s between kept frames, 300 per trip (reset on «Поехали»), own speed ≥ 5 km/h or unknown, and —
+  computed only for such candidates, at most every 0.5 s — sharpness ≥ 60, brightness 35–225 and a dHash distance > 6
+  to the last kept frame (160-px gray copy). The selector decides about the previous frame, so a short-lived track is
+  saved on the frame where it was last detected; the worker double-buffers the frame bytes for this while collection
+  is on. A kept frame is encoded on a low-priority thread: 960-px long side, JPEG 80, `filesDir/learning/pending/
+  <uuid>.jpg` + `<uuid>.json`, then the retention rules (14 days, 100 / 300 / 1000 MB cap, oldest first).
+- **Privacy**: Android has no free on-device face detector without new dependencies, so the upper third of every
+  person box at least 12 % of the frame tall is blurred instead (no exact face boxes; small persons are not blurred).
+  Collection is paused while pedestrian detection is off, because the blur needs the person boxes. Location is added
+  only with “Send location” on (and stripped at upload time if it was switched off later).
+- **Upload** (`learning/LearningUploader`, WorkManager `androidx.work:work-runtime-ktx`): hourly periodic work (and
+  “Upload now”) on an unmetered network while “Wi-Fi only” is on, battery not low, never while the camera screen is
+  processing frames; up to 20 samples per run as multipart `image` + `meta` to `POST /api/v1/samples` with
+  `Authorization: Bearer <device token>` and `User-Agent: RoadVis-Android/<version>`. 201 / 409 delete the sample,
+  413 / 422 delete it as rejected, 401 stops, anything else backs off 1, 2, 4 … 60 min (one-time retry work). The
+  device token is stored in the app's private SharedPreferences (`rv.learning.token`): the project has no
+  `androidx.security` dependency for EncryptedSharedPreferences.
+- **Model updates** (`learning/ModelUpdateService`): with “Download improved models” on, a daily check on Wi-Fi of
+  `GET /api/v1/model/latest?platform=android`; a new version is downloaded to a temp folder, its size and sha256 are
+  verified, an ONNX Runtime session is opened and run once on a zero image, and only then it is moved to
+  `filesDir/models/<version>/yolo-roadvis.onnx` and activated. `YoloDetector` prefers that file over the bundled
+  `yolo11n.onnx` (same dynamic-axes handling, four input sizes); if it fails to load or yields no boxes for 30 s of
+  driving while frames arrive (`ModelHealthMonitor`), the detector reverts to the bundled model and the version is
+  remembered as bad. The status rows show the current model (bundled, or version · date · test mAP50).
+
+Settings keys: `rv.learning.*` in the `roadvis` SharedPreferences. Nothing of this was run against a live server or on
+a phone; the selector, quality metrics, metadata keys, storage policy, manifest parsing and switch / revert rules are
+covered by `ContinuousLearningTest` (core).
+
 ## Natural voice (optional)
 Generate the Microsoft Edge clips on a Mac (see `../RoadVis/tools/VOICE_CLIPS.md`), then copy them:
 `cp ../RoadVis/RoadVis/VoiceClips/*.m4a app/src/main/assets/voice/` and rebuild. Without clips the system
