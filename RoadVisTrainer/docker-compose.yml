@@ -1,0 +1,32 @@
+# RoadVis Trainer: API + background worker. Data (SQLite, dataset, models, weights) lives in ./data.
+#   mkdir -p data && sudo chown 10001:10001 data      # the containers run as uid 10001
+#   cp .env.example .env && nano .env                  # set ROADVIS_ADMIN_TOKEN
+#   docker compose up -d --build
+services:
+  api:
+    build: .
+    image: roadvis-trainer:latest
+    env_file: .env
+    volumes:
+      - ./data:/data
+    # Only reachable from the host itself; nginx proxies https://trafficcounter.uz/roadvis/ to it.
+    ports:
+      - "127.0.0.1:8601:8601"
+    restart: unless-stopped
+    cpus: 1.0
+    mem_limit: 1g
+
+  worker:
+    image: roadvis-trainer:latest
+    depends_on:
+      - api
+    env_file: .env
+    command: ["roadvis-trainer", "worker"]
+    volumes:
+      - ./data:/data
+    healthcheck:
+      disable: true
+    restart: unless-stopped
+    # Keep the website responsive: at most 2 CPUs (match ROADVIS_WORKER_THREADS) and a memory cap.
+    cpus: 2.0
+    mem_limit: 6g

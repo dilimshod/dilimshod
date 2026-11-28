@@ -1,0 +1,772 @@
+{
+  "clips" : [
+    {
+      "en" : "Go straight",
+      "id" : "go_straight",
+      "ru" : "Двигайтесь прямо",
+      "uz" : "To‘g‘riga yuring"
+    },
+    {
+      "en" : "Turn left",
+      "id" : "turn_left",
+      "ru" : "Поверните налево",
+      "uz" : "Chapga buriling"
+    },
+    {
+      "en" : "Turn right",
+      "id" : "turn_right",
+      "ru" : "Поверните направо",
+      "uz" : "O‘ngga buriling"
+    },
+    {
+      "en" : "Bear left",
+      "id" : "bear_left",
+      "ru" : "Плавно поверните налево",
+      "uz" : "Biroz chapga buriling"
+    },
+    {
+      "en" : "Bear right",
+      "id" : "bear_right",
+      "ru" : "Плавно поверните направо",
+      "uz" : "Biroz o‘ngga buriling"
+    },
+    {
+      "en" : "Turn sharp left",
+      "id" : "sharp_left",
+      "ru" : "Резко поверните налево",
+      "uz" : "Keskin chapga buriling"
+    },
+    {
+      "en" : "Turn sharp right",
+      "id" : "sharp_right",
+      "ru" : "Резко поверните направо",
+      "uz" : "Keskin o‘ngga buriling"
+    },
+    {
+      "en" : "Keep left",
+      "id" : "keep_left",
+      "ru" : "Держитесь левее",
+      "uz" : "Chap tomonda qoling"
+    },
+    {
+      "en" : "Keep right",
+      "id" : "keep_right",
+      "ru" : "Держитесь правее",
+      "uz" : "O‘ng tomonda qoling"
+    },
+    {
+      "en" : "Take the exit on the left",
+      "id" : "exit_left",
+      "ru" : "Сверните на съезд слева",
+      "uz" : "Chapdagi chiqish yo‘liga o‘ting"
+    },
+    {
+      "en" : "Take the exit on the right",
+      "id" : "exit_right",
+      "ru" : "Сверните на съезд справа",
+      "uz" : "O‘ngdagi chiqish yo‘liga o‘ting"
+    },
+    {
+      "en" : "Make a U-turn",
+      "id" : "uturn",
+      "ru" : "Развернитесь",
+      "uz" : "Orqaga qayriling"
+    },
+    {
+      "en" : "Merge",
+      "id" : "merge",
+      "ru" : "Перестройтесь в поток",
+      "uz" : "Oqimga qo‘shiling"
+    },
+    {
+      "en" : "Enter the roundabout",
+      "id" : "roundabout_enter",
+      "ru" : "Въезжайте на круговое движение",
+      "uz" : "Aylanma harakatga kiring"
+    },
+    {
+      "en" : "At the roundabout, take the first exit",
+      "id" : "roundabout_exit_1",
+      "ru" : "На круговом движении сверните на первый съезд",
+      "uz" : "Aylanma harakatda birinchi chiqishdan chiqing"
+    },
+    {
+      "en" : "At the roundabout, take the second exit",
+      "id" : "roundabout_exit_2",
+      "ru" : "На круговом движении сверните на второй съезд",
+      "uz" : "Aylanma harakatda ikkinchi chiqishdan chiqing"
+    },
+    {
+      "en" : "At the roundabout, take the third exit",
+      "id" : "roundabout_exit_3",
+      "ru" : "На круговом движении сверните на третий съезд",
+      "uz" : "Aylanma harakatda uchinchi chiqishdan chiqing"
+    },
+    {
+      "en" : "At the roundabout, take the fourth exit",
+      "id" : "roundabout_exit_4",
+      "ru" : "На круговом движении сверните на четвёртый съезд",
+      "uz" : "Aylanma harakatda to‘rtinchi chiqishdan chiqing"
+    },
+    {
+      "en" : "At the roundabout, take the fifth exit",
+      "id" : "roundabout_exit_5",
+      "ru" : "На круговом движении сверните на пятый съезд",
+      "uz" : "Aylanma harakatda beshinchi chiqishdan chiqing"
+    },
+    {
+      "en" : "At the roundabout, take the sixth exit",
+      "id" : "roundabout_exit_6",
+      "ru" : "На круговом движении сверните на шестой съезд",
+      "uz" : "Aylanma harakatda oltinchi chiqishdan chiqing"
+    },
+    {
+      "en" : "At the roundabout, take the seventh exit",
+      "id" : "roundabout_exit_7",
+      "ru" : "На круговом движении сверните на седьмой съезд",
+      "uz" : "Aylanma harakatda yettinchi chiqishdan chiqing"
+    },
+    {
+      "en" : "At the roundabout, take the eighth exit",
+      "id" : "roundabout_exit_8",
+      "ru" : "На круговом движении сверните на восьмой съезд",
+      "uz" : "Aylanma harakatda sakkizinchi chiqishdan chiqing"
+    },
+    {
+      "en" : "You will reach your destination",
+      "id" : "arrive_ahead",
+      "ru" : "Вы прибудете к месту назначения",
+      "uz" : "Manzilga yetib kelasiz"
+    },
+    {
+      "en" : "You have arrived",
+      "id" : "arrived",
+      "ru" : "Вы прибыли",
+      "uz" : "Manzilga yetib keldingiz"
+    },
+    {
+      "en" : "Be careful",
+      "id" : "be_careful",
+      "ru" : "Будьте осторожны",
+      "uz" : "Ehtiyot bo‘ling"
+    },
+    {
+      "en" : "Slow down",
+      "id" : "slow_down",
+      "ru" : "Снизьте скорость",
+      "uz" : "Tezlikni pasaytiring"
+    },
+    {
+      "en" : "Recalculating the route",
+      "id" : "rerouting",
+      "ru" : "Перестраиваю маршрут",
+      "uz" : "Yo‘nalish qayta tuzilmoqda"
+    },
+    {
+      "en" : "Route ready",
+      "id" : "route_ready",
+      "ru" : "Маршрут построен",
+      "uz" : "Yo‘nalish tayyor"
+    },
+    {
+      "en" : "Speed camera ahead",
+      "id" : "speed_camera_ahead",
+      "ru" : "Впереди камера контроля скорости",
+      "uz" : "Oldinda tezlikni nazorat qilish kamerasi"
+    },
+    {
+      "en" : "School ahead, watch for children",
+      "id" : "school_ahead",
+      "ru" : "Впереди школа, будьте внимательны, дети",
+      "uz" : "Oldinda maktab, ehtiyot bo‘ling, bolalar"
+    },
+    {
+      "en" : "Kindergarten ahead, watch for children",
+      "id" : "kindergarten_ahead",
+      "ru" : "Впереди детский сад, будьте внимательны, дети",
+      "uz" : "Oldinda bolalar bog‘chasi, ehtiyot bo‘ling, bolalar"
+    },
+    {
+      "en" : "Railway crossing ahead",
+      "id" : "railway_ahead",
+      "ru" : "Впереди железнодорожный переезд",
+      "uz" : "Oldinda temir yo‘l kesishmasi"
+    },
+    {
+      "en" : "Pedestrian crossing ahead",
+      "id" : "crossing_ahead",
+      "ru" : "Впереди пешеходный переход",
+      "uz" : "Oldinda piyodalar o‘tish joyi"
+    },
+    {
+      "en" : "Road works ahead",
+      "id" : "construction_ahead",
+      "ru" : "Впереди дорожные работы",
+      "uz" : "Oldinda yo‘l ta’mirlash ishlari"
+    },
+    {
+      "en" : "Speed bump ahead",
+      "id" : "bump_ahead",
+      "ru" : "Впереди искусственная неровность",
+      "uz" : "Oldinda sun’iy notekislik"
+    },
+    {
+      "en" : "Traffic light ahead",
+      "id" : "traffic_light_ahead",
+      "ru" : "Впереди светофор",
+      "uz" : "Oldinda svetofor"
+    },
+    {
+      "en" : "Stop sign ahead. Come to a full stop",
+      "id" : "stop_sign_ahead",
+      "ru" : "Впереди знак STOP. Остановитесь полностью",
+      "uz" : "Oldinda STOP belgisi. To‘liq to‘xtang"
+    },
+    {
+      "en" : "Accident ahead",
+      "id" : "incident_accident",
+      "ru" : "Впереди ДТП",
+      "uz" : "Oldinda yo‘l-transport hodisasi"
+    },
+    {
+      "en" : "Road works ahead",
+      "id" : "incident_road_work",
+      "ru" : "Впереди дорожные работы",
+      "uz" : "Oldinda yo‘l ta’mirlash ishlari"
+    },
+    {
+      "en" : "Traffic jam ahead",
+      "id" : "incident_jam",
+      "ru" : "Впереди пробка",
+      "uz" : "Oldinda tirbandlik"
+    },
+    {
+      "en" : "Police post ahead",
+      "id" : "incident_police",
+      "ru" : "Впереди пост полиции",
+      "uz" : "Oldinda politsiya posti"
+    },
+    {
+      "en" : "Pothole ahead",
+      "id" : "incident_pothole",
+      "ru" : "Впереди яма",
+      "uz" : "Oldinda chuqur"
+    },
+    {
+      "en" : "Hazard ahead",
+      "id" : "incident_hazard",
+      "ru" : "Впереди опасность",
+      "uz" : "Oldinda xavf"
+    },
+    {
+      "en" : "Road closed ahead",
+      "id" : "incident_closure",
+      "ru" : "Впереди перекрытие дороги",
+      "uz" : "Oldinda yo‘l yopilgan"
+    },
+    {
+      "en" : "Warning! You are closing in fast",
+      "id" : "collision_alert",
+      "ru" : "Внимание! Опасное сближение",
+      "uz" : "Diqqat! Xavfli yaqinlashyapsiz"
+    },
+    {
+      "en" : "Keep your distance",
+      "id" : "keep_distance",
+      "ru" : "Держите дистанцию",
+      "uz" : "Masofani saqlang"
+    },
+    {
+      "en" : "Keep your distance, at least",
+      "id" : "keep_distance_at_least",
+      "ru" : "Держите дистанцию, не меньше",
+      "uz" : "Masofani saqlang, kamida"
+    },
+    {
+      "en" : "Warning! You are closing in fast. Brake!",
+      "id" : "collision_warning",
+      "ru" : "Внимание! Опасное сближение, тормозите!",
+      "uz" : "Diqqat! Oldingi mashinaga xavfli yaqinlashyapsiz, tormoz bering!"
+    },
+    {
+      "en" : "Attention! Yield to the pedestrian",
+      "id" : "pedestrian_yield",
+      "ru" : "Внимание! Пропустите пешехода",
+      "uz" : "Diqqat! Piyodani o‘tkazing"
+    },
+    {
+      "en" : "Careful, pedestrian on the road",
+      "id" : "pedestrian_caution",
+      "ru" : "Осторожно, пешеход на дороге",
+      "uz" : "Ehtiyot bo‘ling, yo‘lda piyoda"
+    },
+    {
+      "en" : "Attention, traffic police ahead",
+      "id" : "traffic_officer_ahead",
+      "ru" : "Внимание, впереди сотрудник ГАИ",
+      "uz" : "Diqqat, oldinda YHXX xodimi"
+    },
+    {
+      "en" : "Road works ahead, slow down",
+      "id" : "road_workers_ahead",
+      "ru" : "Впереди дорожные работы, осторожно, снизьте скорость",
+      "uz" : "Oldinda yo‘l ishlari, ehtiyot bo‘ling, tezlikni pasaytiring"
+    },
+    {
+      "en" : "Red light ahead. Slow down",
+      "id" : "red_light_ahead",
+      "ru" : "Впереди красный, снижайте скорость",
+      "uz" : "Oldinda qizil chiroq, tezlikni pasaytiring"
+    },
+    {
+      "en" : "Green light. Check it is clear, then go",
+      "id" : "green_go",
+      "ru" : "Зелёный. Убедитесь, что безопасно, и трогайтесь",
+      "uz" : "Yashil chiroq. Atrofga qarab, harakatlanishingiz mumkin"
+    },
+    {
+      "en" : "You are drifting over the left line",
+      "id" : "lane_left",
+      "ru" : "Вы выезжаете за левую разметку",
+      "uz" : "Chap chiziqdan chiqib ketyapsiz"
+    },
+    {
+      "en" : "You are drifting over the right line",
+      "id" : "lane_right",
+      "ru" : "Вы выезжаете за правую разметку",
+      "uz" : "O‘ng chiziqdan chiqib ketyapsiz"
+    },
+    {
+      "en" : "Speed limit",
+      "id" : "speed_limit",
+      "ru" : "Ограничение скорости",
+      "uz" : "Tezlik chegarasi soatiga"
+    },
+    {
+      "en" : "Slow down, the limit is",
+      "id" : "speeding",
+      "ru" : "Снизьте скорость, ограничение",
+      "uz" : "Tezlikni kamaytiring, chegara soatiga"
+    },
+    {
+      "en" : "speed camera",
+      "id" : "sign_speed_camera",
+      "ru" : "камера контроля скорости",
+      "uz" : "tezlik kamerasi"
+    },
+    {
+      "en" : "pedestrian crossing",
+      "id" : "sign_pedestrian_crossing",
+      "ru" : "пешеходный переход",
+      "uz" : "piyodalar o‘tish joyi"
+    },
+    {
+      "en" : "school, watch for children",
+      "id" : "sign_school",
+      "ru" : "школа, осторожно, дети",
+      "uz" : "maktab, bolalarga ehtiyot bo‘ling"
+    },
+    {
+      "en" : "kindergarten, watch for children",
+      "id" : "sign_kindergarten",
+      "ru" : "детский сад, осторожно, дети",
+      "uz" : "bolalar bog‘chasi, ehtiyot bo‘ling"
+    },
+    {
+      "en" : "railway crossing",
+      "id" : "sign_railway_crossing",
+      "ru" : "железнодорожный переезд",
+      "uz" : "temir yo‘l kesishmasi"
+    },
+    {
+      "en" : "stop sign, come to a full stop",
+      "id" : "sign_stop_sign",
+      "ru" : "знак STOP, остановитесь полностью",
+      "uz" : "STOP belgisi, to‘liq to‘xtang"
+    },
+    {
+      "en" : "give way sign",
+      "id" : "sign_give_way",
+      "ru" : "знак «Уступите дорогу»",
+      "uz" : "yo‘l bering belgisi"
+    },
+    {
+      "en" : "speed bump",
+      "id" : "sign_traffic_calming",
+      "ru" : "искусственная неровность",
+      "uz" : "sun’iy notekislik"
+    },
+    {
+      "en" : "traffic lights",
+      "id" : "sign_traffic_signals",
+      "ru" : "светофор",
+      "uz" : "svetofor"
+    },
+    {
+      "en" : "road works",
+      "id" : "sign_construction",
+      "ru" : "дорожные работы",
+      "uz" : "yo‘l ta’mirlash ishlari"
+    },
+    {
+      "en" : "fuel station",
+      "id" : "sign_fuel",
+      "ru" : "заправка",
+      "uz" : "yoqilg‘i quyish shoxobchasi"
+    },
+    {
+      "en" : "parking",
+      "id" : "sign_parking",
+      "ru" : "парковка",
+      "uz" : "avtoturargoh"
+    },
+    {
+      "id" : "after_meters",
+      "uz" : "metrdan keyin"
+    },
+    {
+      "id" : "after_km",
+      "uz" : "kilometrdan keyin"
+    },
+    {
+      "id" : "through",
+      "ru" : "через"
+    },
+    {
+      "en" : "In",
+      "id" : "in"
+    },
+    {
+      "en" : "metres",
+      "id" : "meters",
+      "ru" : "метров",
+      "uz" : "metr"
+    },
+    {
+      "en" : "metre",
+      "id" : "meter_one",
+      "ru" : "метр"
+    },
+    {
+      "id" : "meter_few",
+      "ru" : "метра"
+    },
+    {
+      "en" : "kilometres",
+      "id" : "km",
+      "ru" : "километров",
+      "uz" : "kilometr"
+    },
+    {
+      "en" : "kilometre",
+      "id" : "km_one",
+      "ru" : "километр"
+    },
+    {
+      "id" : "km_few",
+      "ru" : "километра"
+    },
+    {
+      "en" : "kilometres per hour",
+      "id" : "kmh",
+      "ru" : "километров в час"
+    },
+    {
+      "en" : "one",
+      "id" : "n_1",
+      "ru" : "один",
+      "uz" : "bir"
+    },
+    {
+      "en" : "two",
+      "id" : "n_2",
+      "ru" : "два",
+      "uz" : "ikki"
+    },
+    {
+      "en" : "three",
+      "id" : "n_3",
+      "ru" : "три",
+      "uz" : "uch"
+    },
+    {
+      "en" : "four",
+      "id" : "n_4",
+      "ru" : "четыре",
+      "uz" : "to‘rt"
+    },
+    {
+      "en" : "five",
+      "id" : "n_5",
+      "ru" : "пять",
+      "uz" : "besh"
+    },
+    {
+      "en" : "six",
+      "id" : "n_6",
+      "ru" : "шесть",
+      "uz" : "olti"
+    },
+    {
+      "en" : "seven",
+      "id" : "n_7",
+      "ru" : "семь",
+      "uz" : "yetti"
+    },
+    {
+      "en" : "eight",
+      "id" : "n_8",
+      "ru" : "восемь",
+      "uz" : "sakkiz"
+    },
+    {
+      "en" : "nine",
+      "id" : "n_9",
+      "ru" : "девять",
+      "uz" : "to‘qqiz"
+    },
+    {
+      "en" : "ten",
+      "id" : "n_10",
+      "ru" : "десять",
+      "uz" : "o‘n"
+    },
+    {
+      "en" : "fifteen",
+      "id" : "n_15",
+      "ru" : "пятнадцать",
+      "uz" : "o‘n besh"
+    },
+    {
+      "en" : "twenty",
+      "id" : "n_20",
+      "ru" : "двадцать",
+      "uz" : "yigirma"
+    },
+    {
+      "en" : "twenty-five",
+      "id" : "n_25",
+      "ru" : "двадцать пять",
+      "uz" : "yigirma besh"
+    },
+    {
+      "en" : "thirty",
+      "id" : "n_30",
+      "ru" : "тридцать",
+      "uz" : "o‘ttiz"
+    },
+    {
+      "en" : "thirty-five",
+      "id" : "n_35",
+      "ru" : "тридцать пять",
+      "uz" : "o‘ttiz besh"
+    },
+    {
+      "en" : "forty",
+      "id" : "n_40",
+      "ru" : "сорок",
+      "uz" : "qirq"
+    },
+    {
+      "en" : "forty-five",
+      "id" : "n_45",
+      "ru" : "сорок пять",
+      "uz" : "qirq besh"
+    },
+    {
+      "en" : "fifty",
+      "id" : "n_50",
+      "ru" : "пятьдесят",
+      "uz" : "ellik"
+    },
+    {
+      "en" : "fifty-five",
+      "id" : "n_55",
+      "ru" : "пятьдесят пять",
+      "uz" : "ellik besh"
+    },
+    {
+      "en" : "sixty",
+      "id" : "n_60",
+      "ru" : "шестьдесят",
+      "uz" : "oltmish"
+    },
+    {
+      "en" : "sixty-five",
+      "id" : "n_65",
+      "ru" : "шестьдесят пять",
+      "uz" : "oltmish besh"
+    },
+    {
+      "en" : "seventy",
+      "id" : "n_70",
+      "ru" : "семьдесят",
+      "uz" : "yetmish"
+    },
+    {
+      "en" : "seventy-five",
+      "id" : "n_75",
+      "ru" : "семьдесят пять",
+      "uz" : "yetmish besh"
+    },
+    {
+      "en" : "eighty",
+      "id" : "n_80",
+      "ru" : "восемьдесят",
+      "uz" : "sakson"
+    },
+    {
+      "en" : "eighty-five",
+      "id" : "n_85",
+      "ru" : "восемьдесят пять",
+      "uz" : "sakson besh"
+    },
+    {
+      "en" : "ninety",
+      "id" : "n_90",
+      "ru" : "девяносто",
+      "uz" : "to‘qson"
+    },
+    {
+      "en" : "ninety-five",
+      "id" : "n_95",
+      "ru" : "девяносто пять",
+      "uz" : "to‘qson besh"
+    },
+    {
+      "en" : "one hundred",
+      "id" : "n_100",
+      "ru" : "сто",
+      "uz" : "yuz"
+    },
+    {
+      "en" : "one hundred five",
+      "id" : "n_105",
+      "ru" : "сто пять",
+      "uz" : "yuz besh"
+    },
+    {
+      "en" : "one hundred ten",
+      "id" : "n_110",
+      "ru" : "сто десять",
+      "uz" : "yuz o‘n"
+    },
+    {
+      "en" : "one hundred fifteen",
+      "id" : "n_115",
+      "ru" : "сто пятнадцать",
+      "uz" : "yuz o‘n besh"
+    },
+    {
+      "en" : "one hundred twenty",
+      "id" : "n_120",
+      "ru" : "сто двадцать",
+      "uz" : "yuz yigirma"
+    },
+    {
+      "en" : "one hundred twenty-five",
+      "id" : "n_125",
+      "ru" : "сто двадцать пять",
+      "uz" : "yuz yigirma besh"
+    },
+    {
+      "en" : "one hundred thirty",
+      "id" : "n_130",
+      "ru" : "сто тридцать",
+      "uz" : "yuz o‘ttiz"
+    },
+    {
+      "en" : "one hundred fifty",
+      "id" : "n_150",
+      "ru" : "сто пятьдесят",
+      "uz" : "yuz ellik"
+    },
+    {
+      "en" : "two hundred",
+      "id" : "n_200",
+      "ru" : "двести",
+      "uz" : "ikki yuz"
+    },
+    {
+      "en" : "two hundred fifty",
+      "id" : "n_250",
+      "ru" : "двести пятьдесят",
+      "uz" : "ikki yuz ellik"
+    },
+    {
+      "en" : "three hundred",
+      "id" : "n_300",
+      "ru" : "триста",
+      "uz" : "uch yuz"
+    },
+    {
+      "en" : "four hundred",
+      "id" : "n_400",
+      "ru" : "четыреста",
+      "uz" : "to‘rt yuz"
+    },
+    {
+      "en" : "five hundred",
+      "id" : "n_500",
+      "ru" : "пятьсот",
+      "uz" : "besh yuz"
+    },
+    {
+      "en" : "six hundred",
+      "id" : "n_600",
+      "ru" : "шестьсот",
+      "uz" : "olti yuz"
+    },
+    {
+      "en" : "seven hundred",
+      "id" : "n_700",
+      "ru" : "семьсот",
+      "uz" : "yetti yuz"
+    },
+    {
+      "en" : "eight hundred",
+      "id" : "n_800",
+      "ru" : "восемьсот",
+      "uz" : "sakkiz yuz"
+    },
+    {
+      "en" : "nine hundred",
+      "id" : "n_900",
+      "ru" : "девятьсот",
+      "uz" : "to‘qqiz yuz"
+    },
+    {
+      "en" : "one and a half",
+      "id" : "n_1_5",
+      "ru" : "полтора",
+      "uz" : "bir yarim"
+    },
+    {
+      "en" : "two and a half",
+      "id" : "n_2_5",
+      "ru" : "два с половиной",
+      "uz" : "ikki yarim"
+    }
+  ],
+  "fileName" : "<lang>_<id>.m4a",
+  "languages" : [
+    "uz",
+    "ru",
+    "en"
+  ],
+  "version" : 1,
+  "voices" : {
+    "en" : [
+      "en-US-JennyNeural",
+      "en-US-GuyNeural"
+    ],
+    "ru" : [
+      "ru-RU-SvetlanaNeural",
+      "ru-RU-DmitryNeural"
+    ],
+    "uz" : [
+      "uz-UZ-MadinaNeural",
+      "uz-UZ-SardorNeural"
+    ]
+  }
+}

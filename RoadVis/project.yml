@@ -1,0 +1,169 @@
+# XcodeGen fallback for RoadVis (https://github.com/yonaskolb/XcodeGen).
+#
+# The repository already contains a hand-written RoadVis.xcodeproj. Use this file only if that project
+# does not open or build in your Xcode version:
+#
+#   brew install xcodegen          # XcodeGen 2.43+ (synced folders need projectFormat xcode16_0)
+#   cd RoadVis && xcodegen generate
+#
+# It regenerates RoadVis.xcodeproj with the same single app target, the same two synchronized
+# ("buildable") folders and the same build settings. XcodeGen also rewrites Config/Info.plist from
+# `info.properties` below (adding the standard CFBundle* keys), which is expected.
+
+name: RoadVis
+
+options:
+  projectFormat: xcode16_0
+  xcodeVersion: "26.0"
+  developmentLanguage: ru
+  deploymentTarget:
+    iOS: "17.0"
+  groupSortPosition: top
+
+packages:
+  # MapLibre Native (BSD-2) for the navigator / trip maps over free OpenFreeMap vector tiles (no API key).
+  MapLibre:
+    url: https://github.com/maplibre/maplibre-gl-native-distribution
+    exactVersion: 6.31.0
+
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    IPHONEOS_DEPLOYMENT_TARGET: "17.0"
+    ENABLE_USER_SCRIPT_SANDBOXING: YES
+    LOCALIZATION_PREFERS_STRING_CATALOGS: YES
+    ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS: YES
+    CLANG_ANALYZER_NONNULL: YES
+    CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION: YES_AGGRESSIVE
+    CLANG_CXX_LANGUAGE_STANDARD: "gnu++20"
+    CLANG_ENABLE_MODULES: YES
+    CLANG_ENABLE_OBJC_ARC: YES
+    CLANG_ENABLE_OBJC_WEAK: YES
+    CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING: YES
+    CLANG_WARN_BOOL_CONVERSION: YES
+    CLANG_WARN_COMMA: YES
+    CLANG_WARN_CONSTANT_CONVERSION: YES
+    CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS: YES
+    CLANG_WARN_DIRECT_OBJC_ISA_USAGE: YES_ERROR
+    CLANG_WARN_DOCUMENTATION_COMMENTS: YES
+    CLANG_WARN_EMPTY_BODY: YES
+    CLANG_WARN_ENUM_CONVERSION: YES
+    CLANG_WARN_INFINITE_RECURSION: YES
+    CLANG_WARN_INT_CONVERSION: YES
+    CLANG_WARN_NON_LITERAL_NULL_CONVERSION: YES
+    CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF: YES
+    CLANG_WARN_OBJC_LITERAL_CONVERSION: YES
+    CLANG_WARN_OBJC_ROOT_CLASS: YES_ERROR
+    CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER: YES
+    CLANG_WARN_RANGE_LOOP_ANALYSIS: YES
+    CLANG_WARN_STRICT_PROTOTYPES: YES
+    CLANG_WARN_SUSPICIOUS_MOVE: YES
+    CLANG_WARN_UNGUARDED_AVAILABILITY: YES_AGGRESSIVE
+    CLANG_WARN_UNREACHABLE_CODE: YES
+    CLANG_WARN__DUPLICATE_METHOD_MATCH: YES
+    GCC_C_LANGUAGE_STANDARD: gnu17
+    GCC_NO_COMMON_BLOCKS: YES
+    GCC_WARN_64_TO_32_BIT_CONVERSION: YES
+    GCC_WARN_ABOUT_RETURN_TYPE: YES_ERROR
+    GCC_WARN_UNDECLARED_SELECTOR: YES
+    GCC_WARN_UNINITIALIZED_AUTOS: YES_AGGRESSIVE
+    GCC_WARN_UNUSED_FUNCTION: YES
+    GCC_WARN_UNUSED_VARIABLE: YES
+    MTL_FAST_MATH: YES
+  configs:
+    Debug:
+      DEBUG_INFORMATION_FORMAT: dwarf
+      ENABLE_TESTABILITY: YES
+      GCC_OPTIMIZATION_LEVEL: "0"
+      ONLY_ACTIVE_ARCH: YES
+      SWIFT_ACTIVE_COMPILATION_CONDITIONS: "DEBUG $(inherited)"
+      SWIFT_OPTIMIZATION_LEVEL: "-Onone"
+    Release:
+      DEBUG_INFORMATION_FORMAT: dwarf-with-dsym
+      ENABLE_NS_ASSERTIONS: NO
+      SWIFT_COMPILATION_MODE: wholemodule
+      VALIDATE_PRODUCT: YES
+
+targets:
+  RoadVis:
+    type: application
+    platform: iOS
+    deploymentTarget: "17.0"
+    sources:
+      # App folder: Swift sources, Assets.xcassets and Models/*.mlpackage (compiled to .mlmodelc by Xcode).
+      - path: RoadVis
+        type: syncedFolder
+        excludes:
+          - "Models/README.md"
+      # Platform-independent core logic, compiled directly into the app target (no `import RoadVisCore`).
+      - path: Packages/RoadVisCore/Sources/RoadVisCore
+        name: RoadVisCore
+        type: syncedFolder
+      - path: Config/Info.plist
+        buildPhase: none
+      - path: README.md
+        buildPhase: none
+    dependencies:
+      - package: MapLibre
+        product: MapLibre
+    info:
+      path: Config/Info.plist
+      properties:
+        UIBackgroundModes: [location, audio, processing]
+        # Continuous learning: background upload of collected frames (LearningBackgroundTasks.identifier).
+        BGTaskSchedulerPermittedIdentifiers: [uz.roadvis.RoadVis.learning.upload]
+        UIFileSharingEnabled: true
+        LSSupportsOpeningDocumentsInPlace: true
+        # Keep in sync with the hand-written Config/Info.plist: XcodeGen rewrites the file from these properties.
+        UILaunchScreen:
+          UIColorName: LaunchBackground
+          UIImageName: SplashLogo
+          UIImageRespectsSafeAreaInsets: false
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: uz.roadvis.RoadVis
+        PRODUCT_NAME: "$(TARGET_NAME)"
+        INFOPLIST_FILE: Config/Info.plist
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_CFBundleDisplayName: RoadVis
+        INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.navigation
+        INFOPLIST_KEY_NSCameraUsageDescription: "Камера нужна для распознавания транспортных средств, светофоров и пешеходов на дороге и для сканирования QR-кода входа на сайт RoadVis."
+        INFOPLIST_KEY_NSLocationWhenInUseUsageDescription: "Геопозиция нужна для скорости движения, навигации, данных о полосах и ограничениях скорости."
+        INFOPLIST_KEY_NSLocationAlwaysAndWhenInUseUsageDescription: "Во время навигации геопозиция используется и в фоне, чтобы подсказки продолжали работать."
+        INFOPLIST_KEY_UIApplicationSceneManifest_Generation: YES
+        INFOPLIST_KEY_UILaunchScreen_Generation: NO
+        INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents: YES
+        INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone: "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight"
+        INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad: "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight"
+        IPHONEOS_DEPLOYMENT_TARGET: "17.0"
+        SWIFT_VERSION: "5.0"
+        TARGETED_DEVICE_FAMILY: "1,2"
+        SUPPORTED_PLATFORMS: "iphoneos iphonesimulator"
+        SUPPORTS_MACCATALYST: NO
+        SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD: NO
+        SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD: NO
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
+        CODE_SIGN_STYLE: Automatic
+        # Models are loaded by bundle resource name; no generated Swift classes (avoids type-name clashes).
+        COREML_CODEGEN_LANGUAGE: None
+        DEVELOPMENT_TEAM: ""
+        CURRENT_PROJECT_VERSION: "1"
+        MARKETING_VERSION: "1.0"
+        ENABLE_PREVIEWS: YES
+        LD_RUNPATH_SEARCH_PATHS: ["$(inherited)", "@executable_path/Frameworks"]
+        SWIFT_EMIT_LOC_STRINGS: YES
+
+schemes:
+  RoadVis:
+    build:
+      targets:
+        RoadVis: all
+    run:
+      config: Debug
+    profile:
+      config: Release
+    analyze:
+      config: Debug
+    archive:
+      config: Release

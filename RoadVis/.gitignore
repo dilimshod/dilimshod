@@ -1,0 +1,19 @@
+# Swift / Xcode
+.build/
+.swiftpm/
+DerivedData/
+xcuserdata/
+*.xcuserstate
+*.moved-aside
+# Python tooling / model export
+__pycache__/
+*.pyc
+.venv/
+venv/
+runs/
+datasets/
+*.pt
+*.onnx
+build/
+# Microsoft Edge neural voice clips (tools/generate_voice_clips.py): personal testing only, do not publish
+RoadVis/VoiceClips/

@@ -1,0 +1,16 @@
+{
+  "version": 0.6,
+  "generator": "RoadVis test fixture (hand-written in Overpass API 0.7.62 JSON format: partial result with runtime remark)",
+  "osm3s": {
+    "timestamp_osm_base": "2026-11-25T14:20:31Z",
+    "copyright": "The data included in this document is from www.openstreetmap.org. The data is made available under ODbL."
+  },
+  "elements": [
+    {"type": "node", "id": 1150000101, "lat": 41.3115049, "lon": 69.2811128, "tags": {"highway": "traffic_signals"}},
+    {"type": "area", "id": 3600000001, "tags": {"name": "Toshkent"}},
+    {"type": "count", "id": 0, "tags": {"nodes": "1", "ways": "0", "relations": "0", "total": "1"}},
+    {"type": "way", "id": 23710099, "geometry": [null, {"lat": 41.3120, "lon": 69.2800}, {"lat": 41.3125, "lon": 69.2801}], "tags": {"highway": "service"}},
+    {"type": "node", "lat": 41.0, "lon": 69.0}
+  ],
+  "remark": "runtime error: Query timed out in \"query\" at line 3 after 26 seconds."
+}

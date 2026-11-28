@@ -1,0 +1,561 @@
+import Foundation
+
+// MARK: - Road surface
+
+/// Road surface condition used to scale the recommended following distance.
+public enum RoadSurfaceCondition: String, Codable, Hashable, Sendable, CaseIterable {
+    case dry, wet, snow, ice
+
+    public var displayName: String {
+        switch self {
+        case .dry: return "Сухо"
+        case .wet: return "Мокро"
+        case .snow: return "Снег"
+        case .ice: return "Гололёд"
+        }
+    }
+
+    public var symbolName: String {
+        switch self {
+        case .dry: return "sun.max.fill"
+        case .wet: return "cloud.rain.fill"
+        case .snow: return "snowflake"
+        case .ice: return "thermometer.snowflake"
+        }
+    }
+
+    /// Typical tyre–road friction coefficient for braking (engineering approximation: dry ≈ 0.7 per the UK Highway Code
+    /// stopping-distance table, wet 0.35 per AASHTO's 3.4 m/s² design deceleration, snow ≈ 0.2 and ice ≈ 0.1 per PIARC curves).
+    public var frictionCoefficient: Double {
+        switch self {
+        case .dry: return 0.7
+        case .wet: return 0.35
+        case .snow: return 0.2
+        case .ice: return 0.1
+        }
+    }
+
+    /// Guesses the surface from Open-Meteo current weather (WMO code, °C, mm of precipitation).
+    public static func from(weatherCode: Int?, temperatureC: Double?, precipitationMm: Double?) -> RoadSurfaceCondition {
+        let code = weatherCode ?? 0
+        let temp = temperatureC ?? 15
+        let precip = precipitationMm ?? 0
+        let freezing: Set<Int> = [56, 57, 66, 67]
+        let snow: Set<Int> = [71, 73, 75, 77, 85, 86]
+        let rain: Set<Int> = [51, 53, 55, 61, 63, 65, 80, 81, 82, 95, 96, 97, 99]
+        if freezing.contains(code) || (temp <= 0 && rain.contains(code)) || (code == 48 && temp <= 0) {
+            return .ice
+        }
+        if snow.contains(code) { return temp <= -2 ? .ice : .snow }
+        if rain.contains(code) || precip > 0.1 { return temp <= 1 ? .ice : .wet }
+        return .dry
+    }
+}
+
+// MARK: - Policy
+
+/// Following-distance settings. Defaults are RECOMMENDATIONS, not legal norms — the Uzbek traffic rules (п.73) require a
+/// safe distance without giving a number: 2 s in the dry and at least double (4 s) on wet roads (UK Highway Code rule 126),
+/// up to ten times on ice (rule 126: "up to ten times greater"), 6 s on snow (app choice), ≥ 2 m when standing (app choice).
+public struct FollowingDistancePolicy: Codable, Hashable, Sendable {
+    public var timeGapDry: Double
+    public var timeGapWet: Double
+    public var timeGapSnow: Double
+    public var timeGapIce: Double
+    /// Minimum gap to the vehicle ahead when standing (queue, traffic light), metres.
+    public var stoppedGapMeters: Double
+    /// Driver reaction time used for the stopping-distance estimate, seconds.
+    public var reactionTimeSeconds: Double
+    /// Below this own speed the car is considered standing, km/h.
+    public var stoppedSpeedKmh: Double
+    /// Forward-collision warning threshold (time to collision), seconds.
+    public var collisionWarningSeconds: Double
+
+    public init(timeGapDry: Double = 2, timeGapWet: Double = 4, timeGapSnow: Double = 6, timeGapIce: Double = 10,
+                stoppedGapMeters: Double = 2, reactionTimeSeconds: Double = 1,
+                stoppedSpeedKmh: Double = 5, collisionWarningSeconds: Double = 2.5) {
+        self.timeGapDry = timeGapDry
+        self.timeGapWet = timeGapWet
+        self.timeGapSnow = timeGapSnow
+        self.timeGapIce = timeGapIce
+        self.stoppedGapMeters = stoppedGapMeters
+        self.reactionTimeSeconds = reactionTimeSeconds
+        self.stoppedSpeedKmh = stoppedSpeedKmh
+        self.collisionWarningSeconds = collisionWarningSeconds
+    }
+
+    public func timeGap(for condition: RoadSurfaceCondition) -> Double {
+        switch condition {
+        case .dry: return timeGapDry
+        case .wet: return timeGapWet
+        case .snow: return timeGapSnow
+        case .ice: return timeGapIce
+        }
+    }
+}
+
+// MARK: - Assessment
+
+public enum DistanceStatus: String, Codable, Hashable, Sendable {
+    case safe, caution, danger, unknown
+
+    public var displayName: String {
+        switch self {
+        case .safe: return "Дистанция в норме"
+        case .caution: return "Мала дистанция"
+        case .danger: return "Опасно близко"
+        case .unknown: return "Нет данных"
+        }
+    }
+}
+
+public struct FollowingDistanceAssessment: Hashable, Sendable {
+    public var distanceMeters: Double?
+    public var ownSpeedKmh: Double?
+    public var isStopped: Bool
+    public var condition: RoadSurfaceCondition
+    /// Recommended minimum gap for the current state, metres.
+    public var recommendedDistanceMeters: Double
+    /// Recommended time gap (moving) — nil when stopped.
+    public var recommendedTimeGapSeconds: Double?
+    /// Estimated stopping distance = reaction distance + braking distance, metres (moving only).
+    public var stoppingDistanceMeters: Double?
+    /// Time headway = distance / own speed, seconds (moving only).
+    public var timeHeadwaySeconds: Double?
+    /// Closing speed, km/h; positive = the gap is shrinking.
+    public var closingSpeedKmh: Double?
+    /// Time to collision at the current closing speed, seconds (only when closing).
+    public var timeToCollisionSeconds: Double?
+    /// distance / recommended (1 = exactly the recommended gap).
+    public var fractionOfRecommended: Double?
+    public var status: DistanceStatus
+
+    public var isCollisionWarning: Bool {
+        status == .danger && (timeToCollisionSeconds ?? .infinity) < .infinity
+    }
+}
+
+public enum FollowingDistanceCalculator {
+    /// S = v·t_r + v² / (2·μ·g), metres.
+    public static func stoppingDistance(speedKmh: Double, reactionTime: Double, friction: Double) -> Double {
+        let v = max(0, speedKmh) / 3.6
+        let mu = max(0.05, friction)
+        return v * max(0, reactionTime) + v * v / (2 * mu * 9.81)
+    }
+
+    /// Recommended minimum gap: own speed × time gap while moving (never below the stopped gap), stopped gap otherwise.
+    public static func recommendedDistance(speedKmh: Double?, policy: FollowingDistancePolicy,
+                                           condition: RoadSurfaceCondition) -> Double {
+        let speed = max(0, speedKmh ?? 0)
+        guard speed >= policy.stoppedSpeedKmh else { return policy.stoppedGapMeters }
+        return max(policy.stoppedGapMeters, speed / 3.6 * policy.timeGap(for: condition))
+    }
+
+    /// - Parameter relativeSpeedKmh: rate of change of the gap (positive = lead pulling away), from the lead tracker.
+    public static func assess(distanceMeters: Double?, ownSpeedKmh: Double?, relativeSpeedKmh: Double?,
+                              policy: FollowingDistancePolicy, condition: RoadSurfaceCondition) -> FollowingDistanceAssessment {
+        let speed = ownSpeedKmh.map { max(0, $0) }
+        // Unknown own speed (no GPS fix: tunnel, first seconds) is NOT "standing still": the gap norm cannot be
+        // judged then, but the collision branch below still works from the camera closing speed.
+        let stopped = speed.map { $0 < policy.stoppedSpeedKmh } ?? false
+        let recommended = recommendedDistance(speedKmh: speed, policy: policy, condition: condition)
+        var a = FollowingDistanceAssessment(distanceMeters: distanceMeters, ownSpeedKmh: speed, isStopped: stopped,
+                                            condition: condition, recommendedDistanceMeters: recommended,
+                                            recommendedTimeGapSeconds: (stopped || speed == nil) ? nil : policy.timeGap(for: condition),
+                                            stoppingDistanceMeters: nil, timeHeadwaySeconds: nil,
+                                            closingSpeedKmh: nil, timeToCollisionSeconds: nil,
+                                            fractionOfRecommended: nil, status: .unknown)
+        if let s = speed, !stopped {
+            a.stoppingDistanceMeters = stoppingDistance(speedKmh: s, reactionTime: policy.reactionTimeSeconds,
+                                                        friction: condition.frictionCoefficient)
+        }
+        guard let d = distanceMeters, d.isFinite, d > 0 else { return a }
+
+        if let s = speed, !stopped { a.timeHeadwaySeconds = d / (s / 3.6) }
+        if let rel = relativeSpeedKmh {
+            let closing = -rel
+            a.closingSpeedKmh = closing
+            if closing > 3 {   // ignore noise below 3 km/h
+                a.timeToCollisionSeconds = d / (closing / 3.6)
+            }
+        }
+        let collision = (a.timeToCollisionSeconds ?? .infinity) < policy.collisionWarningSeconds
+        guard speed != nil else {
+            // Own speed unknown: `fractionOfRecommended` stays nil so the tailgating monitor / "too close" coach do
+            // not fire against the 2 m stopped norm; only the time-to-collision can raise a warning.
+            a.status = collision ? .danger : .unknown
+            return a
+        }
+        let fraction = d / max(0.1, recommended)
+        a.fractionOfRecommended = fraction
+
+        if collision, !stopped {
+            a.status = .danger
+        } else if fraction >= 1 {
+            a.status = .safe
+        } else if fraction >= 0.5 {
+            a.status = .caution
+        } else {
+            a.status = .danger
+        }
+        return a
+    }
+}
+
+// MARK: - Lead vehicle
+
+/// Trapezoidal region of the image where the own lane is expected (normalized coordinates, y down).
+public struct EgoCorridor: Hashable, Codable, Sendable {
+    public var centerX: Double
+    /// Approximate horizon line (fraction of image height); nothing above it is "in our lane".
+    public var horizonY: Double
+    /// Half width of the corridor at the bottom edge (fraction of image width).
+    public var bottomHalfWidth: Double
+    /// Half width at the horizon.
+    public var horizonHalfWidth: Double
+
+    public init(centerX: Double = 0.5, horizonY: Double = 0.42, bottomHalfWidth: Double = 0.24, horizonHalfWidth: Double = 0.04) {
+        self.centerX = centerX
+        self.horizonY = horizonY
+        self.bottomHalfWidth = bottomHalfWidth
+        self.horizonHalfWidth = horizonHalfWidth
+    }
+
+    public static let `default` = EgoCorridor()
+
+    /// Half width of the corridor at image row y.
+    public func halfWidth(atY y: Double) -> Double {
+        guard y > horizonY else { return 0 }
+        let t = min(1, (y - horizonY) / max(0.01, 1 - horizonY))
+        return horizonHalfWidth + (bottomHalfWidth - horizonHalfWidth) * t
+    }
+
+    /// True when the box's bottom edge overlaps the corridor at its row.
+    public func contains(_ box: BBox) -> Bool {
+        let y = min(1, box.maxY)
+        let hw = halfWidth(atY: y)
+        guard hw > 0 else { return false }
+        let left = centerX - hw, right = centerX + hw
+        let overlap = min(right, box.maxX) - max(left, box.minX)
+        // Require the box centre inside, or at least 40 % of the box width overlapping.
+        return (box.midX >= left && box.midX <= right) || overlap >= 0.4 * box.width
+    }
+
+    /// Normalized lateral offset of the box centre from the corridor centre at the box's bottom row
+    /// (0 = centred, 1 = on the corridor edge); nil above the horizon.
+    public func lateralOffset(_ box: BBox) -> Double? {
+        let hw = halfWidth(atY: min(1, box.maxY))
+        guard hw > 0 else { return nil }
+        return abs(box.midX - centerX) / hw
+    }
+
+    /// Fraction of the box width that overlaps the corridor at the box's bottom row (0…1).
+    public func overlapFraction(_ box: BBox) -> Double {
+        let hw = halfWidth(atY: min(1, box.maxY))
+        guard hw > 0, box.width > 0 else { return 0 }
+        let overlap = min(centerX + hw, box.maxX) - max(centerX - hw, box.minX)
+        return max(0, min(1, overlap / box.width))
+    }
+
+    /// Strictly ahead: the box centre lies within `centerFraction` × the corridor half-width at the box's bottom row,
+    /// or at least `minOverlap` of the box width overlaps the corridor. Stricter than `contains(_:)` (used for the
+    /// lead vehicle so a car in the adjacent lane is not picked).
+    public func isStrictlyAhead(_ box: BBox, centerFraction: Double = 0.6, minOverlap: Double = 0.6) -> Bool {
+        guard let offset = lateralOffset(box) else { return false }
+        return offset <= centerFraction || overlapFraction(box) >= minOverlap
+    }
+
+    /// Frame aspect (width : height) the default half widths are tuned for.
+    public static let referenceAspect: Double = 16.0 / 9.0
+    /// Upper bound of the aspect compensation (a 9:16 portrait frame needs ≈ 3.16).
+    public static let maxAspectScale: Double = 4
+
+    /// How much wider (in fractions of the image WIDTH) the own lane is at a given row of a frame of this size
+    /// than in the 16:9 landscape frame the defaults are tuned for. On flat ground the lane width at a row is
+    /// `lane_m / cameraHeight_m × (y − horizon) × H / W` image widths — independent of the field of view — so it
+    /// scales with H / W: 1 for 16:9 landscape, (16/9)² ≈ 3.16 for 9:16 portrait. Never below 1.
+    public static func aspectScale(imageWidth: Double, imageHeight: Double) -> Double {
+        guard imageWidth > 0, imageHeight > 0, imageWidth.isFinite, imageHeight.isFinite else { return 1 }
+        return min(maxAspectScale, max(1, (imageHeight / imageWidth) * referenceAspect))
+    }
+
+    /// Own-lane corridor for a frame of the given size: the 16:9 landscape defaults with the bottom half width
+    /// compensated for the frame aspect (`aspectScale`). In portrait the bottom half width exceeds 0.5 — that is
+    /// intended (the lane is wider than the picture at the bottom edge); it is only compared, and drawing clips.
+    /// With the fixed landscape widths a portrait corridor was only ≈ 0.4–0.5 m wide at 5–10 m (derived from the
+    /// flat-ground geometry above, camera 1.2 m high; not measured on a device).
+    public static func forFrame(centerX: Double = 0.5, horizonY: Double = 0.42, imageWidth: Double,
+                                imageHeight: Double) -> EgoCorridor {
+        var corridor = EgoCorridor(centerX: centerX, horizonY: horizonY)
+        let scale = aspectScale(imageWidth: imageWidth, imageHeight: imageHeight)
+        corridor.bottomHalfWidth = corridor.horizonHalfWidth + (corridor.bottomHalfWidth - corridor.horizonHalfWidth) * scale
+        return corridor
+    }
+
+    /// Corridor polygon (bottom-left, top-left, top-right, bottom-right) for drawing.
+    public var polygon: [(x: Double, y: Double)] {
+        [(centerX - bottomHalfWidth, 1), (centerX - horizonHalfWidth, horizonY),
+         (centerX + horizonHalfWidth, horizonY), (centerX + bottomHalfWidth, 1)]
+    }
+}
+
+/// The vehicle directly ahead in the own lane, with a fused distance estimate.
+public struct LeadVehicle: Hashable, Sendable {
+    public var trackID: Int
+    public var kind: VehicleKind
+    public var box: BBox
+    /// Smoothed gap from the own FRONT BUMPER to the lead's rear, metres (≈, single camera):
+    /// `cameraDistanceMeters − cameraToBumperMeters` (bonnet length).
+    public var distanceMeters: Double
+    /// Smoothed distance from the camera (windscreen) to the lead's rear, metres (≈).
+    public var cameraDistanceMeters: Double = 0
+    /// Rate of change of the gap, km/h (positive = pulling away), nil until enough samples.
+    public var relativeSpeedKmh: Double?
+    /// Which cues were used: "ширина+высота", "ширина", "высота".
+    public var method: String
+}
+
+/// Selects the lead vehicle — the vehicle directly AHEAD in the own lane, not one in the adjacent lane — and estimates
+/// its distance by fusing the apparent width and height of its box with typical vehicle dimensions.
+///
+/// Selection: only confirmed vehicles seen on this frame (or coasted by the tracker for ≤ `coastMissed` frames — then
+/// only the current lead, whose last measured distance is repeated) that are strictly ahead (`EgoCorridor.isStrictlyAhead`) and
+/// whose box does not touch the left / right frame edge (a car passing in the adjacent lane) are candidates. Among them
+/// the lowest score wins: closeness rank (boxes whose bottom edges are within `rankTolerance` share a rank) plus
+/// `lateralPenalty` × the normalized lateral offset, so a centred car beats a slightly closer off-centre one — but a
+/// candidate that is clearly nearer (`dominanceRatio`) always beats a farther one, however centred that one is. The
+/// current lead is kept (hysteresis) unless another candidate scores better by `switchMargin`; it is dropped at once
+/// when it leaves the strict zone.
+public final class LeadVehicleTracker {
+    public struct SelectionConfig: Hashable, Sendable {
+        /// Box centre within this fraction of the corridor half-width at its bottom row counts as "ahead".
+        public var centerFraction: Double = 0.6
+        /// …or at least this fraction of the box width overlapping the corridor.
+        public var minOverlap: Double = 0.6
+        /// Boxes touching the left / right frame edge (within this margin) are never selected.
+        public var edgeMargin: Double = 0.01
+        /// Score weight of the normalized lateral offset (0 = centred, 1 = corridor edge); one closeness rank = 1.
+        public var lateralPenalty: Double = 2
+        /// Bottom edges closer than this (fraction of the height) share a closeness rank.
+        public var rankTolerance: Double = 0.03
+        /// A candidate whose bottom edge is this many times farther below the horizon than another's (≈ that many
+        /// times nearer on flat ground — distance ∝ 1 / (maxY − horizonY), orientation independent) always beats it,
+        /// whatever the lateral offsets. 1.5 keeps "centred car beats a slightly closer off-centre one" (ratio 1.16
+        /// in the existing test) and makes a car at 8 m beat a centred one at 25 m (ratio ≈ 3.1). Reasoning, not tuned
+        /// on video.
+        public var dominanceRatio: Double = 1.5
+        /// Another candidate must score better by this to replace the current lead.
+        public var switchMargin: Double = 0.5
+
+        public init() {}
+    }
+
+    public var corridor: EgoCorridor
+    public var selection: SelectionConfig
+    /// Distance from the camera to the own front bumper (bonnet length + mount offset), metres. The camera on the
+    /// windscreen sees the lead from ~2 m behind the bumper, so the reported gap subtracts this.
+    public var cameraToBumperMeters: Double = 0
+    private var currentID: Int?
+    /// Class of the current lead: the distance cue uses typical sizes per class, so a class-vote flip
+    /// (truck ↔ car on one track) restarts the smoothing instead of being read as a closing speed.
+    private var currentKind: VehicleKind?
+    private var smoothed: Double?
+    private var samples: [(t: TimeInterval, d: Double)] = []
+    private var lostSince: TimeInterval?
+    /// Box, cue description and closing speed of the last frame on which the lead was really detected.
+    private var lastBox: BBox?
+    private var lastMethod: String?
+    private var lastRelativeSpeedKmh: Double?
+
+    /// A coasted track (`TrackedObject.missed` ≥ 1, box predicted by `ObjectTracker`) may stay / become the lead for
+    /// this many missed frames. Same replay measurement as `ObjectTracker.Config.defaultCoastFrames`: lead dropouts
+    /// shorter than 1 s fell from 262 to 53 and lead ID switches from 62 to 32 with 3 frames.
+    public var coastMissed: Int = ObjectTracker.Config.defaultCoastFrames
+    /// When the lead's track ID changes but the new box overlaps the previous lead box at least this much (and the
+    /// class is the same), it is the same vehicle under a new ID: the smoothed distance and the closing-speed
+    /// samples are kept. Reasoning, not measured.
+    public var sameVehicleIoU: Double = 0.5
+
+    public init(corridor: EgoCorridor = .default, selection: SelectionConfig = SelectionConfig()) {
+        self.corridor = corridor
+        self.selection = selection
+    }
+
+    public func reset() {
+        currentID = nil
+        currentKind = nil
+        smoothed = nil
+        samples.removeAll()
+        lostSince = nil
+        lastBox = nil
+        lastMethod = nil
+        lastRelativeSpeedKmh = nil
+    }
+
+    /// Raw (unsmoothed) distance for a box, or nil when no cue is usable.
+    public static func rawDistance(for kind: VehicleKind, box: BBox, geometry: CameraGeometry) -> (Double, String)? {
+        let f = geometry.focalLengthPixels
+        var estimates: [Double] = []
+        var cues: [String] = []
+        let widthTruncated = box.minX <= 0.005 || box.maxX >= 0.995
+        let heightTruncated = box.maxY >= 0.985 || box.minY <= 0.005
+        if let w = kind.typicalWidthMeters, !widthTruncated, box.width > 0.01, geometry.imageWidth > 0 {
+            estimates.append(f * w / (box.width * geometry.imageWidth))
+            cues.append("ширина")
+        }
+        if let h = kind.typicalHeightMeters, !heightTruncated, box.height > 0.01, geometry.imageHeight > 0 {
+            estimates.append(f * h / (box.height * geometry.imageHeight))
+            cues.append("высота")
+        }
+        guard !estimates.isEmpty else {
+            // Box fills the frame (very close): use the width cue even if truncated as an upper bound.
+            if let w = kind.typicalWidthMeters, box.width > 0.01, geometry.imageWidth > 0 {
+                return (f * w / (box.width * geometry.imageWidth), "ширина (обрезано)")
+            }
+            return nil
+        }
+        let d = estimates.reduce(0, +) / Double(estimates.count)
+        return (d, cues.joined(separator: "+"))
+    }
+
+    public func update(tracks: [TrackedObject], geometry: CameraGeometry, timestamp: TimeInterval) -> LeadVehicle? {
+        var chosen = selectLead(from: tracks)
+        if let coasted = chosen, coasted.missed > 0,
+           !(coasted.id == currentID && coasted.kind == currentKind && smoothed != nil) {
+            // Only the CURRENT lead may be bridged by a predicted box. Any other coasted track has no measured
+            // distance and must not hide a vehicle that is really detected on this frame.
+            chosen = selectLead(from: tracks.filter { $0.missed == 0 })
+        }
+        if let lead = chosen, lead.missed > 0 {
+            // Coasted lead: the box is a prediction. Show the last smoothed distance and do NOT add a sample, so
+            // neither the distance nor the closing-speed regression is fed by extrapolated boxes.
+            guard lead.id == currentID, lead.kind == currentKind, let value = smoothed else {
+                // A coasted track that was not the lead on its last detected frame has no measured distance.
+                if lostSince == nil { lostSince = timestamp }
+                if let since = lostSince, timestamp - since > 0.8 { reset() }
+                return nil
+            }
+            lostSince = nil
+            let gap = max(0.2, value - max(0, cameraToBumperMeters))
+            return LeadVehicle(trackID: lead.id, kind: lead.kind, box: lead.box, distanceMeters: gap,
+                               cameraDistanceMeters: value, relativeSpeedKmh: lastRelativeSpeedKmh,
+                               method: lastMethod ?? "")
+        }
+        guard let lead = chosen, let (raw, method) = Self.rawDistance(for: lead.kind, box: lead.box, geometry: geometry),
+              raw.isFinite, raw > 0.3, raw < 150 else {
+            if lostSince == nil { lostSince = timestamp }
+            if let since = lostSince, timestamp - since > 0.8 { reset() }
+            return nil
+        }
+        lostSince = nil
+        if lead.id != currentID || lead.kind != currentKind {
+            // Same vehicle under a new track ID (the old track was lost and the detector re-found the car where it
+            // was): keep the smoothing. A class change always restarts it (different typical sizes).
+            let sameVehicle = lead.kind == currentKind && (lastBox.map { $0.iou(lead.box) >= sameVehicleIoU } ?? false)
+            currentID = lead.id
+            currentKind = lead.kind
+            if !sameVehicle {
+                smoothed = nil
+                samples.removeAll()
+            }
+        }
+        lastBox = lead.box
+        lastMethod = method
+        let alpha = 0.35
+        let value = smoothed.map { $0 + alpha * (raw - $0) } ?? raw
+        smoothed = value
+        samples.append((timestamp, value))
+        samples.removeAll { timestamp - $0.t > 1.2 }
+
+        var rel: Double?
+        if samples.count >= 4, let first = samples.first, timestamp - first.t >= 0.5 {
+            let n = Double(samples.count)
+            let mt = samples.reduce(0) { $0 + $1.t } / n
+            let md = samples.reduce(0) { $0 + $1.d } / n
+            var num = 0.0, den = 0.0
+            for s in samples {
+                num += (s.t - mt) * (s.d - md)
+                den += (s.t - mt) * (s.t - mt)
+            }
+            if den > 1e-9 {
+                let kmh = num / den * 3.6
+                if abs(kmh) < 150 { rel = kmh }
+            }
+        }
+        lastRelativeSpeedKmh = rel
+        let gap = max(0.2, value - max(0, cameraToBumperMeters))
+        return LeadVehicle(trackID: lead.id, kind: lead.kind, box: lead.box, distanceMeters: gap,
+                           cameraDistanceMeters: value, relativeSpeedKmh: rel, method: method)
+    }
+}
+
+extension EgoCorridor {
+    /// Next smoothed corridor centre X: moves toward `LaneEstimate.laneCenterX` (clamped to `range`) when the lane
+    /// estimate is confident (≥ `minConfidence`), otherwise back toward the frame centre 0.5. `alpha` is the EMA weight
+    /// per call.
+    public static func smoothedCenterX(previous: Double, lane: LaneEstimate?, minConfidence: Double = 0.5,
+                                       range: ClosedRange<Double> = 0.35...0.65, alpha: Double = 0.15) -> Double {
+        var target = 0.5
+        if let lane, lane.confidence >= minConfidence, let center = lane.laneCenterX, center.isFinite {
+            target = min(range.upperBound, max(range.lowerBound, center))
+        }
+        let next = previous + max(0, min(1, alpha)) * (target - previous)
+        return min(range.upperBound, max(range.lowerBound, next))
+    }
+}
+
+extension LeadVehicleTracker {
+    /// True when the box touches exactly one of the left / right frame edges (a vehicle passing in the adjacent lane;
+    /// a box spanning the whole width is a vehicle right in front).
+    func touchesSideEdge(_ box: BBox) -> Bool {
+        let left = box.minX <= selection.edgeMargin, right = box.maxX >= 1 - selection.edgeMargin
+        return left != right
+    }
+
+    /// Lead candidates (strictly ahead, not at a side edge) with their selection score (lower is better).
+    func scoredCandidates(_ tracks: [TrackedObject]) -> [(track: TrackedObject, score: Double)] {
+        let candidates = tracks.filter {
+            $0.isConfirmed && $0.missed <= coastMissed && $0.kind.isVehicle && $0.kind != .bicycle
+                && !touchesSideEdge($0.box)
+                && corridor.isStrictlyAhead($0.box, centerFraction: selection.centerFraction,
+                                            minOverlap: selection.minOverlap)
+        }
+        return candidates.map { track in
+            let own = max(0.01, track.box.maxY - corridor.horizonY)
+            var closer = 0.0
+            for other in candidates where other.box.maxY > track.box.maxY + selection.rankTolerance {
+                let dominated = (other.box.maxY - corridor.horizonY) >= selection.dominanceRatio * own
+                // `lateral` is capped at 2, so 2 × lateralPenalty outweighs any lateral difference.
+                closer += dominated ? 1 + 2 * selection.lateralPenalty : 1
+            }
+            let lateral = min(2, corridor.lateralOffset(track.box) ?? 2)
+            return (track, closer + selection.lateralPenalty * lateral)
+        }
+    }
+
+    /// The lead for this frame (with hysteresis on the current lead), or nil.
+    func selectLead(from tracks: [TrackedObject]) -> TrackedObject? {
+        let scored = scoredCandidates(tracks)
+        guard let best = scored.min(by: { $0.score < $1.score }) else { return nil }
+        if let id = currentID, let current = scored.first(where: { $0.track.id == id }),
+           best.track.id != id, best.score > current.score - selection.switchMargin {
+            return current.track
+        }
+        return best.track
+    }
+}
+
+extension FollowingDistanceCalculator {
+    /// The distance-cue description of a lead estimate ("ширина+высота", "ширина (обрезано)") in `language`.
+    public static func methodDisplay(_ method: String, language: RVLang) -> String {
+        guard language != .ru else { return method }
+        let words: [(String, String, String)] = [
+            ("ширина", "eni", "width"), ("высота", "balandligi", "height"), ("обрезано", "kesilgan", "cropped"),
+        ]
+        var text = method
+        for (ru, uz, en) in words {
+            text = text.replacingOccurrences(of: ru, with: language == .uz ? uz : en)
+        }
+        return text
+    }
+}
