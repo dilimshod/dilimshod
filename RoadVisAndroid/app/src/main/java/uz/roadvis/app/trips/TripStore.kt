@@ -102,4 +102,14 @@ class TripStore(context: Context) {
         trips = trips.filterNot { it.id == id }
         io.execute { file(id).delete() }
     }
+
+    companion object {
+        /** Reads one trip file directly (background workers, e.g. the cabinet upload); null when missing or unreadable. */
+        fun readTrip(context: Context, id: String): Trip? = try {
+            val f = File(File(context.applicationContext.filesDir, "trips"), "${UUID.fromString(id)}.json")
+            if (f.isFile) Trip.fromJson(JSONObject(f.readText())) else null
+        } catch (_: Exception) {
+            null
+        }
+    }
 }

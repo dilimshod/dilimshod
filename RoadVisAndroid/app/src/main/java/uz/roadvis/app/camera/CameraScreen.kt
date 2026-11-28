@@ -87,7 +87,9 @@ fun CameraScreen(app: AppState, isActive: Boolean) {
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
     LaunchedEffect(granted) { c.cameraPermissionDenied = !granted }
-    LaunchedEffect(isActive, granted) { c.setProcessing(isActive && granted) }
+    // The cabinet's QR scanner borrows the back camera: no inference while it is open (the camera is unbound below).
+    val scannerOpen = CameraOwnership.scannerOpen
+    LaunchedEffect(isActive, granted, scannerOpen) { c.setProcessing(isActive && granted && !scannerOpen) }
 
     DisposableEffect(view) {
         c.haptic = { kind ->
@@ -137,7 +139,7 @@ fun CameraScreen(app: AppState, isActive: Boolean) {
                 }
             }
         } else {
-            CameraPreview(c, granted, app.settings.videoStabilization != "off")
+            CameraPreview(c, granted && !scannerOpen, app.settings.videoStabilization != "off")
             if (isActive) {
                 val expanded = c.assist.distanceHUDExpanded
                 val insets = if (landscape) LabelInsets(70f, if (expanded) 270f else 200f, 70f, 80f)
@@ -158,7 +160,10 @@ fun CameraScreen(app: AppState, isActive: Boolean) {
 private fun hasCameraPermission(context: android.content.Context): Boolean =
     ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
 
-/** The CameraX preview (TextureView, so the root crossfade alpha applies) bound while permission is granted. */
+/**
+ * The CameraX preview (TextureView, so the root crossfade alpha applies) bound while [granted] (camera permission and
+ * no QR scanner open, see [CameraOwnership]).
+ */
 @Composable
 private fun CameraPreview(c: RecognitionController, granted: Boolean, stabilization: Boolean) {
     val context = LocalContext.current
@@ -175,8 +180,16 @@ private fun CameraPreview(c: RecognitionController, granted: Boolean, stabilizat
     val binding = remember(stabilization) { CameraBinding(context.applicationContext, c, stabilization) }
     AndroidView(factory = { previewView }, modifier = Modifier.fillMaxSize())
     DisposableEffect(owner, granted, binding) {
-        if (granted) binding.bind(owner, previewView, previewView.display?.rotation ?: 0)
-        onDispose { if (granted) binding.unbind() }
+        if (granted) {
+            binding.bind(owner, previewView, previewView.display?.rotation ?: 0)
+            CameraOwnership.recognitionBound = true
+        }
+        onDispose {
+            if (granted) {
+                binding.unbind()
+                CameraOwnership.recognitionBound = false
+            }
+        }
     }
     LaunchedEffect(configuration.orientation, configuration.screenWidthDp) {
         // The activity handles rotation itself: follow the display rotation once the view has been laid out.

@@ -77,14 +77,19 @@ class CameraBinding(
     private var provider: ProcessCameraProvider? = null
     private var camera: Camera? = null
     private var boundOwner: LifecycleOwner? = null
+    /** Incremented by every [bind] / [unbind]: a provider callback of an older request does nothing. */
+    private var requestGeneration = 0
 
     /** Binds preview + analysis to [owner] (idempotent for the same owner). */
     fun bind(owner: LifecycleOwner, previewView: PreviewView, rotation: Int) {
         setRotation(rotation)
         preview?.setSurfaceProvider(previewView.surfaceProvider)
         if (boundOwner === owner && camera != null) return
+        val generation = ++requestGeneration
         val future = ProcessCameraProvider.getInstance(context)
         future.addListener({
+            // Unbound (e.g. the QR scanner took the camera) before the provider was ready: stay unbound.
+            if (generation != requestGeneration) return@addListener
             val p = try { future.get() } catch (t: Throwable) {
                 controller.cameraError = t.message ?: t.javaClass.simpleName
                 return@addListener
@@ -137,6 +142,7 @@ class CameraBinding(
     }
 
     fun unbind() {
+        requestGeneration++
         provider?.let { p -> preview?.let { p.unbind(it) }; p.unbind(analysis) }
         camera?.cameraInfo?.cameraState?.let { state -> boundOwner?.let { state.removeObservers(it) } }
         camera = null

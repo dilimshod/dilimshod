@@ -92,6 +92,43 @@ Settings keys: `rv.learning.*` in the `roadvis` SharedPreferences. Nothing of th
 a phone; the selector, quality metrics, metadata keys, storage policy, manifest parsing and switch / revert rules are
 covered by `ContinuousLearningTest` (core).
 
+The device token is shared with the driver cabinet (below): learning uses the token entered manually in “Improve
+recognition” when there is one (advanced option), otherwise the token the cabinet registered (`AppSettings.deviceToken`).
+
+## Driver cabinet (opt-in)
+Settings → «Кабинет водителя» implements the app side of `../RoadVis/docs/CABINET_API.md` §1, §2 and §4 (same contract
+as iOS and the RoadVis server). Off by default; nothing is registered or sent until the switch is on. It uses the same
+server URL as continuous learning (`rv.learning.serverUrl`, default `https://trafficcounter.uz/roadvis`).
+
+- **Registration** (`cabinet/CabinetService`): enabling the switch with no device token calls
+  `POST /api/v1/devices/register` (`platform: android`, app version, “Manufacturer Model”, driver name — default the
+  device model — and the app language `uz|ru|en`). The returned token is kept in private SharedPreferences
+  (`rv.cabinet.token`) and also used for `/api/v1/samples`. `GET /api/v1/me` fills points, level and trip count;
+  the driver name field sends `PATCH /api/v1/me` (1.5 s after typing; retried by the sync work when offline).
+- **Trip sync**: when the trip recorder finishes and saves a trip (`trips/TripRecorder.stop`), its id goes into a
+  pending list (`rv.cabinet.pending`) and a WorkManager job (`rv.cabinet.sync`, network constraint — any network, or
+  unmetered with “Wi-Fi only” — exponential back-off from 1 min) uploads `POST /api/v1/trips`. The body is built by
+  `core` `CabinetTripPayload.build` from `TripStats` / `TripScoring`: ISO-8601 UTC times, `TripSpeedBand` raw values as
+  speed-band keys, the track simplified with `Geo.simplify` (5 m, ≤ 2000 rows `[lat, lon, s, speed|null, limit|null]`).
+  Trips shorter than 300 m or 60 s are not queued. 200 / 201 remove the id, 413 / 422 drop it, 429 / 5xx / network
+  retry, and pending trips are retried on app start. A 401 for the registered token (data deleted on the website)
+  forgets the token and switches the cabinet off, so the phone does not silently create a new profile.
+- **QR login** (`cabinet/QrScannerScreen`, ZXing core `com.google.zxing:core`, Apache-2.0, no ML Kit / Play
+  services): «Войти на сайт (QR)» opens a full-screen scanner with its own CameraX preview + YUV analysis
+  (Y plane → `PlanarYUVLuminanceSource` → `QRCodeReader`), a viewfinder, torch and cancel. The recognition camera uses
+  the same back camera, so `camera/CameraOwnership.scannerOpen` makes the camera screen unbind it while the scanner is
+  open and rebind afterwards. A scanned code must pass `core` `QRLoginPayload.parse` (same host, port and path prefix
+  as the configured server; https, or http only when the server URL is http; `c` a UUID, `n` present). After
+  «Войти на сайт как …?» the app sends `POST /api/v1/auth/qr/approve` and reports success or the reason (expired,
+  already used, foreign site, network).
+- **Settings**: switch, driver name, status (points, level, trips on the server, pending, last sync), the QR button,
+  «Открыть кабинет» (`<server>/` in the browser), Wi-Fi only (default off), «Синхронизировать сейчас»,
+  «Удалить мои данные на сервере» (`DELETE /api/v1/me`, with confirmation; clears the local token and queue) and the
+  privacy note. Keys: `rv.cabinet.*` in the `roadvis` SharedPreferences.
+
+Not run against a live server or on a phone; the payload, URLs, response parsing and QR rules are covered by
+`CabinetTest` (core).
+
 ## Natural voice (optional)
 Generate the Microsoft Edge clips on a Mac (see `../RoadVis/tools/VOICE_CLIPS.md`), then copy them:
 `cp ../RoadVis/RoadVis/VoiceClips/*.m4a app/src/main/assets/voice/` and rebuild. Without clips the system

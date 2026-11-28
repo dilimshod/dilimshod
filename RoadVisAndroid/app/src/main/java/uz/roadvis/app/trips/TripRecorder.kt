@@ -188,6 +188,8 @@ class TripRecorder(private val app: AppState, private val store: TripStore) : Se
                 return null
             }
             store.save(finished)
+            // Driver cabinet: queue the finished trip for the automatic upload (no-op while the cabinet is off).
+            uz.roadvis.app.cabinet.CabinetService.onTripSaved(app.context, finished)
             return finished
         } finally {
             isFinishing = false

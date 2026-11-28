@@ -148,7 +148,7 @@ class ModelUpdater(private val context: Context, private val settings: AppSettin
         val now = System.currentTimeMillis()
         if (!force && !ModelUpdatePolicy.isCheckDue(now, ModelStore.lastCheckMillis(context))) return@withContext Result.Skipped()
         val base = validatedUrl(settings.learningServerUrl) ?: return@withContext Result.Failed(L("navset.badURL"))
-        val token = settings.learningToken.trim()
+        val token = settings.deviceToken
         if (token.isEmpty()) return@withContext Result.Failed(L("learning.error.noToken"))
         val headers = mapOf("Authorization" to "Bearer $token", "User-Agent" to LearningUploader.userAgent(context))
         val response = try {

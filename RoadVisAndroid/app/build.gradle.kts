@@ -59,5 +59,7 @@ dependencies {
     implementation(libs.play.services.location)
     // Background upload of continuous-learning samples and the daily model check (Wi-Fi constraint, back-off).
     implementation(libs.work.runtime.ktx)
+    // QR scanner of the driver-cabinet website login (CameraX Y plane → ZXing QRCodeReader).
+    implementation(libs.zxing.core)
     testImplementation(libs.junit)
 }
