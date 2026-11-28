@@ -32,19 +32,19 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "The camera is used to recognize vehicles, traffic lights and pedestrians on the road."
+            "value" : "The camera is used to recognize vehicles, traffic lights and pedestrians on the road, and to scan the QR code that logs you in to the RoadVis website."
           }
         },
         "ru" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Камера нужна для распознавания транспортных средств, светофоров и пешеходов на дороге."
+            "value" : "Камера нужна для распознавания транспортных средств, светофоров и пешеходов на дороге и для сканирования QR-кода входа на сайт RoadVis."
           }
         },
         "uz" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Kamera yo‘ldagi transport vositalari, svetoforlar va piyodalarni aniqlash uchun kerak."
+            "value" : "Kamera yo‘ldagi transport vositalari, svetoforlar va piyodalarni aniqlash hamda RoadVis saytiga kirish QR-kodini skanerlash uchun kerak."
           }
         }
       }

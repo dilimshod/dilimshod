@@ -22,6 +22,8 @@ final class AppState {
     var showTripHistory = false
     /// About / offer / developers sheet (navigator idle screen).
     var showAbout = false
+    /// QR login on the RoadVis website, opened from the navigator idle screen (`QRLoginFlowView`).
+    var showQRLogin = false
 
     let settings: AppSettings
     let location: LocationService
@@ -38,6 +40,8 @@ final class AppState {
     let coach: DriverCoach
     /// Continuous learning: hard-frame collection, uploads to the RoadVis Trainer, improved-model downloads.
     let learning: LearningCoordinator
+    /// Driver cabinet: registration, automatic trip upload, QR login on the website (`docs/CABINET_API.md`).
+    let cabinet: CabinetService
 
     @ObservationIgnored private var started = false
     /// Stops the warm camera after `cameraStandbyTimeout` in the navigator without the camera window.
@@ -59,6 +63,8 @@ final class AppState {
     static let autoTripStartSeconds: TimeInterval = 10
     /// Last app-wide lifecycle state handled by `handleScenePhase` (dedupes per-scene / repeated notifications).
     @ObservationIgnored private var handledPhase: ScenePhase?
+    /// > 0 while another camera user (the QR scanner) needs the back camera: the recognition session stays stopped.
+    @ObservationIgnored private var cameraSuspensions = 0
 
     init() {
         let settings = AppSettings()
@@ -93,6 +99,11 @@ final class AppState {
         tripRecorder.onStarted = { [weak learning] in
             learning?.tripStarted()
         }
+        let cabinet = CabinetService(learningSettings: learning.settings, trips: trips)
+        self.cabinet = cabinet
+        tripRecorder.onFinished = { [weak cabinet] trip in
+            cabinet?.tripFinished(trip)
+        }
 
         recognition.weatherProvider = { [weak weather] in weather?.current }
         recognition.speech = speech
@@ -122,6 +133,7 @@ final class AppState {
         updateCameraForMode()
         startAutoTripMonitor()
         learning.start()
+        cabinet.start()
         // The first didBecomeActive notification can fire before the root view subscribes.
         if UIApplication.shared.applicationState != .background {
             handleScenePhase(.active)
@@ -147,6 +159,24 @@ final class AppState {
         switchTo(mode == .camera ? .navigator : .camera)
     }
 
+    /// Hands the back camera to another capture session (the QR scanner): the recognition session is stopped until
+    /// the matching `resumeRecognitionCamera()`. Calls nest.
+    func suspendRecognitionCamera() {
+        cameraSuspensions += 1
+        updateCameraForMode()
+    }
+
+    /// Ends a `suspendRecognitionCamera()`; the recognition camera comes back as the current mode requires.
+    func resumeRecognitionCamera() {
+        guard cameraSuspensions > 0 else { return }
+        cameraSuspensions -= 1
+        guard cameraSuspensions == 0, handledPhase != .background else { return }
+        updateCameraForMode()
+    }
+
+    /// True while the recognition capture session is still running (the scanner waits for it to stop).
+    var isRecognitionCameraRunning: Bool { recognition.camera.isRunning }
+
     /// Recognition runs in camera mode, and in navigator mode when the picture-in-picture window is enabled.
     /// In the navigator without the camera window the capture session is kept warm (running, detector paused) for
     /// `cameraStandbyTimeout`, so returning to the camera is instant; after that the camera is stopped. The session
@@ -154,6 +184,10 @@ final class AppState {
     func updateCameraForMode() {
         cameraStandbyTask?.cancel()
         cameraStandbyTask = nil
+        if cameraSuspensions > 0 {
+            recognition.stop()
+            return
+        }
         let needsRecognition = mode == .camera || settings.showCameraPiP
         if needsRecognition {
             recognition.start()
@@ -181,6 +215,7 @@ final class AppState {
             if started {
                 updateCameraForMode()
                 learning.appBecameActive()
+                cabinet.appBecameActive()
             }
         case .background:
             UIApplication.shared.isIdleTimerDisabled = false

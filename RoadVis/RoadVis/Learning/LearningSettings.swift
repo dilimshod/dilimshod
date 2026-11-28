@@ -113,6 +113,18 @@ final class LearningNetworkMonitor: @unchecked Sendable {
     private var satisfied = false
     private var unmetered = false
     private var started = false
+    private var handlers: [UUID: @Sendable () -> Void] = [:]
+
+    /// Registers a handler called (on the monitor's queue) whenever the path changes: connected / disconnected or
+    /// Wi-Fi ↔ cellular. Used to retry pending work when the network returns (driver cabinet).
+    @discardableResult
+    func addChangeHandler(_ handler: @escaping @Sendable () -> Void) -> UUID {
+        let id = UUID()
+        lock.lock()
+        handlers[id] = handler
+        lock.unlock()
+        return id
+    }
 
     func start() {
         lock.lock()
@@ -130,9 +142,12 @@ final class LearningNetworkMonitor: @unchecked Sendable {
         // Wi-Fi (or Ethernet) that is neither expensive (cellular, personal hotspot) nor constrained (Low Data Mode).
         let isUnmetered = isSatisfied && !path.isExpensive && !path.isConstrained
         lock.lock()
+        let changed = satisfied != isSatisfied || unmetered != isUnmetered
         satisfied = isSatisfied
         unmetered = isUnmetered
+        let callbacks: [@Sendable () -> Void] = changed ? Array(handlers.values) : []
         lock.unlock()
+        for callback in callbacks { callback() }
     }
 
     /// Any network.

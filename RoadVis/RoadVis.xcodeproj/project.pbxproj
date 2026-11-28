@@ -304,7 +304,7 @@
 				INFOPLIST_FILE = Config/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = RoadVis;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.navigation";
-				INFOPLIST_KEY_NSCameraUsageDescription = "Камера нужна для распознавания транспортных средств, светофоров и пешеходов на дороге.";
+				INFOPLIST_KEY_NSCameraUsageDescription = "Камера нужна для распознавания транспортных средств, светофоров и пешеходов на дороге и для сканирования QR-кода входа на сайт RoadVis.";
 				INFOPLIST_KEY_NSLocationAlwaysAndWhenInUseUsageDescription = "Во время навигации геопозиция используется и в фоне, чтобы подсказки продолжали работать.";
 				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "Геопозиция нужна для скорости движения, навигации, данных о полосах и ограничениях скорости.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
@@ -345,7 +345,7 @@
 				INFOPLIST_FILE = Config/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = RoadVis;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.navigation";
-				INFOPLIST_KEY_NSCameraUsageDescription = "Камера нужна для распознавания транспортных средств, светофоров и пешеходов на дороге.";
+				INFOPLIST_KEY_NSCameraUsageDescription = "Камера нужна для распознавания транспортных средств, светофоров и пешеходов на дороге и для сканирования QR-кода входа на сайт RoadVis.";
 				INFOPLIST_KEY_NSLocationAlwaysAndWhenInUseUsageDescription = "Во время навигации геопозиция используется и в фоне, чтобы подсказки продолжали работать.";
 				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "Геопозиция нужна для скорости движения, навигации, данных о полосах и ограничениях скорости.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
