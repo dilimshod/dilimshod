@@ -13,6 +13,8 @@ Admin (``ROADVIS_ADMIN_TOKEN``):
     GET  /api/v1/admin/status                    counts per stage, last runs, current model
 
     GET  /healthz
+
+Driver cabinet and web dashboard (RoadVis/docs/CABINET_API.md): see :mod:`roadvis_trainer.cabinet_api`.
 """
 
 from __future__ import annotations
@@ -182,6 +184,14 @@ class RootPathMiddleware:
     async def __call__(self, scope, receive, send):
         if scope["type"] in ("http", "websocket") and not scope.get("root_path"):
             scope = dict(scope, root_path=self.root_path)
+            # ASGI: ``path`` includes ``root_path``. When nginx stripped the prefix, put it back so mounted apps
+            # (static files) and URL building see the public path; routing strips it again.
+            path = scope.get("path", "")
+            if path != self.root_path and not path.startswith(self.root_path + "/"):
+                scope["path"] = self.root_path + path
+                raw = scope.get("raw_path")
+                if raw is not None:
+                    scope["raw_path"] = self.root_path.encode() + raw
         await self.app(scope, receive, send)
 
 
@@ -429,6 +439,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "serverTime": iso(),
         }
 
+    from .cabinet_api import register_cabinet
+
+    register_cabinet(app, settings, store)
     return app
 
 

@@ -1,7 +1,9 @@
 # RoadVis Trainer
 
 Server side of RoadVis continuous learning. It implements the contract in
-[`RoadVis/docs/TRAINING_API.md`](../RoadVis/docs/TRAINING_API.md) (sections 3 and 4).
+[`RoadVis/docs/TRAINING_API.md`](../RoadVis/docs/TRAINING_API.md) (sections 3 and 4), and the **driver cabinet**
+with its web dashboard from [`RoadVis/docs/CABINET_API.md`](../RoadVis/docs/CABINET_API.md) (see
+[section 10](#10-driver-cabinet-and-web-dashboard--кабинет-водителя-и-веб-панель)).
 
 Серверная часть непрерывного обучения RoadVis. Реализует контракт
 [`RoadVis/docs/TRAINING_API.md`](../RoadVis/docs/TRAINING_API.md) (разделы 3 и 4).
@@ -132,7 +134,12 @@ location /roadvis/ {
     proxy_send_timeout 900s;
     proxy_buffering off;                       # stream model files and exports (Range is supported)
 }
+location = /roadvis { return 301 /roadvis/; }  # the dashboard lives at /roadvis/
 ```
+
+Behind Cloudflare the app takes the client address for its rate limits from `CF-Connecting-IP` (then the right-most
+untrusted `X-Forwarded-For` entry), and only when the request comes from the local proxy (loopback / Docker bridge,
+`ROADVIS_TRUSTED_PROXIES`). nginx passes `CF-Connecting-IP` through unchanged; nothing to add.
 
 `ROADVIS_ROOT_PATH=/roadvis` (alias `ROOT_PATH`) tells the app its public prefix. Requests work whether nginx strips
 the prefix (as above) or forwards it unchanged. The phones use the base URL `https://trafficcounter.uz/roadvis`.
@@ -263,6 +270,9 @@ The upload size is enforced while streaming (Content-Length checked first), the 
 write the file to `<name>.mlpackage/<path>`. Android: `/api/v1/model/{version}/files/yolo-roadvis.onnx`. The image
 part must be sent as a file part (with a `filename`); `meta` may be a file part or a plain text field.
 
+Driver cabinet endpoints (devices/register, me, trips, dashboard, QR login, logout, admin overview) are listed in
+[section 10](#10-driver-cabinet-and-web-dashboard--кабинет-водителя-и-веб-панель).
+
 ---
 
 ## 7. Backup / Резервное копирование
@@ -295,6 +305,10 @@ See [`.env.example`](.env.example). Main variables: `ROADVIS_ADMIN_TOKEN`, `ROAD
 `ROADVIS_WORKER_THREADS` (2), `ROADVIS_WORKER_BATCH` (4), `ROADVIS_DAILY_LIMIT` (600), `ROADVIS_MAX_IMAGE_BYTES`
 (2 MB), `ROADVIS_TEST_FREEZE_AT` (300), `ROADVIS_DATASET_CAP` (50000), `ROADVIS_EVAL_IMGSZ` (960),
 `ROADVIS_BASELINE_MODEL` (`yolo11s.pt`), `ROADVIS_GATE_MIN_TEST_IMAGES` (100), `ROADVIS_KEEP_VERSIONS` (3).
+Driver cabinet: `ROADVIS_PUBLIC_URL` (e.g. `https://trafficcounter.uz/roadvis`, used in QR links; derived from the
+request when empty), `ROADVIS_TRUSTED_PROXIES` (loopback + private networks), `ROADVIS_COOKIE_SECURE` (1),
+`ROADVIS_REGISTER_PER_IP_HOUR` (10), `ROADVIS_QR_TTL_SECONDS` (120), `ROADVIS_SESSION_DAYS` (30),
+`ROADVIS_ADMIN_SESSION_HOURS` (12), `ROADVIS_MAX_TRIP_BYTES` (5 MB), `ROADVIS_TRIPS_PER_DAY` (200).
 On a server without internet access put `yolo11x.pt` and `yolo11s.pt` into the data folder (Docker working
 directory) or set the variables to absolute paths.
 
@@ -313,3 +327,113 @@ roadvis-trainer train --colab  # regenerate the committed notebook after editing
 CI: `.github/workflows/roadvis-trainer.yml` runs the tests on pull requests touching `RoadVisTrainer/**`.
 
 Licence: AGPL-3.0 (Ultralytics). Лицензия: AGPL-3.0 (из-за Ultralytics).
+
+---
+
+## 10. Driver cabinet and web dashboard / Кабинет водителя и веб-панель
+
+Contract: [`RoadVis/docs/CABINET_API.md`](../RoadVis/docs/CABINET_API.md). Every phone that turns on «Кабинет водителя»
+registers itself and becomes a driver profile; finished trips are uploaded automatically; the dashboard at
+**https://trafficcounter.uz/roadvis/** shows the driving style, events, points, level, badges and advice.
+Login on the website is **only by QR code scanned with the RoadVis app** — no passwords.
+
+Каждый телефон, включивший «Кабинет водителя», регистрируется и становится профилем водителя; поездки загружаются
+автоматически; панель на **https://trafficcounter.uz/roadvis/** показывает стиль вождения, события, баллы, уровень,
+значки и советы. Вход на сайт — **только по QR-коду из приложения RoadVis**, без паролей.
+
+### Data and storage
+
+New SQLite tables `drivers`, `trips`, `web_sessions`, `admin_sessions`, `qr_challenges`, `rate_events`, plus columns
+`driver_id`, `platform`, `app_version`, `device_name` on `tokens`. The migration is idempotent (`CREATE TABLE IF NOT
+EXISTS`, guarded `ALTER TABLE`) and runs automatically on every start of the API and the worker — nothing to do by
+hand. Tokens created earlier with `roadvis-trainer token create` keep working and get a driver profile on their first
+cabinet request. Session cookies, QR nonces and tokens are stored only as SHA-256 hashes. "Delete my data" (app or
+website) deletes the profile, trips, web sessions and device tokens. Training samples already uploaded stay in the
+dataset (they carry no driver data).
+
+Points, levels, badges and recommendations are computed from the trips on every request
+(`roadvis_trainer/cabinet.py`, pure functions with tests): trip points = `round(score × min(km, 100) / 10)` (half up)
++ 20 if the trip has no `violation` event and is ≥ 2 km; level = `floor(sqrt(points / 50)) + 1`.
+
+### Endpoints
+
+| method & path | auth | notes |
+|---|---|---|
+| `POST /api/v1/devices/register` | none, 10 per IP per hour | `201 {"deviceToken","driverId","driverName"}`; `422`, `429` |
+| `GET /api/v1/me` | device or web session | `{"driverId","driverName","createdAt","tripCount","points","level"}` |
+| `PATCH /api/v1/me` `{"driverName"}` | device or web session | updated `me`; `422` empty name |
+| `DELETE /api/v1/me` | device or web session | `204`; deletes profile, trips, sessions, tokens |
+| `GET /api/v1/me/devices` | device or web session | `{"devices":[...],"sessions":[...]}` (profile page) |
+| `POST /api/v1/trips` | device | idempotent by `id`: `201` created, `200` replaced (`{"id","status","points"}`); `401`, `413` > 5 MB, `422`, `429` > 200 new trips per UTC day |
+| `GET /api/v1/trips?limit=&before=` | device or web session | JSON array of trip summaries (no `track`/`events`), newest first; `limit` 1–200 (50); next page: `before=<startedAt of the last item>` |
+| `GET /api/v1/trips/{id}` / `DELETE` | device or web session | full trip / `204`; `404` |
+| `GET /api/v1/dashboard/summary?days=30\|90\|365` | web session or device | level, totals, period vs previous period, badges, recommendations, last trip |
+| `GET /api/v1/dashboard/charts?days=` | web session or device | daily score, events per 100 km, speed bands, weekday × hour heatmap |
+| `POST /api/v1/auth/qr` | none (30 per IP per 5 min) | `{"challengeId","qr","expiresAt"}`, TTL 120 s; sets an `rv_qr` cookie that binds polling to this browser |
+| `GET /api/v1/auth/qr/{challengeId}` | `rv_qr` cookie | `{"status":"pending\|approved\|expired\|denied"}`; the first `approved` response sets `rv_session` |
+| `POST /api/v1/auth/qr/approve` `{"challengeId","nonce"}` | device | `200 {"ok":true}`; `404` unknown/expired/wrong nonce (a wrong nonce also denies the challenge); `409` already used; `401` |
+| `POST /api/v1/auth/logout` | web session | `200 {"ok":true}`, clears the cookie |
+| `POST /api/v1/auth/logout-all` | device or web session | `200 {"ok":true,"deletedSessions":n}` — "Log out everywhere" from the app or the website |
+| `POST /api/v1/admin/login` `{"token"}` | admin token (10 tries per IP per 15 min) | sets the `rv_admin` cookie (12 h) |
+| `POST /api/v1/admin/logout` | admin session | |
+| `GET /api/v1/admin/overview` | admin session or admin bearer | drivers with totals, training status |
+
+Cookies (`rv_session` 30 days, `rv_admin`, `rv_qr`) are httpOnly, Secure, SameSite=Lax, path = the public prefix
+(`/roadvis/`, or `/` locally). **CSRF:** every cookie-authenticated `POST`/`PATCH`/`PUT`/`DELETE` must send the header
+`X-RoadVis: 1` (otherwise `403`); the dashboard does this, bearer-token requests from the apps do not need it.
+
+### QR login / Вход по QR
+
+1. The website (`/roadvis/` or `/roadvis/login`) shows a QR with
+   `https://trafficcounter.uz/roadvis/qr?c=<challengeId>&n=<nonce>` and renews it before the 120 s expire.
+2. In the app: **RoadVis → Настройки → Кабинет водителя → Войти на сайт**, scan, confirm "Log in as <name>?".
+   The app sends `POST /api/v1/auth/qr/approve` with its device token.
+3. The page polls every 2 s, gets `approved` plus the session cookie, and opens the dashboard.
+
+Opened in an ordinary browser, the `/qr` link shows a page that says to scan it from the RoadVis app. Set
+`ROADVIS_PUBLIC_URL=https://trafficcounter.uz/roadvis` in `.env` so the QR link always has the exact prefix the apps
+accept (otherwise it is derived from `Host` and `X-Forwarded-Proto`/`CF-Visitor`).
+
+### Web dashboard / Веб-панель
+
+Static single-page app in `roadvis_trainer/web/` served by the same FastAPI app — no build step (plain HTML, CSS and
+ES modules). Pages: login (QR), overview (level gauge, KPIs, score trend, events per 100 km, speed bands, weekly
+heatmap, badges, recommendations), trips, trip detail (MapLibre GL JS map on OpenFreeMap tiles, track coloured by
+speed vs limit, event markers, speed/limit chart, events), profile (rename, devices, sessions, log out everywhere,
+delete my data), admin (`/roadvis/admin`, enter `ROADVIS_ADMIN_TOKEN` once). Languages uz (default) / ru / en
+(`static/js/i18n.js`), dark and light themes. Libraries and fonts are vendored (see [`THIRD_PARTY.md`](THIRD_PARTY.md));
+the only external host is `tiles.openfreemap.org` for the map, allowed by the page's Content-Security-Policy.
+
+### Demo data / Демо-данные
+
+```bash
+roadvis-trainer demo-driver --trips 25          # demo profile with simulated Tashkent trips; prints a device token
+roadvis-trainer driver list                     # drivers with trips, km, average score, points, level
+roadvis-trainer driver delete <driverId>        # profile, trips, web sessions and tokens
+# Docker: docker compose exec api roadvis-trainer demo-driver --trips 25
+```
+
+To open the demo profile on the website without a phone, approve the QR shown on the login page with the printed
+token (what the app does):
+
+```bash
+# challengeId and nonce are the c= and n= values of the QR link (e.g. from the browser's network tab)
+curl -X POST https://trafficcounter.uz/roadvis/api/v1/auth/qr/approve \
+     -H "Authorization: Bearer <demo token>" -H "Content-Type: application/json" \
+     -d '{"challengeId":"<c>","nonce":"<n>"}'
+```
+
+Local development: `ROADVIS_DATA_DIR=/tmp/rv roadvis-trainer demo-driver && ROADVIS_DATA_DIR=/tmp/rv roadvis-trainer
+serve`, then open http://localhost:8601/ (Secure cookies are accepted on `localhost`; set `ROADVIS_COOKIE_SECURE=0`
+for another plain-HTTP host).
+
+### Updating the server / Обновление сервера
+
+```bash
+cd ~/roadvis && git pull && cd RoadVisTrainer && docker compose up -d --build
+```
+
+The database migrates automatically on start (new tables and columns are added; existing tokens, samples, models and
+the frozen test set are kept). БД мигрирует автоматически при запуске; существующие токены, кадры и модели
+сохраняются. After the first update add `ROADVIS_PUBLIC_URL=https://trafficcounter.uz/roadvis` to `.env` and the
+`location = /roadvis` redirect from section 2 to nginx.

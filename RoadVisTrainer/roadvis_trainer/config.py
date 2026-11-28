@@ -44,6 +44,10 @@ def load_env_file(path: str | os.PathLike | None = None) -> None:
             os.environ[key] = value
 
 
+# Loopback plus private networks: nginx on the host reaches the Docker container from the bridge gateway.
+DEFAULT_TRUSTED_PROXIES = "127.0.0.0/8,::1/128,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,fc00::/7"
+
+
 @dataclass
 class Settings:
     """All tunables of the service. Defaults follow ``RoadVis/docs/TRAINING_API.md``."""
@@ -82,6 +86,28 @@ class Settings:
     gate_min_test_images: int = 100
     keep_versions: int = 3
 
+    # Driver cabinet (RoadVis/docs/CABINET_API.md).
+    # Public base URL used in QR payloads, e.g. "https://trafficcounter.uz/roadvis" (derived from the request if empty).
+    public_url: str = ""
+    # Peers whose CF-Connecting-IP / X-Forwarded-For / X-Forwarded-Proto headers are trusted (the local reverse proxy).
+    trusted_proxies: str = DEFAULT_TRUSTED_PROXIES
+    cookie_secure: bool = True
+    register_per_ip_hour: int = 10
+    qr_create_per_ip_5min: int = 30
+    admin_login_per_ip_15min: int = 10
+    qr_ttl_seconds: int = 120
+    session_days: int = 30
+    admin_session_hours: int = 12
+    max_trip_bytes: int = 5 * 1024 * 1024
+    trips_per_day: int = 200
+    max_track_points: int = 5000
+    max_trip_events: int = 2000
+
+    @property
+    def cookie_path(self) -> str:
+        """Cookie path derived from the public prefix: "/roadvis/" in production, "/" locally."""
+        return (self.root_path.rstrip("/") + "/") if self.root_path else "/"
+
     @classmethod
     def from_env(cls) -> "Settings":
         root = _str("ROADVIS_ROOT_PATH", os.environ.get("ROOT_PATH", "")).rstrip("/")
@@ -106,6 +132,15 @@ class Settings:
             baseline_model=_str("ROADVIS_BASELINE_MODEL", "yolo11s.pt"),
             gate_min_test_images=_int("ROADVIS_GATE_MIN_TEST_IMAGES", 100),
             keep_versions=max(1, _int("ROADVIS_KEEP_VERSIONS", 3)),
+            public_url=_str("ROADVIS_PUBLIC_URL", "").rstrip("/"),
+            trusted_proxies=_str("ROADVIS_TRUSTED_PROXIES", DEFAULT_TRUSTED_PROXIES),
+            cookie_secure=_bool("ROADVIS_COOKIE_SECURE", True),
+            register_per_ip_hour=_int("ROADVIS_REGISTER_PER_IP_HOUR", 10),
+            qr_ttl_seconds=_int("ROADVIS_QR_TTL_SECONDS", 120),
+            session_days=_int("ROADVIS_SESSION_DAYS", 30),
+            admin_session_hours=_int("ROADVIS_ADMIN_SESSION_HOURS", 12),
+            max_trip_bytes=_int("ROADVIS_MAX_TRIP_BYTES", 5 * 1024 * 1024),
+            trips_per_day=_int("ROADVIS_TRIPS_PER_DAY", 200),
         )
 
     # Paths ---------------------------------------------------------------------------------------------------------

@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "roadvis-trainer"
-version = "0.1.0"
-description = "RoadVis Trainer: continuous-learning server for the RoadVis apps (ingest, auto-label, quality gate, Colab training, model publishing)"
+version = "0.2.0"
+description = "RoadVis Trainer: continuous-learning server for the RoadVis apps (ingest, auto-label, quality gate, Colab training, model publishing) and the driver cabinet with its web dashboard"
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "AGPL-3.0-only" }
@@ -33,6 +33,10 @@ roadvis-trainer = "roadvis_trainer.cli:main"
 
 [tool.setuptools.packages.find]
 include = ["roadvis_trainer*"]
+
+[tool.setuptools.package-data]
+# The web dashboard (single-page app, vendored libraries, fonts, images) ships inside the package.
+roadvis_trainer = ["web/*.html", "web/static/*", "web/static/**/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
