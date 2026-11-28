@@ -178,7 +178,17 @@ public enum Geo {
 
     /// Douglas–Peucker simplification with a tolerance in metres. Keeps first and last points.
     public static func simplify(_ points: [GeoPoint], tolerance: Double) -> [GeoPoint] {
-        guard points.count > 2, tolerance > 0 else { return points }
+        simplifiedIndices(points, tolerance: tolerance).map { points[$0] }
+    }
+
+    /// Simplifies until the polyline has at most `maxPoints` vertices (doubling the tolerance).
+    public static func simplify(_ points: [GeoPoint], maxPoints: Int, initialTolerance: Double = 5) -> [GeoPoint] {
+        simplifiedIndices(points, maxPoints: maxPoints, initialTolerance: initialTolerance).map { points[$0] }
+    }
+
+    /// Indices (ascending) of the vertices `simplify(_:tolerance:)` keeps — lets callers carry per-point data along.
+    public static func simplifiedIndices(_ points: [GeoPoint], tolerance: Double) -> [Int] {
+        guard points.count > 2, tolerance > 0 else { return Array(points.indices) }
         var keep = [Bool](repeating: false, count: points.count)
         keep[0] = true
         keep[points.count - 1] = true
@@ -197,17 +207,17 @@ public enum Geo {
                 stack.append((idx, e))
             }
         }
-        return points.indices.compactMap { keep[$0] ? points[$0] : nil }
+        return points.indices.filter { keep[$0] }
     }
 
-    /// Simplifies until the polyline has at most `maxPoints` vertices (doubling the tolerance).
-    public static func simplify(_ points: [GeoPoint], maxPoints: Int, initialTolerance: Double = 5) -> [GeoPoint] {
-        guard maxPoints >= 2 else { return Array(points.prefix(maxPoints)) }
+    /// Indices kept by `simplify(_:maxPoints:initialTolerance:)`.
+    public static func simplifiedIndices(_ points: [GeoPoint], maxPoints: Int, initialTolerance: Double = 5) -> [Int] {
+        guard maxPoints >= 2 else { return Array(points.indices.prefix(max(0, maxPoints))) }
         var tol = initialTolerance
-        var result = simplify(points, tolerance: tol)
+        var result = simplifiedIndices(points, tolerance: tol)
         while result.count > maxPoints && tol < 100_000 {
             tol *= 2
-            result = simplify(points, tolerance: tol)
+            result = simplifiedIndices(points, tolerance: tol)
         }
         return result
     }

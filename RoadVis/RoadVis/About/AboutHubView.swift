@@ -21,6 +21,9 @@ struct AboutHubView: View {
 /// The list itself (no navigation container).
 struct AboutHubList: View {
     private let localization = LocalizationManager.shared
+    /// Optional: the hub also works without the app state (previews).
+    @Environment(AppState.self) private var app: AppState?
+    @State private var showQRLogin = false
 
     var body: some View {
         List {
@@ -52,6 +55,23 @@ struct AboutHubList: View {
                 Text(l: "about.section.app")
             }
 
+            if let app {
+                // Driver cabinet: quick «Войти на сайт» (QR login on the RoadVis website).
+                Section {
+                    Button {
+                        showQRLogin = true
+                    } label: {
+                        Label { Text(l: "cabinet.qr.quick") } icon: { Image(systemName: "qrcode.viewfinder") }
+                    }
+                } header: {
+                    Text(l: "cabinet.title")
+                } footer: {
+                    if !app.cabinet.enabled {
+                        Text(l: "cabinet.qr.quick.footer")
+                    }
+                }
+            }
+
             Section {
                 NavigationLink {
                     OfferView()
@@ -81,6 +101,12 @@ struct AboutHubList: View {
         .navigationTitle(L("about.title"))
         .navigationBarTitleDisplayMode(.inline)
         .environment(\.locale, localization.locale)
+        .fullScreenCover(isPresented: $showQRLogin) {
+            if let app {
+                QRLoginFlowView()
+                    .environment(app)
+            }
+        }
     }
 }
 

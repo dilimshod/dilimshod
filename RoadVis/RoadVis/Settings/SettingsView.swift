@@ -13,6 +13,7 @@ struct SettingsView: View {
                 DriverAssistSettingsSection()
                 TripSettingsSection()
                 SettingsExperimentsSection()
+                CabinetSettingsSection()
                 LearningSettingsSection()
                 SettingsNavigationSection()
                 NavigationSettingsSection()

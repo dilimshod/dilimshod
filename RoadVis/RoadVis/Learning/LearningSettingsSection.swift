@@ -16,47 +16,58 @@ struct LearningSettingsSection: View {
         @Bindable var settings = learning.settings
         Section {
             Toggle(L("learning.enabled"), isOn: $settings.enabled)
-            Group {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(l: "learning.serverURL")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    TextField(LearningSettings.defaultServerURL, text: $serverText)
-                        .keyboardType(.URL)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-                        .submitLabel(.done)
-                        .onSubmit(applyServer)
-                        .onDisappear(perform: applyServer)
-                    if let serverError {
-                        Text(serverError)
-                            .font(.footnote)
-                            .foregroundStyle(.red)
-                    }
+            // One server URL for continuous learning and the driver cabinet.
+            VStack(alignment: .leading, spacing: 4) {
+                Text(l: "learning.serverURL")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                TextField(LearningSettings.defaultServerURL, text: $serverText)
+                    .keyboardType(.URL)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .submitLabel(.done)
+                    .onSubmit(applyServer)
+                    .onDisappear(perform: applyServer)
+                if let serverError {
+                    Text(serverError)
+                        .font(.footnote)
+                        .foregroundStyle(.red)
                 }
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(l: "learning.token")
-                        .font(.caption)
+            }
+            .disabled(!settings.enabled && !app.cabinet.enabled)
+            Group {
+                if app.cabinet.enabled && hasToken {
+                    Text(l: "cabinet.learning.usesCabinetToken")
+                        .font(.footnote)
                         .foregroundStyle(.secondary)
-                    HStack {
-                        SecureField(L("learning.token.placeholder"), text: $tokenText)
-                            .textInputAutocapitalization(.never)
-                            .autocorrectionDisabled()
-                            .submitLabel(.done)
-                            .onSubmit(saveToken)
-                        Button(L("learning.token.save"), action: saveToken)
-                            .buttonStyle(.borderless)
-                            .disabled(tokenText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                    }
-                    HStack {
-                        Text(tokenMessage ?? (hasToken ? L("learning.token.saved") : L("learning.token.missing")))
-                            .font(.footnote)
-                            .foregroundStyle(hasToken ? Color.green : Color.orange)
-                        Spacer()
-                        if hasToken {
-                            Button(L("learning.token.remove"), role: .destructive, action: removeToken)
+                }
+                // Advanced: a token created on the server with `roadvis-trainer token create` (the driver cabinet
+                // registers one automatically; both live in the same Keychain item).
+                DisclosureGroup(L("cabinet.learning.advancedToken")) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(l: "learning.token")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        HStack {
+                            SecureField(L("learning.token.placeholder"), text: $tokenText)
+                                .textInputAutocapitalization(.never)
+                                .autocorrectionDisabled()
+                                .submitLabel(.done)
+                                .onSubmit(saveToken)
+                            Button(L("learning.token.save"), action: saveToken)
                                 .buttonStyle(.borderless)
+                                .disabled(tokenText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                        }
+                        HStack {
+                            Text(tokenMessage ?? (hasToken ? L("learning.token.saved") : L("learning.token.missing")))
                                 .font(.footnote)
+                                .foregroundStyle(hasToken ? Color.green : Color.orange)
+                            Spacer()
+                            if hasToken {
+                                Button(L("learning.token.remove"), role: .destructive, action: removeToken)
+                                    .buttonStyle(.borderless)
+                                    .font(.footnote)
+                            }
                         }
                     }
                 }
@@ -118,6 +129,9 @@ struct LearningSettingsSection: View {
             serverText = learning.settings.serverURL
             hasToken = LearningKeychain.hasToken
             learning.refreshSummary()
+        }
+        .onChange(of: app.cabinet.hasToken) { _, _ in
+            hasToken = LearningKeychain.hasToken
         }
     }
 
@@ -195,6 +209,7 @@ struct LearningSettingsSection: View {
             tokenText = ""
             hasToken = true
             tokenMessage = nil
+            app.cabinet.refreshTokenState()
         } else {
             tokenMessage = L("learning.token.error")
         }
@@ -204,6 +219,7 @@ struct LearningSettingsSection: View {
         LearningKeychain.setToken(nil)
         hasToken = LearningKeychain.hasToken
         tokenMessage = nil
+        app.cabinet.refreshTokenState()
     }
 }
 

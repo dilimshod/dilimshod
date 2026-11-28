@@ -44,6 +44,10 @@ struct RootView: View {
         .sheet(item: $app.presentedTrip) { trip in
             TripReportSheet(trip: trip)
         }
+        .fullScreenCover(isPresented: $app.showQRLogin) {
+            QRLoginFlowView()
+                .environment(app)
+        }
         .task {
             app.start()
         }

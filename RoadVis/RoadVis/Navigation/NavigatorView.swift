@@ -354,6 +354,19 @@ struct NavigatorView: View {
             }
             .buttonStyle(.plain)
             Spacer(minLength: 0)
+            if app.cabinet.enabled {
+                // Driver cabinet: QR login on the website (only when the cabinet is switched on).
+                Button {
+                    app.showQRLogin = true
+                } label: {
+                    Image(systemName: "qrcode.viewfinder")
+                        .font(.footnote.weight(.semibold))
+                        .frame(width: 44, height: 44)
+                        .background(.regularMaterial, in: Circle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(L("cabinet.qr.quick"))
+            }
             Button {
                 app.showAbout = true
             } label: {

@@ -66,6 +66,8 @@ final class TripRecorder {
 
     /// Called on the main actor right after a recording started (e.g. the continuous-learning per-trip counter).
     @ObservationIgnored var onStarted: (() -> Void)?
+    /// Called on the main actor when a recording was finalised and saved to the history (driver-cabinet upload).
+    @ObservationIgnored var onFinished: ((Trip) -> Void)?
 
     /// Id of the trip being recorded.
     var currentTripID: UUID? { trip?.id }
@@ -188,6 +190,7 @@ final class TripRecorder {
             return nil
         }
         store.save(finished)
+        onFinished?(finished)
         return finished
     }
 
