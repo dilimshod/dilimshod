@@ -19,7 +19,9 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ArrowDownward
 import androidx.compose.material.icons.filled.DirectionsCar
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -98,7 +100,8 @@ fun LiveDetectionLayer(
         if (c.assist.showRoadwayBoundary && zone != null) RoadwayBoundaryOverlay(zone, mapping)
         val lane = c.laneEstimate
         if (c.assist.showLaneOverlay && lane != null) LaneOverlay(lane, mapping, c.laneDepartureSide)
-        DetectionBoxes(c.tracks, mapping, lead, status, selectedTrackID, hazardLevels(c.pedestrianHazards))
+        DetectionBoxes(c.tracks, mapping, lead, status, selectedTrackID, hazardLevels(c.pedestrianHazards),
+            showSpeed = settings.showSpeedEstimates)
         AnimatedVisibility(lead != null, enter = fadeIn(), exit = fadeOut()) {
             val l = lead ?: c.leadVehicle
             if (l != null) {
@@ -134,6 +137,7 @@ fun hazardLevels(hazards: List<PedestrianHazard>): Map<Int, PedestrianHazardLeve
 private fun DetectionBoxes(
     tracks: List<TrackedObject>, mapping: AspectFillMapping, lead: LeadVehicle?, leadStatus: DistanceStatus,
     selectedTrackID: Int?, hazards: Map<Int, PedestrianHazardLevel>,
+    showSpeed: Boolean = false,
 ) {
     val anyPulse = hazards.isNotEmpty() || (lead != null && (leadStatus == DistanceStatus.CAUTION || leadStatus == DistanceStatus.DANGER))
     val pulse = pulseAlpha(anyPulse, 0.55f, if (leadStatus == DistanceStatus.DANGER || hazards.values.any { it == PedestrianHazardLevel.DANGER }) 800 else 1300)
@@ -173,6 +177,7 @@ private fun DetectionBoxes(
             val r = mapping.rect(t.box)
             val labelInside = r.top < 28 * dp
             TrackLabelChip(t, style.color, lead?.trackID == t.id, style.emphasized,
+                if (showSpeed) chipSpeedText(t) else null,
                 Modifier.alpha(if (t.missed > 0) 0.6f else 1f).layout { measurable, constraints ->
                     val maxW = (CamTheme.maxLabelWidth.toPx()).roundToInt()
                     val p = measurable.measure(constraints.copy(minWidth = 0, maxWidth = maxW, minHeight = 0))
@@ -229,7 +234,9 @@ private fun cornerBrackets(x: Float, y: Float, w: Float, h: Float, armFraction: 
 
 /** Tiny single-line capsule above a box: class symbol, class (+ confident make), lead marker. */
 @Composable
-private fun TrackLabelChip(t: TrackedObject, color: Color, isLead: Boolean, emphasized: Boolean, modifier: Modifier) {
+private fun TrackLabelChip(
+    t: TrackedObject, color: Color, isLead: Boolean, emphasized: Boolean, speedText: String?, modifier: Modifier,
+) {
     val shape = RoundedCornerShape(50)
     Row(
         modifier.background(Color.Black.copy(alpha = 0.45f), shape)
@@ -248,8 +255,22 @@ private fun TrackLabelChip(t: TrackedObject, color: Color, isLead: Boolean, emph
             }
             Icon(icon, null, tint = color, modifier = Modifier.size(10.dp))
         }
-        Text(TrackText.compactTitle(t), style = CamTheme.text(11.sp), maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Text(TrackText.compactTitle(t), style = CamTheme.text(11.sp), maxLines = 1, overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f, fill = false))
+        if (speedText != null) {
+            // The speed never truncates: the class name gives way first.
+            if (t.isOncoming) Icon(Icons.Filled.ArrowDownward, null, tint = Color.White, modifier = Modifier.size(9.dp))
+            Text(speedText, style = CamTheme.text(11.sp).copy(fontWeight = FontWeight.Bold), maxLines = 1)
+        }
     }
+}
+
+/** "≈54 km/h" for a confirmed, currently detected vehicle with a ground-speed estimate; null otherwise. */
+fun chipSpeedText(t: TrackedObject): String? {
+    if (!t.kind.isVehicle || !t.isConfirmed || t.missed > 0) return null
+    val v = t.estimatedSpeedKmh ?: return null
+    if (!v.isFinite() || v < 0) return null
+    return "≈${Math.round(v)} ${CamFmt.kmh}"
 }
 
 /** Coloured dot for compact places (overlay chips, detail card). */

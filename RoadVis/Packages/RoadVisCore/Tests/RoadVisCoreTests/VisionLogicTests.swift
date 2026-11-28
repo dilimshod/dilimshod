@@ -94,6 +94,55 @@ final class VisionLogicTests: XCTestCase {
         XCTAssertEqual(out[0].distanceMeters!, 23.1, accuracy: 0.6)
     }
 
+    /// Feeds a car whose distance follows `z(t)` and returns the last estimator output.
+    private func speedRun(own: Double, x: Double = 0.45, z: (Double) -> Double, steps: Int = 15,
+                          geometry: CameraGeometry = .defaultPortrait) -> TrackedObject {
+        let g = geometry
+        let est = MonocularSpeedEstimator(windowSeconds: 2)
+        var out: [TrackedObject] = []
+        for i in 0..<steps {
+            let t = Double(i) * 0.1
+            let h = g.focalLengthPixels * 1.5 / z(t) / g.imageHeight
+            let obj = TrackedObject(id: 1, kind: .car, label: "car", box: BBox(x: x, y: 0.5, width: 0.1, height: h),
+                                    confidence: 0.9, firstSeen: 0, lastSeen: t)
+            out = est.update(tracks: [obj], ownSpeedKmh: own, geometry: g, timestamp: t)
+        }
+        return out[0]
+    }
+
+    func testOncomingCarSpeedAndDirection() {
+        // Own 50 km/h, oncoming car 40 km/h: the gap closes at 90 km/h = 25 m/s.
+        let t = speedRun(own: 50, z: { 60 - 25 * $0 })
+        XCTAssertEqual(t.estimatedSpeedKmh ?? -1, 40, accuracy: 2)
+        XCTAssertTrue(t.isOncoming)
+    }
+
+    func testSideVehicleGetsSpeedToo() {
+        // A car in the next lane (box at the left edge) pulling away at +3 m/s while we drive 40 km/h.
+        let t = speedRun(own: 40, x: 0.05, z: { 20 + 3 * $0 })
+        XCTAssertEqual(t.estimatedSpeedKmh ?? -1, 50.8, accuracy: 2)
+        XCTAssertFalse(t.isOncoming)
+    }
+
+    func testParkedCarShowsZeroWhenWeStand() {
+        let t = speedRun(own: 0, z: { _ in 15 })
+        XCTAssertEqual(t.estimatedSpeedKmh ?? -1, 0, accuracy: 0.01)
+        XCTAssertFalse(t.isOncoming)
+    }
+
+    func testFarVehicleHasDistanceButNoSpeed() {
+        // Landscape frame: the box is still measurable at ~90 m (portrait boxes vanish below 0.015 earlier).
+        let landscape = CameraGeometry(horizontalFOVDegrees: 65, imageWidth: 1920, imageHeight: 1080)
+        let t = speedRun(own: 60, z: { 92 - 2 * $0 }, geometry: landscape)
+        XCTAssertNotNil(t.distanceMeters)
+        XCTAssertNil(t.estimatedSpeedKmh)
+    }
+
+    func testSpeedNeedsEnoughSamples() {
+        let t = speedRun(own: 60, z: { 30 - 5 * $0 }, steps: 6)   // 0.5 s < 0.8 s window
+        XCTAssertNil(t.estimatedSpeedKmh)
+    }
+
     func testFastMovingObjectKeepsOneTrack() {
         // An oncoming car crossing the frame: its box jumps ~1.3 widths per frame (IoU = 0), growing as it approaches.
         let tracker = ObjectTracker(config: .init(minHits: 3))

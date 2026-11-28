@@ -51,10 +51,14 @@ class MonocularSpeedEstimator(val windowSeconds: Double = 1.5, val maxDistance: 
 
     private val history = HashMap<Int, MutableList<Sample>>()
     private val lastSeen = HashMap<Int, Double>()
+    /** Smoothed ground speed per track (EMA), km/h. */
+    private val smoothedSpeed = HashMap<Int, Double>()
+
 
     fun reset() {
         history.clear()
         lastSeen.clear()
+        smoothedSpeed.clear()
     }
 
     fun update(tracks: List<TrackedObject>, ownSpeedKmh: Double?, geometry: CameraGeometry, timestamp: Double): List<TrackedObject> {
@@ -67,6 +71,7 @@ class MonocularSpeedEstimator(val windowSeconds: Double = 1.5, val maxDistance: 
                 t.distanceMeters = if (recent.isEmpty()) null else recent[recent.size / 2]
                 t.relativeSpeedKmh = null
                 t.estimatedSpeedKmh = null
+                t.isOncoming = false
                 if (recent.isNotEmpty()) lastSeen[t.id] = timestamp
                 continue
             }
@@ -77,6 +82,7 @@ class MonocularSpeedEstimator(val windowSeconds: Double = 1.5, val maxDistance: 
                 t.distanceMeters = null
                 t.relativeSpeedKmh = null
                 t.estimatedSpeedKmh = null
+                t.isOncoming = false
                 continue
             }
             val samples = history.getOrPut(t.id) { mutableListOf() }
@@ -89,6 +95,7 @@ class MonocularSpeedEstimator(val windowSeconds: Double = 1.5, val maxDistance: 
 
             t.relativeSpeedKmh = null
             t.estimatedSpeedKmh = null
+            t.isOncoming = false
             val first = samples.firstOrNull()
             val slope = if (samples.size >= 4 && first != null && timestamp - first.t >= 0.5) slope(samples) else null
             if (slope != null) {
@@ -96,9 +103,20 @@ class MonocularSpeedEstimator(val windowSeconds: Double = 1.5, val maxDistance: 
                 if (abs(rel) <= 150) {
                     t.relativeSpeedKmh = rel
                     val own = ownSpeedKmh
-                    if (t.kind.isVehicle && own != null && own >= 0 && t.box.midX > 0.2 && t.box.midX < 0.8) {
-                        val absolute = own + rel
-                        if (absolute >= 0 && absolute <= 250) t.estimatedSpeedKmh = absolute
+                    // Ground speed of every vehicle (same direction OR oncoming): v_other = |own + rel|, the sign
+                    // tells the direction. Needs a longer window, a nearer object and per-track smoothing.
+                    if (t.kind.isVehicle && own != null && own >= 0 && first != null &&
+                        samples.size >= MIN_SPEED_SAMPLES && timestamp - first.t >= MIN_SPEED_WINDOW && z <= MAX_SPEED_DISTANCE) {
+                        val signed = own + rel
+                        var absolute = abs(signed)
+                        if (absolute < STANDSTILL_KMH) absolute = 0.0
+                        if (absolute <= 250) {
+                            val previous = smoothedSpeed[t.id]
+                            val value = if (previous != null) previous + SPEED_SMOOTHING * (absolute - previous) else absolute
+                            smoothedSpeed[t.id] = value
+                            t.estimatedSpeedKmh = value
+                            t.isOncoming = signed < -STANDSTILL_KMH
+                        }
                     }
                 }
             }
@@ -107,11 +125,21 @@ class MonocularSpeedEstimator(val windowSeconds: Double = 1.5, val maxDistance: 
         for (id in stale) {
             lastSeen.remove(id)
             history.remove(id)
+            smoothedSpeed.remove(id)
         }
         return result
     }
 
     companion object {
+        /** Ground speed needs more evidence than the distance: ≥ 5 samples over ≥ 0.8 s. */
+        const val MIN_SPEED_SAMPLES = 5
+        const val MIN_SPEED_WINDOW = 0.8
+        /** Farther than this the height-based distance is too noisy for a speed. */
+        const val MAX_SPEED_DISTANCE = 80.0
+        /** Below this the vehicle is shown as standing (noise of the distance slope). */
+        const val STANDSTILL_KMH = 4.0
+        /** EMA factor of the displayed ground speed (≈ 0.5 s time constant at 15 fps). */
+        const val SPEED_SMOOTHING = 0.3
         /** Least-squares slope dz/dt in m/s. */
         private fun slope(s: List<Sample>): Double? {
             val n = s.size.toDouble()

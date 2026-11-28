@@ -48,6 +48,18 @@ public final class MonocularSpeedEstimator {
     public let windowSeconds: Double
     public let maxDistance: Double
     private var history: [Int: [Sample]] = [:]
+    /// Smoothed ground speed per track (EMA), km/h.
+    private var smoothedSpeed: [Int: Double] = [:]
+
+    /// Ground speed needs more evidence than the distance: ≥ 5 samples over ≥ 0.8 s.
+    static let minSpeedSamples = 5
+    static let minSpeedWindow: TimeInterval = 0.8
+    /// Farther than this the height-based distance is too noisy for a speed (a 1 px box change is metres).
+    static let maxSpeedDistance: Double = 80
+    /// Below this the vehicle is shown as standing (noise of the distance slope).
+    static let standstillKmh: Double = 4
+    /// EMA factor of the displayed ground speed (≈ 0.5 s time constant at 15 fps).
+    static let speedSmoothing: Double = 0.3
     private var lastSeen: [Int: TimeInterval] = [:]
 
     public init(windowSeconds: Double = 1.5, maxDistance: Double = 120) {
@@ -58,6 +70,7 @@ public final class MonocularSpeedEstimator {
     public func reset() {
         history.removeAll()
         lastSeen.removeAll()
+        smoothedSpeed.removeAll()
     }
 
     public func update(tracks: [TrackedObject], ownSpeedKmh: Double?, geometry: CameraGeometry,
@@ -72,6 +85,7 @@ public final class MonocularSpeedEstimator {
                 t.distanceMeters = recent.isEmpty ? nil : recent[recent.count / 2]
                 t.relativeSpeedKmh = nil
                 t.estimatedSpeedKmh = nil
+                t.isOncoming = false
                 if !recent.isEmpty { lastSeen[t.id] = timestamp }
                 result[i] = t
                 continue
@@ -83,6 +97,7 @@ public final class MonocularSpeedEstimator {
                 t.distanceMeters = nil
                 t.relativeSpeedKmh = nil
                 t.estimatedSpeedKmh = nil
+                t.isOncoming = false
                 result[i] = t
                 continue
             }
@@ -98,16 +113,29 @@ public final class MonocularSpeedEstimator {
 
             t.relativeSpeedKmh = nil
             t.estimatedSpeedKmh = nil
+            t.isOncoming = false
             if samples.count >= 4, let first = samples.first, timestamp - first.t >= 0.5,
                let slope = Self.slope(samples) {
                 let rel = slope * 3.6
                 if abs(rel) <= 150 {
                     t.relativeSpeedKmh = rel
-                    // Only for objects roughly ahead (same direction assumed).
+                    // Ground speed of every vehicle (same direction OR oncoming): the gap changes at
+                    // rel = v_other - own (same direction) or rel = -(v_other + own) (oncoming), so
+                    // v_other = |own + rel| in both cases and the sign tells the direction. Monocular distance is
+                    // noisy, so the speed needs a longer window, a nearer object and is smoothed per track.
                     if t.kind.isVehicle, let own = ownSpeedKmh, own >= 0,
-                       t.box.midX > 0.2, t.box.midX < 0.8 {
-                        let absolute = own + rel
-                        if absolute >= 0 && absolute <= 250 { t.estimatedSpeedKmh = absolute }
+                       samples.count >= Self.minSpeedSamples, timestamp - first.t >= Self.minSpeedWindow,
+                       z <= Self.maxSpeedDistance {
+                        let signed = own + rel
+                        var absolute = abs(signed)
+                        if absolute < Self.standstillKmh { absolute = 0 }
+                        if absolute <= 250 {
+                            let previous = smoothedSpeed[t.id]
+                            let value = previous.map { $0 + Self.speedSmoothing * (absolute - $0) } ?? absolute
+                            smoothedSpeed[t.id] = value
+                            t.estimatedSpeedKmh = value
+                            t.isOncoming = signed < -Self.standstillKmh
+                        }
                     }
                 }
             }
@@ -117,6 +145,7 @@ public final class MonocularSpeedEstimator {
         for (id, seen) in lastSeen where timestamp - seen > 2 {
             lastSeen[id] = nil
             history[id] = nil
+            smoothedSpeed[id] = nil
         }
         return result
     }

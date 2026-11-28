@@ -206,7 +206,8 @@ private struct LiveDetectionLayer: View {
             }
             DetectionOverlayView(tracks: pipeline.tracks, imageSize: pipeline.frameSize,
                                  lead: lead, leadStatus: status, selectedTrackID: selectedTrackID,
-                                 pedestrianHazards: DetectionOverlayView.hazardLevels(pipeline.pedestrianHazards))
+                                 pedestrianHazards: DetectionOverlayView.hazardLevels(pipeline.pedestrianHazards),
+                                 showSpeed: settings.showSpeedEstimates)
             if let lead {
                 LeadDistanceOverlay(lead: lead, assessment: assessment, imageSize: pipeline.frameSize,
                                     labelInsets: labelInsets, showDistance: settings.showDistanceEstimates,

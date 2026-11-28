@@ -34,10 +34,13 @@ struct DetectionOverlayView: View {
     let selectedTrackID: Int?
     /// Pedestrian hazard level per track ID (pedestrians on / about to enter the roadway).
     let pedestrianHazards: [Int: PedestrianHazardLevel]
+    /// Show each vehicle's ≈ ground speed on its label chip (`AppSettings.showSpeedEstimates`).
+    let showSpeed: Bool
 
     init(tracks: [TrackedObject], imageSize: CGSize, showLabels: Bool = true,
          lead: LeadVehicle? = nil, leadStatus: DistanceStatus = .unknown, selectedTrackID: Int? = nil,
-         pedestrianHazards: [Int: PedestrianHazardLevel] = [:]) {
+         pedestrianHazards: [Int: PedestrianHazardLevel] = [:], showSpeed: Bool = false) {
+        self.showSpeed = showSpeed
         self.tracks = tracks
         self.imageSize = imageSize
         self.showLabels = showLabels
@@ -70,7 +73,8 @@ struct DetectionOverlayView: View {
                                  leadStatus: leadStatus,
                                  hazard: pedestrianHazards[track.id],
                                  isSelected: selectedTrackID == track.id,
-                                 showLabel: showLabels && track.isConfirmed)
+                                 showLabel: showLabels && track.isConfirmed,
+                                 showSpeed: showSpeed)
                 }
             }
             .frame(width: proxy.size.width, height: proxy.size.height, alignment: .topLeading)
@@ -134,6 +138,13 @@ struct DetectionOverlayView: View {
     static func primaryText(for track: TrackedObject) -> String {
         if track.kind == .trafficLight { return titleText(for: track) }
         return titleText(for: track) + " \(confidencePercent(for: track))%"
+    }
+
+    /// "≈54 км/ч" for the box chip of a vehicle with a ground-speed estimate; nil otherwise.
+    static func chipSpeedText(for track: TrackedObject) -> String? {
+        guard track.kind.isVehicle, track.isConfirmed, track.missed == 0,
+              let speed = track.estimatedSpeedKmh, speed.isFinite, speed >= 0 else { return nil }
+        return "≈\(Int(speed.rounded())) \(RVFormat.appKmh)"
     }
 
     /// "≈ 23 м · ≈ 54 км/ч" — only the enabled and available estimates; nil when there is nothing to show.
@@ -202,12 +213,15 @@ private struct TrackBoxView: View {
     let hazard: PedestrianHazardLevel?
     let isSelected: Bool
     let showLabel: Bool
+    let showSpeed: Bool
 
     /// False until the spring-in has run. Tracks that come back after a short gap (hits > 3) skip the spring-in.
     @State private var appeared: Bool
 
     init(track: TrackedObject, rect: CGRect, containerSize: CGSize, thin: Bool, isLead: Bool,
-         leadStatus: DistanceStatus, hazard: PedestrianHazardLevel?, isSelected: Bool, showLabel: Bool) {
+         leadStatus: DistanceStatus, hazard: PedestrianHazardLevel?, isSelected: Bool, showLabel: Bool,
+         showSpeed: Bool = false) {
+        self.showSpeed = showSpeed
         self.track = track
         self.rect = rect
         self.containerSize = containerSize
@@ -279,7 +293,8 @@ private struct TrackBoxView: View {
         .overlay(alignment: alignTrailing ? .topTrailing : .topLeading) {
             if showLabel {
                 // Fixed-width slot: the chip hugs its text and truncates beyond the maximum width.
-                TrackLabelChip(track: track, color: color, isLead: isLead, isEmphasized: isEmphasized)
+                TrackLabelChip(track: track, color: color, isLead: isLead, isEmphasized: isEmphasized,
+                               speedText: showSpeed ? DetectionOverlayView.chipSpeedText(for: track) : nil)
                     .frame(width: RVTheme.HUD.maxLabelWidth, alignment: alignTrailing ? .trailing : .leading)
                     .fixedSize(horizontal: false, vertical: true)
                     .alignmentGuide(.top) { dimensions in
@@ -308,6 +323,8 @@ private struct TrackLabelChip: View {
     let isLead: Bool
     /// Lead vehicle or pedestrian hazard: stronger outline.
     let isEmphasized: Bool
+    /// "54" (km/h) of a moving vehicle; nil hides the speed part.
+    var speedText: String? = nil
 
     var body: some View {
         HStack(spacing: 4) {
@@ -319,7 +336,19 @@ private struct TrackLabelChip: View {
                     .foregroundStyle(color)
             }
             Text(DetectionOverlayView.compactTitleText(for: track))
-                .layoutPriority(1)
+            if let speedText {
+                // Speed first priority: the class name truncates before the speed does.
+                HStack(spacing: 2) {
+                    if track.isOncoming {
+                        Image(systemName: "arrow.down")
+                            .font(.system(size: 8, weight: .heavy))
+                    }
+                    Text(speedText)
+                        .font(RVTheme.font(11, weight: .bold))
+                }
+                .padding(.leading, 2)
+                .layoutPriority(2)
+            }
         }
         .font(RVTheme.font(11, weight: .semibold))
         .monospacedDigit()

@@ -35,6 +35,8 @@ public struct TrackedObject: Identifiable, Hashable, Sendable {
     public var relativeSpeedKmh: Double?
     /// Own speed + relative speed, km/h (only when plausible).
     public var estimatedSpeedKmh: Double?
+    /// True when `estimatedSpeedKmh` belongs to a vehicle coming towards us (the gap closes faster than our own speed).
+    public var isOncoming: Bool = false
 
     public init(id: Int, kind: VehicleKind, label: String, box: BBox, confidence: Double,
                 hits: Int = 1, missed: Int = 0, firstSeen: TimeInterval, lastSeen: TimeInterval,

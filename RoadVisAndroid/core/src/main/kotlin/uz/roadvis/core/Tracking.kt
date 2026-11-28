@@ -35,6 +35,8 @@ data class TrackedObject(
     var relativeSpeedKmh: Double? = null,
     /** Own speed + relative speed, km/h (only when plausible). */
     var estimatedSpeedKmh: Double? = null,
+    /** True when [estimatedSpeedKmh] belongs to a vehicle coming towards us (gap closes faster than own speed). */
+    var isOncoming: Boolean = false,
     /** Majority of recent person-role observations (≥ 5 needed; null before / for non-persons). Colour heuristic. */
     var personRole: PersonRole? = null,
     /**
