@@ -54,7 +54,7 @@ class LearningUploader(private val context: Context, private val settings: AppSe
             LearningStatus.recordError(context, L("navset.badURL"))
             return@withContext Outcome.FAILED
         }
-        val token = settings.learningToken.trim()
+        val token = settings.deviceToken
         if (token.isEmpty()) {
             LearningStatus.recordError(context, L("learning.error.noToken"))
             return@withContext Outcome.FAILED

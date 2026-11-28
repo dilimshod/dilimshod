@@ -13,6 +13,7 @@ junit = "4.13.2"
 json = "20240303"
 playServicesLocation = "21.3.0"
 work = "2.10.5"
+zxing = "3.5.4"
 
 [libraries]
 androidx-core-ktx = { module = "androidx.core:core-ktx", version.ref = "coreKtx" }
@@ -37,6 +38,8 @@ play-services-location = { module = "com.google.android.gms:play-services-locati
 junit = { module = "junit:junit", version.ref = "junit" }
 json = { module = "org.json:json", version.ref = "json" }
 work-runtime-ktx = { module = "androidx.work:work-runtime-ktx", version.ref = "work" }
+# QR decoding for the website login (pure Java, Apache-2.0; no ML Kit / Play services).
+zxing-core = { module = "com.google.zxing:core", version.ref = "zxing" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

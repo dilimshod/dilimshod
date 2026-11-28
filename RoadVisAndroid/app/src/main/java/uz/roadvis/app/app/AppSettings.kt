@@ -160,6 +160,30 @@ class AppSettings(context: Context) {
     var learningStorageLimitMb by Pref("rv.learning.storageLimitMb", 300)
     var learningDownloadModels by Pref("rv.learning.downloadModels", true)
 
+    // Driver cabinet (RoadVis/docs/CABINET_API.md): opt-in driver profile, automatic trip sync, QR website login.
+    // The server is the same as for continuous learning ([learningServerUrl]).
+    /** «Кабинет водителя» on: registers the phone (once) and uploads finished trips. Off by default. */
+    var cabinetEnabled by Pref("rv.cabinet.enabled", false)
+    /**
+     * Device token returned by `POST /api/v1/devices/register` (shown once by the server). Private SharedPreferences,
+     * like [learningToken].
+     */
+    var cabinetToken by Pref("rv.cabinet.token", "")
+    var cabinetDriverId by Pref("rv.cabinet.driverId", "")
+    /** Driver name shown on the website; empty until registration (then the device model by default). */
+    var cabinetDriverName by Pref("rv.cabinet.driverName", "")
+    /** True while a local rename has not reached the server yet (`PATCH /api/v1/me` is retried by the sync work). */
+    var cabinetDriverNameDirty by Pref("rv.cabinet.driverNameDirty", false)
+    /** Upload trips on Wi-Fi only (default off: any network). */
+    var cabinetWifiOnly by Pref("rv.cabinet.wifiOnly", false)
+
+    /**
+     * The one device token of the app, for learning uploads and the cabinet: a manually entered training token
+     * (advanced, Settings → «Improve recognition») wins, else the token the cabinet registered.
+     */
+    val deviceToken: String
+        get() = learningToken.trim().ifEmpty { cabinetToken.trim() }
+
     companion object {
         const val DEFAULT_OVERPASS_ENDPOINT = "https://overpass-api.de/api/interpreter"
         const val DEFAULT_VALHALLA_ENDPOINT = "https://valhalla1.openstreetmap.de"

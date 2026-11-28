@@ -73,6 +73,8 @@ fun LearningSettingsSection(app: AppState) {
         UrlFieldRow(L("learning.server"), s.learningServerUrl, AppSettings.DEFAULT_LEARNING_SERVER, { s.learningServerUrl = it },
             error = if (validatedUrl(s.learningServerUrl) == null) L("navset.badURL") else null)
         TokenFieldRow(s.learningToken) { s.learningToken = it }
+        // Advanced: learning uses the token the driver cabinet registered when this field is empty.
+        TextRow(L("cabinet.token.hint"), secondary = true)
         RowDivider()
         ToggleRow(L("learning.wifiOnly"), s.learningWifiOnly, { s.learningWifiOnly = it }, enabled = on)
         ToggleRow(L("learning.sendLocation"), s.learningSendLocation, { s.learningSendLocation = it }, enabled = on)

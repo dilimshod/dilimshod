@@ -38,6 +38,11 @@ object Http {
                      headers: Map<String, String> = emptyMap()): Response =
         request("POST", url, body, contentType, timeoutMs, headers)
 
+    /** Any method (GET, POST, PATCH, DELETE …) with an optional body (driver cabinet API). */
+    suspend fun send(method: String, url: String, body: ByteArray? = null, contentType: String? = null, timeoutMs: Int = 25_000,
+                     headers: Map<String, String> = emptyMap()): Response =
+        request(method, url, body, contentType, timeoutMs, headers)
+
     private suspend fun request(method: String, url: String, body: ByteArray?, contentType: String?, timeoutMs: Int,
                                 headers: Map<String, String>): Response = withContext(Dispatchers.IO) {
         val connection = try {
@@ -46,7 +51,14 @@ object Http {
             throw NetworkException(NetworkException.Kind.OTHER, e.message ?: url, e)
         }
         try {
-            connection.requestMethod = method
+            try {
+                connection.requestMethod = method
+            } catch (e: java.net.ProtocolException) {
+                // Android's HttpURLConnection (OkHttp) accepts PATCH; the plain JVM one does not: tunnel it through POST.
+                if (method != "PATCH") throw e
+                connection.requestMethod = "POST"
+                connection.setRequestProperty("X-HTTP-Method-Override", "PATCH")
+            }
             connection.connectTimeout = timeoutMs.coerceAtMost(15_000)
             connection.readTimeout = timeoutMs
             connection.useCaches = false

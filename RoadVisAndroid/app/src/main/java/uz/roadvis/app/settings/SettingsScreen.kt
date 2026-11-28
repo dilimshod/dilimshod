@@ -70,6 +70,7 @@ fun SettingsScreen(app: AppState, nav: SheetNav) {
             FollowingDistanceSection(app)
             DriverAssistSections(app)
             TripSettingsSection(app, nav)
+            uz.roadvis.app.cabinet.CabinetSettingsSection(app)
             GeneralNavigationSection(app)
             NavigationSettingsSections(app)
             RoadDataSection(app)
