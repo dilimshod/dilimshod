@@ -1,4 +1,4 @@
-"""Command line: ``roadvis-trainer serve | worker | token | train | gate | publish | status``."""
+"""Command line: ``roadvis-trainer serve | worker | token | train | gate | status | demo-driver | driver``."""
 
 from __future__ import annotations
 
@@ -21,10 +21,13 @@ def cmd_serve(args, settings: Settings) -> int:
 
     from .api import create_app
 
+    if args.forwarded_allow_ips and args.forwarded_allow_ips.strip() != "*":
+        settings.trusted_proxies = args.forwarded_allow_ips
     app = create_app(settings)
-    # ROOT_PATH is applied inside the app (RootPathMiddleware); proxy_headers so X-Forwarded-* from nginx are honoured.
-    uvicorn.run(app, host=args.host, port=args.port, proxy_headers=True,
-                forwarded_allow_ips=args.forwarded_allow_ips, log_level="info")
+    # ROOT_PATH is applied inside the app (RootPathMiddleware). Proxy headers (X-Forwarded-Proto, CF-Connecting-IP,
+    # X-Forwarded-For) are handled by the app's ProxyHeadersMiddleware, and only for requests from a trusted peer
+    # (ROADVIS_TRUSTED_PROXIES: loopback and private networks by default), so uvicorn's own handling is off.
+    uvicorn.run(app, host=args.host, port=args.port, proxy_headers=False, log_level="info")
     return 0
 
 
@@ -102,6 +105,40 @@ def cmd_status(args, settings: Settings) -> int:
     return 0
 
 
+def cmd_demo_driver(args, settings: Settings) -> int:
+    from .demo import create_demo_driver
+    from .storage import Store
+
+    settings.ensure_dirs()
+    driver, token = create_demo_driver(Store(settings.db_path), trips=args.trips, name=args.name, seed=args.seed)
+    print(f"Demo driver {driver['id']} ('{driver['name']}') with {args.trips} trips.")
+    print("Device token (shown once; use it like the app to approve a QR login):")
+    print(token)
+    return 0
+
+
+def cmd_driver(args, settings: Settings) -> int:
+    from .cabinet import level_for
+    from .storage import Store
+
+    store = Store(settings.db_path)
+    if args.driver_cmd == "list":
+        rows = store.list_drivers()
+        if not rows:
+            print("no drivers")
+        for r in rows:
+            avg = f"{r['avg_score']:.0f}" if r["avg_score"] is not None else "-"
+            print(f"{r['id']}  {r['name'][:24]:<24} {'demo ' if r['is_demo'] else ''}trips {r['trip_count']:>4}  "
+                  f"{r['distance_m'] / 1000:>8.1f} km  avg {avg:>3}  points {r['points']:>6}  "
+                  f"level {level_for(r['points']):>2}  created {r['created_at']}")
+        return 0
+    if args.driver_cmd == "delete":
+        ok = store.delete_driver(args.driver_id)
+        print("deleted (profile, trips, web sessions, tokens)" if ok else "no such driver")
+        return 0 if ok else 1
+    return 2
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="roadvis-trainer", description="RoadVis continuous-learning server")
     p.add_argument("-v", "--verbose", action="store_true")
@@ -110,7 +147,9 @@ def build_parser() -> argparse.ArgumentParser:
     s = sub.add_parser("serve", help="run the HTTP API (uvicorn)")
     s.add_argument("--host", default="127.0.0.1")
     s.add_argument("--port", type=int, default=8601)
-    s.add_argument("--forwarded-allow-ips", default="127.0.0.1")
+    s.add_argument("--forwarded-allow-ips", default="*",
+                   help="comma-separated proxy networks whose forwarding headers are trusted; '*' (default) means "
+                        "ROADVIS_TRUSTED_PROXIES (loopback and private networks)")
     s.set_defaults(func=cmd_serve)
 
     w = sub.add_parser("worker", help="process queued samples and pending candidates")
@@ -144,6 +183,19 @@ def build_parser() -> argparse.ArgumentParser:
     g = sub.add_parser("gate", help="run the quality gate for a pending candidate now")
     g.add_argument("candidate")
     g.set_defaults(func=cmd_gate)
+
+    dd = sub.add_parser("demo-driver", help="create a demo driver with simulated Tashkent trips")
+    dd.add_argument("--trips", type=int, default=25)
+    dd.add_argument("--name", default="Demo haydovchi")
+    dd.add_argument("--seed", type=int, default=7)
+    dd.set_defaults(func=cmd_demo_driver)
+
+    dr = sub.add_parser("driver", help="driver cabinet profiles")
+    drsub = dr.add_subparsers(dest="driver_cmd", required=True)
+    drsub.add_parser("list", help="list drivers with totals")
+    drd = drsub.add_parser("delete", help="delete a driver: profile, trips, web sessions and device tokens")
+    drd.add_argument("driver_id")
+    dr.set_defaults(func=cmd_driver)
 
     st = sub.add_parser("status", help="print counts, candidates and versions")
     st.set_defaults(func=cmd_status)
